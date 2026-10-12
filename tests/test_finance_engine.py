@@ -41,6 +41,8 @@ class FinanceTests(unittest.TestCase):
     def test_missing_id_rejected(self):
         with self.assertRaises(ValueError):
             summarize([{"amount":"20"}])
+        with self.assertRaises(ValueError):
+            summarize([{"id":None,"amount":"20"}])
 
     def test_invalid_expenses_rejected(self):
         with self.assertRaises(ValueError):
