@@ -1,5 +1,4 @@
 """Deterministic financial calculations. No inferred costs or savings."""
-from collections import Counter
 from decimal import Decimal, InvalidOperation
 
 
@@ -23,8 +22,9 @@ def summarize(sales, expenses=None, *, expenses_complete=False):
     operating and amount is nonnegative.
 
     Every supplied record is validated even when expense coverage has not been
-    confirmed. Profit is only exposed when expenses are supplied *and* the
-    caller explicitly confirms that expense coverage is complete.
+    confirmed. Recorded cost totals are exposed when valid expense records are
+    supplied, but profit is only exposed when the caller explicitly confirms
+    expense coverage is complete.
     """
 
     def validate(rows, kind):
@@ -53,27 +53,30 @@ def summarize(sales, expenses=None, *, expenses_complete=False):
         return result
 
     expenses = list(expenses)
-    costs = Counter()
+    direct = Decimal("0.00")
+    operating = Decimal("0.00")
     for row, amount in validate(expenses, "expense"):
         if amount < 0:
             raise ValueError("Expense amounts must be nonnegative; use separate adjustment records")
         category = row.get("category")
-        if category not in ("direct", "operating"):
+        if category == "direct":
+            direct += amount
+        elif category == "operating":
+            operating += amount
+        else:
             raise ValueError("Expense category must be direct or operating")
-        costs[category] += amount
+
+    result["direct_costs"] = direct
+    result["operating_expenses"] = operating
 
     if not expenses_complete:
         result["profit_unavailable_reason"] = "Expense coverage not confirmed"
         return result
 
-    direct = costs["direct"]
-    operating = costs["operating"]
     gross = revenue - direct
     profit = gross - operating
     result.update(
         {
-            "direct_costs": direct,
-            "operating_expenses": operating,
             "gross_profit": gross,
             "operating_profit": profit,
             "profit_available": True,
