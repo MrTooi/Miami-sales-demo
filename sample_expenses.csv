@@ -1,0 +1,13 @@
+id,date,category,amount,description
+E-001,2026-04-10,direct,2200.00,Paper and ink
+E-002,2026-04-15,operating,1400.00,Rent and utilities
+E-003,2026-05-10,direct,2600.00,Paper and ink
+E-004,2026-05-15,operating,1400.00,Rent and utilities
+E-005,2026-06-10,direct,2400.00,Paper and ink
+E-006,2026-06-15,operating,1400.00,Rent and utilities
+E-007,2026-07-10,direct,2500.00,Paper and ink
+E-008,2026-07-15,operating,1400.00,Rent and utilities
+E-009,2026-08-10,direct,2300.00,Paper and ink
+E-010,2026-08-15,operating,1400.00,Rent and utilities
+E-011,2026-09-10,direct,2700.00,Paper and ink
+E-012,2026-09-15,operating,1400.00,Rent and utilities
