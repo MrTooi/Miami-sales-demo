@@ -103,6 +103,12 @@ with tabs[0]:
         tooltip=[alt.Tooltip("month:T",format="%b %Y"),alt.Tooltip("amount:Q",format="$,.2f")]
     ).properties(height=250).configure_view(stroke=None).configure(background="#111416")
     st.altair_chart(chart,use_container_width=True)
+    st.markdown("**Monthly net revenue (exact amounts)**")
+    revenue_by_month=monthly.copy()
+    revenue_by_month["Month"]=revenue_by_month["month"].dt.strftime("%B %Y")
+    revenue_by_month["Net revenue (USD)"]=revenue_by_month["amount"].map(lambda v:f"${v:,.2f}")
+    st.dataframe(revenue_by_month[["Month","Net revenue (USD)"]],hide_index=True,use_container_width=True)
+    st.caption("Net revenue reflects sales minus refunds, not cash held in the bank.")
     if e is not None:
         st.subheader("Cost breakdown")
         st.dataframe(pd.DataFrame([
