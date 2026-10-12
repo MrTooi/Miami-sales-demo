@@ -17,7 +17,7 @@ class FinanceTests(unittest.TestCase):
     def test_profit_and_refunds(self):
         sales=[{"id":"1","amount":"100.00"},{"id":"2","amount":"-20.00"}]
         expenses=[{"id":"e1","amount":"30","category":"direct"},{"id":"e2","amount":"10","category":"operating"}]
-        r=summarize(sales,expenses)
+        r=summarize(sales,expenses,expenses_complete=True)
         self.assertEqual(r["net_revenue"],Decimal("80"))
         self.assertEqual(r["refund_total"],Decimal("20"))
         self.assertEqual(r["gross_profit"],Decimal("50"))
@@ -25,11 +25,11 @@ class FinanceTests(unittest.TestCase):
         self.assertEqual(r["operating_margin_pct"],Decimal("50"))
 
     def test_negative_profit(self):
-        r=summarize([{"id":"1","amount":"20"}],[{"id":"x","amount":"25","category":"direct"}])
+        r=summarize([{"id":"1","amount":"20"}],[{"id":"x","amount":"25","category":"direct"}],expenses_complete=True)
         self.assertEqual(r["operating_profit"],Decimal("-5"))
 
     def test_zero_revenue_margin_undefined(self):
-        r=summarize([{"id":"1","amount":"0"}],[])
+        r=summarize([{"id":"1","amount":"0"}],[],expenses_complete=True)
         self.assertIsNone(r["gross_margin_pct"])
 
     def test_duplicate_ids_rejected(self):
@@ -51,7 +51,7 @@ class FinanceTests(unittest.TestCase):
             summarize([], [{"id":"1","amount":"10","category":"unknown"}])
 
     def test_empty_expenses_is_explicit_zero_not_missing(self):
-        self.assertTrue(summarize([],[])["profit_available"])
+        self.assertTrue(summarize([],[],expenses_complete=True)["profit_available"])
         self.assertFalse(summarize([])["profit_available"])
 
 if __name__=="__main__":
