@@ -21,7 +21,7 @@ def summarize(sales, expenses=None):
     def validate(rows, kind):
         seen=set()
         for row in rows:
-            if not isinstance(row, dict) or not str(row.get("id", "")).strip():
+            if not isinstance(row, dict) or row.get("id") is None or not str(row.get("id")).strip():
                 raise ValueError(f"{kind} row missing ID")
             key=str(row["id"]).strip()
             if key in seen:
