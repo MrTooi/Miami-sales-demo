@@ -78,7 +78,8 @@ if s.empty:
     st.stop()
 if e is not None and e.empty:
     st.warning("No expenses were recorded in the selected period. Zero recorded expenses does not prove zero actual costs.")
-result=analyze(s,e)
+expenses_complete = (sales_file is None and expenses_file is None) or (e is not None and not e.empty and st.checkbox('I confirm the expense file includes all direct and operating costs for this reporting period.'))
+result=analyze(s,e,expenses_complete=expenses_complete)
 
 tabs=st.tabs(["Overview","Cost observations","Transactions"])
 with tabs[0]:
@@ -88,7 +89,7 @@ with tabs[0]:
     c.metric("OPERATING PROFIT",dollars(result["operating_profit"]) if result["profit_available"] else "Unavailable")
     d.metric("REFUNDS",dollars(result["refund_total"]))
     if not result["profit_available"]:
-        st.info("Profit unavailable: no expense records were supplied. Revenue is not profit.")
+        st.info("Profit unavailable: " + result.get("profit_unavailable_reason", "Expense coverage unverified") + ". Revenue is not profit.")
     else:
         st.caption("Gross profit = net revenue − direct costs. Operating profit = gross profit − operating expenses. Expenses are assumed complete only if the uploader confirms.")
         if result["operating_margin_pct"] is not None:
@@ -109,7 +110,7 @@ with tabs[0]:
     revenue_by_month["Net revenue (USD)"]=revenue_by_month["amount"].map(lambda v:f"${v:,.2f}")
     st.dataframe(revenue_by_month[["Month","Net revenue (USD)"]],hide_index=True,use_container_width=True)
     st.caption("Net revenue reflects sales minus refunds, not cash held in the bank.")
-    if e is not None:
+    if e is not None and result["profit_available"]:
         st.subheader("Cost breakdown")
         st.dataframe(pd.DataFrame([
             {"Category":"Direct costs","Recorded amount":dollars(result["direct_costs"])},
