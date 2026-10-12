@@ -1,7 +1,11 @@
 """Strict, auditable import contracts for Ledger CSV/Excel data."""
 from decimal import Decimal
+import importlib
+
 import pandas as pd
+import finance_engine
 from finance_engine import money
+
 
 def normalize(frame, kind):
     if kind not in ("sales", "expenses"):
@@ -45,14 +49,22 @@ def normalize(frame, kind):
             df["description"]=""
     return df
 
+
 def analyze(sales, expenses=None, *, expenses_complete=False):
-    """Compute period summary; profit unavailable without expense file."""
-    from finance_engine import summarize
+    """Compute period summary using the current on-disk finance engine.
+
+    Streamlit Community Cloud can hot-reload the entry script while retaining
+    imported helper modules in a long-lived worker. Reloading this small,
+    stateless engine at the calculation boundary prevents an older function
+    signature from surviving a deployment and causing a TypeError.
+    """
+    engine = importlib.reload(finance_engine)
     sales_rows=[{"id":r.id,"amount":str(r.amount)} for r in sales.itertuples(index=False)]
     expense_rows=None if expenses is None else [
         {"id":r.id,"amount":str(r.amount),"category":r.category}
         for r in expenses.itertuples(index=False)]
-    return summarize(sales_rows,expense_rows,expenses_complete=expenses_complete)
+    return engine.summarize(sales_rows,expense_rows,expenses_complete=bool(expenses_complete))
+
 
 def findings(sales, expenses=None):
     """Observed amounts only. Never call them savings or assert a cause."""
