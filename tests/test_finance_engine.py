@@ -50,6 +50,16 @@ class FinanceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             summarize([], [{"id":"1","amount":"10","category":"unknown"}])
 
+    def test_expense_records_without_confirmation_never_show_profit(self):
+        r=summarize([{"id":"s1","amount":"100.00"}],[{"id":"e1","amount":"25.00","category":"direct"}])
+        self.assertFalse(r["profit_available"])
+        self.assertNotIn("operating_profit",r)
+        self.assertEqual(r["profit_unavailable_reason"],"Expense coverage not confirmed")
+
+    def test_exact_cents(self):
+        r=summarize([{"id":"a","amount":"0.10"},{"id":"b","amount":"0.20"}])
+        self.assertEqual(r["net_revenue"],Decimal("0.30"))
+
     def test_empty_expenses_is_explicit_zero_not_missing(self):
         self.assertTrue(summarize([],[],expenses_complete=True)["profit_available"])
         self.assertFalse(summarize([])["profit_available"])
