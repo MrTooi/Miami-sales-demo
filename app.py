@@ -1,120 +1,133 @@
+"""Ledger — prototype financial intelligence dashboard. Synthetic data only."""
 import html
 import pandas as pd
 import streamlit as st
 import altair as alt
+from decimal import Decimal
+from data_pipeline import normalize, analyze, findings
 
-st.set_page_config(page_title="Ledger | Sales Overview", page_icon="◼", layout="wide", initial_sidebar_state="collapsed")
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
-:root {color-scheme:dark}
-html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {background:#111315!important;color:#F5F2EB!important}
-[data-testid="stAppViewContainer"] * {font-family:'DM Sans',sans-serif}
-.block-container {max-width:1140px;padding-top:2rem;padding-bottom:4rem}
-h1,h2,h3 {font-family:'Manrope',sans-serif!important;letter-spacing:-.045em!important;color:#F5F2EB!important}
-h1 {font-size:clamp(2rem,5vw,3rem)!important}
-[data-testid="stMetric"] {background:#1C1F20;border:1px solid #303434;border-radius:17px;padding:22px 20px}
-[data-testid="stMetricLabel"] {color:#A9AEAA!important}
-[data-testid="stMetricValue"] {color:#F5F2EB!important;font-weight:700!important;letter-spacing:-.04em}
-[data-testid="stFileUploader"], [data-testid="stDataFrame"], [data-testid="stDateInput"] {border-radius:14px}
-[data-testid="stVerticalBlockBorderWrapper"] {border-color:#303434}
-div.stButton>button, div.stDownloadButton>button {background:#D5F478!important;color:#172014!important;border:0!important;border-radius:12px!important;font-weight:700}
-[data-testid="stCaptionContainer"], .stCaption {color:#929994!important}
-section[data-testid="stSidebar"] {background:#191B1D}
-.eyebrow {color:#D5F478;font-size:.75rem;letter-spacing:.18em;font-weight:800}
-.subtle {color:#9FA6A1;font-size:.92rem}
-.rule {height:1px;background:#303434;margin:1.4rem 0}
-.service {margin:0 0 1.2rem 0}
-.service-top {display:flex;justify-content:space-between;gap:12px;margin-bottom:9px;font-size:.9rem}
-.service-name {color:#E8E9E4}
-.service-value {color:#D5F478;font-weight:700}
-.track {background:#2C3030;height:8px;border-radius:12px;overflow:hidden}
-.fill {height:100%;background:#D5F478;border-radius:12px}
-@media(max-width:640px){.block-container{padding:1.3rem 1rem 3rem} [data-testid="stMetric"]{padding:15px 12px} [data-testid="stMetricValue"]{font-size:1.45rem}}
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="Ledger | Profit Intelligence",page_icon="📊",layout="wide",initial_sidebar_state="collapsed")
+st.markdown("""<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
+html,body,[data-testid="stAppViewContainer"],[data-testid="stHeader"]{background:#111416!important;color:#F4F3EC!important}
+[data-testid="stAppViewContainer"] *{font-family:'DM Sans',sans-serif}
+.block-container{max-width:1120px;padding-top:2rem;padding-bottom:4rem}
+h1,h2,h3{font-family:'Manrope',sans-serif!important;color:#F4F3EC!important;letter-spacing:-.035em!important}
+[data-testid="stMetric"]{background:#1C2221;border:1px solid #303936;border-radius:16px;padding:18px}
+[data-testid="stMetricLabel"]{color:#ADB5AE!important}
+[data-testid="stMetricValue"]{color:#F4F3EC!important}
+div.stDownloadButton>button{background:#D5F478!important;color:#182119!important;border:0;border-radius:12px}
+.eyebrow{color:#D5F478;font-size:.75rem;letter-spacing:.15em;font-weight:800}
+.subtle{color:#A3AAA5;font-size:.9rem}
+@media(max-width:640px){.block-container{padding:1.2rem .85rem 3rem}[data-testid="stMetric"]{padding:12px}[data-testid="stMetricValue"]{font-size:1.25rem}}
+</style>""",unsafe_allow_html=True)
 
-st.markdown('<div class="eyebrow">LEDGER / BUSINESS INTELLIGENCE</div>',unsafe_allow_html=True)
-st.title("Your numbers, at a glance.")
-st.markdown('<p class="subtle">A clearer view of sales, performance, and where revenue comes from.</p>',unsafe_allow_html=True)
+def dollars(v):
+    return f"${float(v):,.2f}"
+
+def read_file(upload):
+    if upload.name.lower().endswith(".csv"):
+        return pd.read_csv(upload,dtype={"id":str,"order_id":str})
+    return pd.read_excel(upload,dtype={"id":str,"order_id":str})
 
 @st.cache_data
-def demo_data():
-    return pd.read_csv("sample_sales.csv")
+def demo_sales():
+    return pd.read_csv("sample_sales.csv",dtype={"order_id":str})
 
-def clean_sales(df):
-    df=df.copy()
-    df.columns=[str(c).strip().lower() for c in df.columns]
-    missing={"date","service","amount"}-set(df.columns)
-    if missing:
-        raise ValueError("Missing columns: "+", ".join(sorted(missing)))
-    df["date"]=pd.to_datetime(df["date"],errors="coerce")
-    df["amount"]=pd.to_numeric(df["amount"].astype(str).str.replace(r"[$,]","",regex=True),errors="coerce")
-    df["service"]=df["service"].astype("string").str.strip()
-    bad=df["date"].isna()|df["amount"].isna()|df["service"].isna()|(df["service"]=="")
-    return df.loc[~bad].copy(),int(bad.sum())
+@st.cache_data
+def demo_expenses():
+    return pd.read_csv("sample_expenses.csv",dtype={"id":str})
 
-with st.expander("Import data & filters",expanded=False):
-    uploaded=st.file_uploader("Upload a CSV or Excel file",type=["csv","xlsx"],help="Required columns: date, service, amount")
-    st.caption("Negative amounts count as refunds. Files are processed for this session; avoid sensitive data.")
+st.markdown('<div class="eyebrow">LEDGER / PROFIT INTELLIGENCE</div>',unsafe_allow_html=True)
+st.title("Know where the money goes.")
+st.markdown('<p class="subtle">Understand profitability, investigate costs, and review evidence behind each finding.</p>',unsafe_allow_html=True)
+st.warning("PROTOTYPE · Not audited, not production-ready. Use fictional or anonymized data only.")
+
+with st.expander("Import CSV or Excel records",expanded=False):
+    sales_file=st.file_uploader("Sales file",type=["csv","xlsx"],key="sales",help="Required: id (or order_id), date, service, amount. Negative amounts are refunds.")
+    expenses_file=st.file_uploader("Expense file",type=["csv","xlsx"],key="expenses",help="Required: id, date, category (direct or operating), amount.")
+    st.caption("Both files must cover the same accounting period for meaningful profit results. Missing expenses are never estimated.")
+    st.caption("For safety, this public prototype must not receive confidential financial records.")
 
 try:
-    raw=(pd.read_csv(uploaded) if uploaded.name.lower().endswith(".csv") else pd.read_excel(uploaded)) if uploaded else demo_data()
-    data,skipped=clean_sales(raw)
+    sales=normalize(read_file(sales_file) if sales_file else demo_sales(),"sales")
+    expenses=normalize(read_file(expenses_file),"expenses") if expenses_file else (normalize(demo_expenses(),"expenses") if sales_file is None else None)
 except Exception as exc:
-    st.error(f"Could not read the file: {exc}")
-    st.stop()
-if skipped:
-    st.warning(f"Excluded {skipped} invalid rows.")
-if data.empty:
-    st.warning("No valid transactions.")
+    st.error(f"Import rejected: {exc}")
     st.stop()
 
-if uploaded is None:
-    st.caption("● DEMO MODE — fictional printing business transactions")
-minimum,maximum=data["date"].min().date(),data["date"].max().date()
-dates=st.date_input("Reporting period",value=(minimum,maximum),min_value=minimum,max_value=maximum)
-if not isinstance(dates,tuple) or len(dates)!=2:
-    st.info("Choose a start and end date.")
-    st.stop()
-filtered=data.loc[data["date"].dt.date.between(*dates)].copy()
-if filtered.empty:
-    st.warning("No transactions in this period.")
+if sales_file is None and expenses_file is None:
+    st.caption("● FICTIONAL DEMO DATA · Miami printing business")
+elif sales_file is not None and expenses_file is None:
+    st.info("Sales uploaded without expenses. Profit will be unavailable.")
+elif sales_file is None and expenses_file is not None:
+    st.error("Upload matching sales data alongside expense data; demo sales cannot be mixed with uploaded expenses.")
     st.stop()
 
-revenue=float(filtered["amount"].sum())
-count=len(filtered)
-average=revenue/count
-st.markdown('<div class="rule"></div>',unsafe_allow_html=True)
-a,b,c=st.columns(3)
-a.metric("NET REVENUE",f"${revenue:,.2f}")
-b.metric("TRANSACTIONS",f"{count:,}")
-c.metric("AVG. TRANSACTION",f"${average:,.2f}")
+min_date=sales["date"].min().date()
+max_date=sales["date"].max().date()
+selected=st.date_input("Reporting period",(min_date,max_date),min_value=min_date,max_value=max_date)
+if not isinstance(selected,tuple) or len(selected)!=2:
+    st.info("Select both start and end dates.")
+    st.stop()
+start,end=selected
+s=sales[sales["date"].dt.date.between(start,end)].copy()
+e=expenses[expenses["date"].dt.date.between(start,end)].copy() if expenses is not None else None
+if s.empty:
+    st.info("No sales transactions in this reporting period.")
+    st.stop()
+if e is not None and e.empty:
+    st.warning("No expenses were recorded in the selected period. Zero recorded expenses does not prove zero actual costs.")
+result=analyze(s,e)
 
-st.markdown("### Revenue over time")
-st.caption("Monthly net sales · USD")
-monthly=filtered.assign(month=filtered["date"].dt.to_period("M").dt.to_timestamp()).groupby("month",as_index=False)["amount"].sum()
-chart=alt.Chart(monthly).mark_area(line={"color":"#D5F478","strokeWidth":3},color=alt.Gradient(gradient="linear",stops=[alt.GradientStop(color="#D5F478",offset=0),alt.GradientStop(color="#D5F478",offset=1)],x1=0,x2=0,y1=0,y2=1),opacity=.18).encode(
-    x=alt.X("month:T",title=None,axis=alt.Axis(format="%b %Y",labelColor="#A9AEAA",labelAngle=0,grid=False,tickCount=6)),
-    y=alt.Y("amount:Q",title=None,axis=alt.Axis(labelColor="#A9AEAA",gridColor="#303434",format="$,.0f"),scale=alt.Scale(zero=True)),
-    tooltip=[alt.Tooltip("month:T",title="Month",format="%B %Y"),alt.Tooltip("amount:Q",title="Revenue",format="$,.2f")]
-).properties(height=245).configure_view(stroke=None).configure(background="#111315")
-st.altair_chart(chart,use_container_width=True)
-
-st.markdown("### Where your revenue comes from")
-st.caption("Services ranked by net revenue")
-services=filtered.groupby("service")["amount"].sum().sort_values(ascending=False)
-max_abs=max(float(services.abs().max()),1)
-for service,value in services.items():
-    width=max(0,min(100,100*float(value)/max_abs))
-    safe=html.escape(str(service))
-    st.markdown(f'<div class="service"><div class="service-top"><span class="service-name">{safe}</span><span class="service-value">${value:,.2f}</span></div><div class="track"><div class="fill" style="width:{width:.1f}%"></div></div></div>',unsafe_allow_html=True)
-
-with st.expander("View individual transactions"):
-    st.dataframe(filtered.sort_values("date",ascending=False),use_container_width=True,hide_index=True)
-st.markdown("### Export your report")
-summary=pd.DataFrame({"metric":["net_revenue","transactions","average_transaction"],"value":[round(revenue,2),count,round(average,2)]})
-x,y=st.columns(2)
-x.download_button("Download summary",summary.to_csv(index=False),"sales_summary.csv","text/csv",use_container_width=True)
-y.download_button("Download transactions",filtered.to_csv(index=False),"filtered_sales.csv","text/csv",use_container_width=True)
-st.caption("LEDGER DEMO · Not intended for confidential business data.")
+tabs=st.tabs(["Overview","Cost observations","Transactions"])
+with tabs[0]:
+    a,b,c,d=st.columns(4)
+    a.metric("NET REVENUE",dollars(result["net_revenue"]))
+    b.metric("GROSS PROFIT",dollars(result["gross_profit"]) if result["profit_available"] else "Unavailable")
+    c.metric("OPERATING PROFIT",dollars(result["operating_profit"]) if result["profit_available"] else "Unavailable")
+    d.metric("REFUNDS",dollars(result["refund_total"]))
+    if not result["profit_available"]:
+        st.info("Profit unavailable: no expense records were supplied. Revenue is not profit.")
+    else:
+        st.caption("Gross profit = net revenue − direct costs. Operating profit = gross profit − operating expenses. Expenses are assumed complete only if the uploader confirms.")
+        if result["operating_margin_pct"] is not None:
+            st.metric("OPERATING MARGIN",f'{result["operating_margin_pct"]:.1f}%')
+    st.subheader("Revenue over time")
+    monthly=s.assign(month=s["date"].dt.to_period("M").dt.to_timestamp())
+    monthly["amount"]=monthly["amount"].astype(float)
+    monthly=monthly.groupby("month",as_index=False)["amount"].sum()
+    chart=alt.Chart(monthly).mark_line(color="#D5F478",strokeWidth=3,point=True).encode(
+        x=alt.X("month:T",title=None,axis=alt.Axis(format="%b %Y",labelAngle=0,labelColor="#AAB2AB")),
+        y=alt.Y("amount:Q",title=None,axis=alt.Axis(format="$,.0f",labelColor="#AAB2AB",gridColor="#303936")),
+        tooltip=[alt.Tooltip("month:T",format="%b %Y"),alt.Tooltip("amount:Q",format="$,.2f")]
+    ).properties(height=250).configure_view(stroke=None).configure(background="#111416")
+    st.altair_chart(chart,use_container_width=True)
+    if e is not None:
+        st.subheader("Cost breakdown")
+        st.dataframe(pd.DataFrame([
+            {"Category":"Direct costs","Recorded amount":dollars(result["direct_costs"])},
+            {"Category":"Operating expenses","Recorded amount":dollars(result["operating_expenses"])}
+        ]),hide_index=True,use_container_width=True)
+with tabs[1]:
+    st.subheader("What the records show")
+    st.caption("Observed totals are not proof of waste or guaranteed savings. More detailed job and supplier records are needed for true profit-leak diagnosis.")
+    items=findings(s,e)
+    if not items:
+        st.info("No cost or refund observations in this period.")
+    for item in items:
+        with st.container(border=True):
+            st.markdown(f"**{html.escape(item['title'])}**")
+            st.metric("Recorded amount",dollars(item["amount"]))
+            st.write(item["detail"])
+            st.caption("Calculation: "+item["basis"])
+with tabs[2]:
+    st.subheader("Sales")
+    st.dataframe(s,use_container_width=True,hide_index=True)
+    if e is not None:
+        st.subheader("Expenses")
+        st.dataframe(e,use_container_width=True,hide_index=True)
+    st.download_button("Download filtered sales",s.to_csv(index=False),"ledger_sales.csv","text/csv")
+    if e is not None:
+        st.download_button("Download filtered expenses",e.to_csv(index=False),"ledger_expenses.csv","text/csv")
+st.caption("LEDGER · DEVELOPMENT BUILD · Not suitable for confidential client information.")
