@@ -1,12 +1,17 @@
 """Ledger — prototype financial intelligence dashboard. Synthetic data only."""
 import html
+import os
+import tempfile
+import uuid
 from decimal import Decimal
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
+from app_ledger import deterministic_batch_id, normalize_transfer_frame, sales_to_integrity_records
 from data_pipeline import analyze, findings, normalize
+from ledger_store import LedgerStore
 
 st.set_page_config(page_title="Ledger | Profit Intelligence",page_icon="📊",layout="wide",initial_sidebar_state="collapsed")
 st.markdown("""<style>
@@ -35,6 +40,13 @@ def read_file(upload):
     return pd.read_excel(upload,dtype=str,keep_default_na=False)
 
 
+def reset_workspace(path):
+    for suffix in ("", "-wal", "-shm"):
+        candidate=path+suffix
+        if os.path.exists(candidate):
+            os.remove(candidate)
+
+
 @st.cache_data
 def demo_sales():
     return pd.read_csv("sample_sales.csv",dtype=str)
@@ -45,6 +57,11 @@ def demo_expenses():
     return pd.read_csv("sample_expenses.csv",dtype=str)
 
 
+if "ledger_workspace_id" not in st.session_state:
+    st.session_state["ledger_workspace_id"]=uuid.uuid4().hex
+workspace_id=st.session_state["ledger_workspace_id"]
+workspace_db=os.path.join(tempfile.gettempdir(),f"ledger-{workspace_id}.db")
+
 st.markdown('<div class="eyebrow">LEDGER / PROFIT INTELLIGENCE</div>',unsafe_allow_html=True)
 st.title("Know where the money goes.")
 st.markdown('<p class="subtle">Understand profitability, investigate costs, and review evidence behind each finding.</p>',unsafe_allow_html=True)
@@ -52,6 +69,12 @@ st.warning("PROTOTYPE · Not audited, not production-ready. Use fictional or ano
 
 with st.expander("Import CSV or Excel records",expanded=False):
     sales_file=st.file_uploader("Sales file",type=["csv","xlsx"],key="sales",help="Required: id (or order_id), date, service, amount. Negative amounts are refunds.")
+    sales_source=st.selectbox(
+        "Sales file source",
+        ["manual_upload","square_export","quickbooks_export","other_export"],
+        disabled=sales_file is None,
+        help="This labels the source for duplicate/conflict tracking. It is not a live integration.",
+    )
     expenses_file=st.file_uploader("Expense file",type=["csv","xlsx"],key="expenses",help="Required: id, date, category (direct or operating), amount.")
     st.caption("Both files must cover the same accounting period for meaningful profit results. Missing expenses are never estimated.")
     st.caption("For safety, this public prototype must not receive confidential financial records.")
@@ -65,11 +88,27 @@ except Exception as exc:
 
 if sales_file is None and expenses_file is None:
     st.caption("● FICTIONAL DEMO DATA · Miami printing business")
+    ledger_source="fictional_demo"
 elif sales_file is not None and expenses_file is None:
     st.info("Sales uploaded without expenses. Profit will be unavailable.")
+    ledger_source=sales_source
 elif sales_file is None and expenses_file is not None:
     st.error("Upload matching sales data alongside expense data; demo sales cannot be mixed with uploaded expenses.")
     st.stop()
+else:
+    ledger_source=sales_source
+
+try:
+    integrity_records=sales_to_integrity_records(sales,workspace_id,ledger_source)
+    integrity_batch_id=deterministic_batch_id(integrity_records,"sales")
+    with LedgerStore(workspace_db) as store:
+        sales_integrity_batch=store.ingest(integrity_records,batch_id=integrity_batch_id)
+except Exception as exc:
+    st.error(f"Persistent integrity check failed: {exc}")
+    st.stop()
+
+if sales_integrity_batch["conflict_count"]:
+    st.warning("This import contains transaction IDs that conflict with records already stored in this prototype workspace. Review them in Import integrity before treating history as reconciled.")
 
 min_date=sales["date"].min().date()
 max_date=sales["date"].max().date()
@@ -88,7 +127,7 @@ if e is not None and e.empty:
 expenses_complete = (sales_file is None and expenses_file is None) or (e is not None and not e.empty and st.checkbox('I confirm the expense file includes all direct and operating costs for this reporting period.'))
 result=analyze(s,e,expenses_complete=expenses_complete)
 
-tabs=st.tabs(["Overview","Cost observations","Transactions"])
+tabs=st.tabs(["Overview","Cost observations","Transactions","Import integrity"])
 with tabs[0]:
     a,b,c,d=st.columns(4)
     a.metric("NET REVENUE",dollars(result["net_revenue"]))
@@ -98,7 +137,7 @@ with tabs[0]:
     if not result["profit_available"]:
         st.info("Profit unavailable: " + result.get("profit_unavailable_reason", "Expense coverage unverified") + ". Revenue is not profit.")
     else:
-        st.caption("Gross profit = net revenue − direct costs. Operating profit = gross profit − operating expenses. Expenses are assumed complete only if the uploader confirms.")
+        st.caption("Gross profit = net revenue − direct costs. Operating profit = gross profit − operating expenses. Completeness is self-reported, not independently audited.")
         if result["operating_margin_pct"] is not None:
             st.metric("OPERATING MARGIN",f'{result["operating_margin_pct"]:.1f}%')
     st.subheader("Revenue over time")
@@ -145,4 +184,134 @@ with tabs[2]:
     st.download_button("Download filtered sales",s.to_csv(index=False),"ledger_sales.csv","text/csv")
     if e is not None:
         st.download_button("Download filtered expenses",e.to_csv(index=False),"ledger_expenses.csv","text/csv")
+with tabs[3]:
+    st.subheader("Import integrity")
+    st.caption("Session-isolated prototype storage. It can disappear when the app restarts and is not a production database. Do not upload confidential records.")
+
+    with LedgerStore(workspace_db) as store:
+        stored_transactions=store.list_transactions(workspace_id)
+        unresolved_conflicts=store.list_conflicts(workspace_id)
+        reconciliation=store.reconciliation_status(workspace_id)
+
+    m1,m2,m3,m4=st.columns(4)
+    m1.metric("STORED RECORDS",len(stored_transactions))
+    m2.metric("UNRESOLVED CONFLICTS",len(unresolved_conflicts))
+    m3.metric("CONFIRMED TRANSFERS",reconciliation["confirmed_links"])
+    m4.metric("UNMATCHED TRANSFERS",reconciliation["unmatched_payouts"]+reconciliation["unmatched_bank_deposits"])
+
+    if sales_integrity_batch.get("replayed"):
+        st.info("Current sales batch was already imported. No additional stored transactions were created.")
+    else:
+        st.write(
+            f"Current sales import: {sales_integrity_batch['inserted_count']} new, "
+            f"{sales_integrity_batch['duplicate_count']} duplicates ignored, "
+            f"{sales_integrity_batch['conflict_count']} conflicts requiring review."
+        )
+
+    if stored_transactions:
+        source_summary=pd.DataFrame(stored_transactions)
+        source_summary=(source_summary.groupby(["source","kind"],as_index=False)
+                        .size().rename(columns={"size":"records"}))
+        st.markdown("**Stored records by source and type**")
+        st.dataframe(source_summary,hide_index=True,width="stretch")
+        st.caption("LEDGER does not automatically add totals across different sources because the same economic event may appear in more than one system.")
+
+    st.divider()
+    st.subheader("Payout / bank deposit reconciliation")
+    st.caption("Upload one source at a time. Required columns: external_id (or id), kind, amount. kind must be payout or bank_deposit. currency is optional and defaults to USD.")
+    transfer_source=st.text_input("Transfer file source",value="square",key="transfer_source",help="Examples: square, bank_of_america, chase. Use a stable source name across uploads.")
+    transfer_file=st.file_uploader("Transfer file",type=["csv","xlsx"],key="transfer_file")
+    if transfer_file is not None:
+        try:
+            transfer_records=normalize_transfer_frame(read_file(transfer_file),workspace_id,transfer_source)
+            transfer_batch_id=deterministic_batch_id(transfer_records,f"transfer-{transfer_source}")
+            with LedgerStore(workspace_db) as store:
+                transfer_batch=store.ingest(transfer_records,batch_id=transfer_batch_id)
+            if transfer_batch.get("replayed"):
+                st.info("This transfer batch was already imported. No additional records were created.")
+            else:
+                st.success(
+                    f"Transfer import accepted: {transfer_batch['inserted_count']} new, "
+                    f"{transfer_batch['duplicate_count']} duplicates ignored, "
+                    f"{transfer_batch['conflict_count']} conflicts."
+                )
+        except Exception as exc:
+            st.error(f"Transfer import rejected: {exc}")
+
+    with LedgerStore(workspace_db) as store:
+        match_info=store.find_reconciliation_candidates(workspace_id)
+        unresolved_conflicts=store.list_conflicts(workspace_id)
+        reconciliation=store.reconciliation_status(workspace_id)
+
+    if match_info["ambiguous_groups"]:
+        st.warning("Some equal-amount transfer groups are ambiguous. LEDGER will not guess which records match.")
+        st.dataframe(pd.DataFrame(match_info["ambiguous_groups"]),hide_index=True,width="stretch")
+
+    candidates=match_info["candidates"]
+    if candidates:
+        st.markdown("**Suggested exact transfer matches**")
+        candidate_table=pd.DataFrame(candidates)
+        candidate_table["amount"]=candidate_table["amount"].map(dollars)
+        st.dataframe(candidate_table,hide_index=True,width="stretch")
+        labels=[
+            f"{c['payout_source']}:{c['payout_external_id']} → {c['deposit_source']}:{c['deposit_external_id']} · {dollars(c['amount'])}"
+            for c in candidates
+        ]
+        selected_match=st.selectbox("Match to confirm",labels,key="reconciliation_candidate")
+        selected_candidate=candidates[labels.index(selected_match)]
+        reviewed_match=st.checkbox("I reviewed the source records and confirm these are the same transfer.",key="reviewed_match")
+        if st.button("Confirm selected transfer match",disabled=not reviewed_match):
+            try:
+                with LedgerStore(workspace_db) as store:
+                    store.confirm_reconciliation(
+                        workspace_id,
+                        payout_source=selected_candidate["payout_source"],
+                        payout_external_id=selected_candidate["payout_external_id"],
+                        deposit_source=selected_candidate["deposit_source"],
+                        deposit_external_id=selected_candidate["deposit_external_id"],
+                        note="Confirmed in Streamlit prototype after user review",
+                    )
+                st.success("Transfer match confirmed and stored in the reconciliation audit trail.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Reconciliation rejected: {exc}")
+    elif reconciliation["recorded_payouts"] or reconciliation["recorded_bank_deposits"]:
+        st.info("No unambiguous exact transfer matches are currently available.")
+
+    if unresolved_conflicts:
+        st.divider()
+        st.subheader("Conflict review")
+        conflict_labels=[
+            f"#{c['id']} · {c['source']}:{c['external_id']} · existing {dollars(c['existing_amount'])} vs incoming {dollars(c['incoming_amount'])}"
+            for c in unresolved_conflicts
+        ]
+        selected_conflict_label=st.selectbox("Conflict",conflict_labels,key="conflict_choice")
+        selected_conflict=unresolved_conflicts[conflict_labels.index(selected_conflict_label)]
+        st.dataframe(pd.DataFrame([selected_conflict]),hide_index=True,width="stretch")
+        reviewed_conflict=st.checkbox("I reviewed the source evidence for this conflict.",key="reviewed_conflict")
+        keep_col,accept_col=st.columns(2)
+        if keep_col.button("Keep existing record",disabled=not reviewed_conflict):
+            try:
+                with LedgerStore(workspace_db) as store:
+                    store.resolve_conflict(selected_conflict["id"],"keep_existing",note="Resolved in Streamlit prototype")
+                st.success("Conflict resolved: existing canonical record kept.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Conflict resolution rejected: {exc}")
+        if accept_col.button("Accept incoming revision",disabled=not reviewed_conflict):
+            try:
+                with LedgerStore(workspace_db) as store:
+                    store.resolve_conflict(selected_conflict["id"],"accept_incoming",note="Resolved in Streamlit prototype")
+                st.success("Conflict resolved: incoming revision became the canonical stored record.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Conflict resolution rejected: {exc}")
+
+    st.divider()
+    st.caption(reconciliation["note"])
+    if st.button("Reset this prototype workspace"):
+        reset_workspace(workspace_db)
+        st.session_state["ledger_workspace_id"]=uuid.uuid4().hex
+        st.rerun()
+
 st.caption("LEDGER · DEVELOPMENT BUILD · Not suitable for confidential client information.")
