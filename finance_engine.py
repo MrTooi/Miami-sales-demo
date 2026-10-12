@@ -13,7 +13,7 @@ def money(value):
     except (InvalidOperation, ValueError, TypeError) as exc:
         raise ValueError(f"Invalid monetary value: {value!r}") from exc
 
-def summarize(sales, expenses=None):
+def summarize(sales, expenses=None, *, expenses_complete=False):
     """Sales: {id, amount}; expenses: {id, amount, category: direct|operating}.
     Expense amounts are nonnegative costs. Sales may be negative refunds.
     No profit estimate is returned when expenses are absent.
@@ -33,8 +33,8 @@ def summarize(sales, expenses=None):
     sales_values=[amount for _,amount in validate(sales,"sale")]
     revenue=sum(sales_values,Decimal("0.00"))
     result={"net_revenue":revenue,"transactions":len(sales),"refund_total":-sum((x for x in sales_values if x<0),Decimal("0.00")),"profit_available":False}
-    if expenses is None:
-        result["profit_unavailable_reason"]="Expense records not provided"
+    if expenses is None or not expenses_complete:
+        result["profit_unavailable_reason"]=("Expense records not provided" if expenses is None else "Expense coverage not confirmed")
         return result
     expenses=list(expenses)
     costs=Counter()
