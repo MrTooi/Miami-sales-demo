@@ -482,6 +482,17 @@ class LedgerStore:
             result["replayed"] = True
             return result
 
+        occupied = self.conn.execute(
+            """SELECT id FROM reconciliation_links
+               WHERE tenant_id = ? AND
+                    ((payout_source = ? AND payout_external_id = ?) OR
+                     (deposit_source = ? AND deposit_external_id = ?))""",
+            (tenant_id, payout_source, payout_external_id,
+             deposit_source, deposit_external_id),
+        ).fetchone()
+        if occupied:
+            raise ValueError("One of these transactions is already reconciled")
+
         payout = self.conn.execute(
             """SELECT * FROM transactions
                WHERE tenant_id = ? AND source = ? AND external_id = ?""",
@@ -498,17 +509,6 @@ class LedgerStore:
             raise ValueError("Bank deposit transaction not found")
         if payout["amount_cents"] != deposit["amount_cents"] or payout["currency"] != deposit["currency"]:
             raise ValueError("Payout and bank deposit must have the same amount and currency")
-
-        occupied = self.conn.execute(
-            """SELECT id FROM reconciliation_links
-               WHERE tenant_id = ? AND
-                    ((payout_source = ? AND payout_external_id = ?) OR
-                     (deposit_source = ? AND deposit_external_id = ?))""",
-            (tenant_id, payout_source, payout_external_id,
-             deposit_source, deposit_external_id),
-        ).fetchone()
-        if occupied:
-            raise ValueError("One of these transactions is already reconciled")
 
         with self.conn:
             cursor = self.conn.execute(
