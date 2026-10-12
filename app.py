@@ -63,7 +63,7 @@ with left:
     st.bar_chart(monthly)
 with right:
     st.subheader("Revenue by service")
-    st.bar_chart(services)
+    st.bar_chart(services.sort_values(ascending=True), horizontal=True)
 st.subheader("Transaction details")
 st.dataframe(filtered.sort_values("date", ascending=False), use_container_width=True, hide_index=True)
 summary = pd.DataFrame({"metric": ["net_revenue", "transactions", "average_transaction"], "value": [round(revenue, 2), count, round(revenue/count, 2)]})
