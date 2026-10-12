@@ -23,20 +23,20 @@ div.stDownloadButton>button{background:#D5F478!important;color:#182119!important
 </style>""",unsafe_allow_html=True)
 
 def dollars(v):
-    return f"${float(v):,.2f}"
+    return f"${Decimal(str(v)):,.2f}"
 
 def read_file(upload):
     if upload.name.lower().endswith(".csv"):
-        return pd.read_csv(upload,dtype={"id":str,"order_id":str})
-    return pd.read_excel(upload,dtype={"id":str,"order_id":str})
+        return pd.read_csv(upload,dtype=str,keep_default_na=False)
+    return pd.read_excel(upload,dtype=str,keep_default_na=False)
 
 @st.cache_data
 def demo_sales():
-    return pd.read_csv("sample_sales.csv",dtype={"order_id":str})
+    return pd.read_csv("sample_sales.csv",dtype=str)
 
 @st.cache_data
 def demo_expenses():
-    return pd.read_csv("sample_expenses.csv",dtype={"id":str})
+    return pd.read_csv("sample_expenses.csv",dtype=str)
 
 st.markdown('<div class="eyebrow">LEDGER / PROFIT INTELLIGENCE</div>',unsafe_allow_html=True)
 st.title("Know where the money goes.")
@@ -96,18 +96,19 @@ with tabs[0]:
             st.metric("OPERATING MARGIN",f'{result["operating_margin_pct"]:.1f}%')
     st.subheader("Revenue over time")
     monthly=s.assign(month=s["date"].dt.to_period("M").dt.to_timestamp())
-    monthly["amount"]=monthly["amount"].astype(float)
-    monthly=monthly.groupby("month",as_index=False)["amount"].sum()
+    monthly=monthly.groupby("month",as_index=False)["amount"].agg(lambda amounts: sum(amounts, Decimal("0.00")))
+    monthly["amount_exact"]=monthly["amount"].map(lambda v: f"${v:,.2f}")
+    monthly["amount"]=monthly["amount"].map(float)
     chart=alt.Chart(monthly).mark_line(color="#D5F478",strokeWidth=3,point=True).encode(
         x=alt.X("month:T",title=None,axis=alt.Axis(format="%b %Y",labelAngle=0,labelColor="#AAB2AB")),
         y=alt.Y("amount:Q",title=None,axis=alt.Axis(format="$,.0f",labelColor="#AAB2AB",gridColor="#303936")),
-        tooltip=[alt.Tooltip("month:T",format="%b %Y"),alt.Tooltip("amount:Q",format="$,.2f")]
+        tooltip=[alt.Tooltip("month:T",format="%b %Y"),alt.Tooltip("amount_exact:N",title="Exact net revenue")]
     ).properties(height=250).configure_view(stroke=None).configure(background="#111416")
     st.altair_chart(chart,use_container_width=True)
     st.markdown("**Monthly net revenue (exact amounts)**")
     revenue_by_month=monthly.copy()
     revenue_by_month["Month"]=revenue_by_month["month"].dt.strftime("%B %Y")
-    revenue_by_month["Net revenue (USD)"]=revenue_by_month["amount"].map(lambda v:f"${v:,.2f}")
+    revenue_by_month["Net revenue (USD)"]=revenue_by_month["amount_exact"]
     st.dataframe(revenue_by_month[["Month","Net revenue (USD)"]],hide_index=True,use_container_width=True)
     st.caption("Net revenue reflects sales minus refunds, not cash held in the bank.")
     if e is not None and result["profit_available"]:
