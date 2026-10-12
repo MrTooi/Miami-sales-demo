@@ -45,14 +45,14 @@ def normalize(frame, kind):
             df["description"]=""
     return df
 
-def analyze(sales, expenses=None):
+def analyze(sales, expenses=None, *, expenses_complete=False):
     """Compute period summary; profit unavailable without expense file."""
     from finance_engine import summarize
     sales_rows=[{"id":r.id,"amount":str(r.amount)} for r in sales.itertuples(index=False)]
     expense_rows=None if expenses is None else [
         {"id":r.id,"amount":str(r.amount),"category":r.category}
         for r in expenses.itertuples(index=False)]
-    return summarize(sales_rows,expense_rows)
+    return summarize(sales_rows,expense_rows,expenses_complete=expenses_complete)
 
 def findings(sales, expenses=None):
     """Observed amounts only. Never call them savings or assert a cause."""
