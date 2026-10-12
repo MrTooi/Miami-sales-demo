@@ -11,7 +11,7 @@ class PipelineTests(unittest.TestCase):
         return pd.DataFrame([{"id":"E1","date":"2026-09-01","category":"direct","amount":"30"},
                              {"id":"E2","date":"2026-09-02","category":"operating","amount":"10"}])
     def test_reconciliation(self):
-        r=analyze(normalize(self.sales(),"sales"),normalize(self.expenses(),"expenses"))
+        r=analyze(normalize(self.sales(),"sales"),normalize(self.expenses(),"expenses"),expenses_complete=True)
         self.assertEqual(r["net_revenue"],Decimal("80"))
         self.assertEqual(r["operating_profit"],Decimal("40"))
     def test_sales_only_profit_unavailable(self):
