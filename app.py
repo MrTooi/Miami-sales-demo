@@ -1,10 +1,12 @@
 """Ledger — prototype financial intelligence dashboard. Synthetic data only."""
 import html
+from decimal import Decimal
+
+import altair as alt
 import pandas as pd
 import streamlit as st
-import altair as alt
-from decimal import Decimal
-from data_pipeline import normalize, analyze, findings
+
+from data_pipeline import analyze, findings, normalize
 
 st.set_page_config(page_title="Ledger | Profit Intelligence",page_icon="📊",layout="wide",initial_sidebar_state="collapsed")
 st.markdown("""<style>
@@ -22,21 +24,26 @@ div.stDownloadButton>button{background:#D5F478!important;color:#182119!important
 @media(max-width:640px){.block-container{padding:1.2rem .85rem 3rem}[data-testid="stMetric"]{padding:12px}[data-testid="stMetricValue"]{font-size:1.25rem}}
 </style>""",unsafe_allow_html=True)
 
+
 def dollars(v):
     return f"${Decimal(str(v)):,.2f}"
+
 
 def read_file(upload):
     if upload.name.lower().endswith(".csv"):
         return pd.read_csv(upload,dtype=str,keep_default_na=False)
     return pd.read_excel(upload,dtype=str,keep_default_na=False)
 
+
 @st.cache_data
 def demo_sales():
     return pd.read_csv("sample_sales.csv",dtype=str)
 
+
 @st.cache_data
 def demo_expenses():
     return pd.read_csv("sample_expenses.csv",dtype=str)
+
 
 st.markdown('<div class="eyebrow">LEDGER / PROFIT INTELLIGENCE</div>',unsafe_allow_html=True)
 st.title("Know where the money goes.")
@@ -104,19 +111,19 @@ with tabs[0]:
         y=alt.Y("amount:Q",title=None,axis=alt.Axis(format="$,.0f",labelColor="#AAB2AB",gridColor="#303936")),
         tooltip=[alt.Tooltip("month:T",format="%b %Y"),alt.Tooltip("amount_exact:N",title="Exact net revenue")]
     ).properties(height=250).configure_view(stroke=None).configure(background="#111416")
-    st.altair_chart(chart,use_container_width=True)
+    st.altair_chart(chart,width="stretch")
     st.markdown("**Monthly net revenue (exact amounts)**")
     revenue_by_month=monthly.copy()
     revenue_by_month["Month"]=revenue_by_month["month"].dt.strftime("%B %Y")
     revenue_by_month["Net revenue (USD)"]=revenue_by_month["amount_exact"]
-    st.dataframe(revenue_by_month[["Month","Net revenue (USD)"]],hide_index=True,use_container_width=True)
+    st.dataframe(revenue_by_month[["Month","Net revenue (USD)"]],hide_index=True,width="stretch")
     st.caption("Net revenue reflects sales minus refunds, not cash held in the bank.")
     if e is not None and result["profit_available"]:
         st.subheader("Cost breakdown")
         st.dataframe(pd.DataFrame([
             {"Category":"Direct costs","Recorded amount":dollars(result["direct_costs"])},
             {"Category":"Operating expenses","Recorded amount":dollars(result["operating_expenses"])}
-        ]),hide_index=True,use_container_width=True)
+        ]),hide_index=True,width="stretch")
 with tabs[1]:
     st.subheader("What the records show")
     st.caption("Observed totals are not proof of waste or guaranteed savings. More detailed job and supplier records are needed for true profit-leak diagnosis.")
@@ -131,10 +138,10 @@ with tabs[1]:
             st.caption("Calculation: "+item["basis"])
 with tabs[2]:
     st.subheader("Sales")
-    st.dataframe(s,use_container_width=True,hide_index=True)
+    st.dataframe(s,width="stretch",hide_index=True)
     if e is not None:
         st.subheader("Expenses")
-        st.dataframe(e,use_container_width=True,hide_index=True)
+        st.dataframe(e,width="stretch",hide_index=True)
     st.download_button("Download filtered sales",s.to_csv(index=False),"ledger_sales.csv","text/csv")
     if e is not None:
         st.download_button("Download filtered expenses",e.to_csv(index=False),"ledger_expenses.csv","text/csv")
