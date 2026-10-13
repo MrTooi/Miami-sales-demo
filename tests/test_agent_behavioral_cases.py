@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES_PATH = ROOT / "agent_evals" / "behavioral_cases.json"
+PROMPTS_PATH = ROOT / "agent_evals" / "behavioral_prompts.json"
 PROFILES_PATH = ROOT / "agent_evals" / "team_profiles.json"
 
 
@@ -12,6 +13,7 @@ class AgentBehavioralCaseTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.cases = json.loads(CASES_PATH.read_text(encoding="utf-8"))["cases"]
+        cls.prompts = json.loads(PROMPTS_PATH.read_text(encoding="utf-8"))["cases"]
         cls.profiles = json.loads(PROFILES_PATH.read_text(encoding="utf-8"))["agents"]
 
     def test_behavioral_suite_has_broad_minimum_size(self):
@@ -46,7 +48,18 @@ class AgentBehavioralCaseTests(unittest.TestCase):
         case_map = {case["id"]: case for case in self.cases}
         for case_id in security_case_ids:
             with self.subTest(case=case_id):
-                self.assertIn("security_integrity", case_map[case_id]["expected_reviewers"] + [case_map[case_id]["expected_primary"]])
+                self.assertIn(
+                    "security_integrity",
+                    case_map[case_id]["expected_reviewers"]
+                    + [case_map[case_id]["expected_primary"]],
+                )
+
+    def test_blind_prompts_match_canonical_cases_without_rubric(self):
+        canonical = {case["id"]: case["prompt"] for case in self.cases}
+        blind = {case["id"]: case["prompt"] for case in self.prompts}
+        self.assertEqual(canonical, blind)
+        for prompt_case in self.prompts:
+            self.assertEqual({"id", "prompt"}, set(prompt_case))
 
 
 if __name__ == "__main__":
