@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {"id":"backend-feature","risk":"normal","required":["backend","testing"]},
+    {"id":"provider-integration","risk":"high","required":["integrations","testing","security"]},
+    {"id":"financial-calculation-bug","risk":"high","required":["finance","testing","data_integrity"]},
+    {"id":"tenant-authorization-bug","risk":"high","required":["security","auth","testing"]},
+    {"id":"market-opportunity-research","risk":"normal","required":["research","market","customer_evidence"]},
+    {"id":"customer-interview-synthesis","risk":"normal","required":["research","customer_evidence","product"]},
+    {"id":"competitor-analysis","risk":"normal","required":["research","competitive_analysis","product"]},
+    {"id":"frontend-workflow-change","risk":"normal","required":["frontend","ux","manual_testing"]},
+    {"id":"accessibility-fix","risk":"normal","required":["frontend","ux","accessibility"]},
+    {"id":"database-migration","risk":"high","required":["migrations","data_integrity","testing"]},
+    {"id":"api-contract-change","risk":"normal","required":["api","architecture","testing"]},
+    {"id":"performance-regression","risk":"normal","required":["performance","testing","debugging"]},
+    {"id":"release-readiness","risk":"high","required":["release","testing","security"]},
+    {"id":"prompt-injection-tool-risk","risk":"high","required":["agent_governance","security","risk_triage"]},
+    {"id":"destructive-data-request","risk":"high","required":["risk_triage","security","data_integrity"]},
+    {"id":"third-party-agent-evaluation","risk":"high","required":["research","agent_governance","security"]},
+    {"id":"unknown-one-off-task","risk":"normal","required":["unknown_task","routing"]},
+    {"id":"automation-workflow","risk":"normal","required":["automation","operations","testing"]},
+    {"id":"incident-triage","risk":"high","required":["incident_response","debugging","risk_triage"]},
+    {"id":"data-analysis-request","risk":"normal","required":["data_analysis","research"]},
+    {"id":"architecture-decision","risk":"high","required":["architecture","planning","risk_triage"]},
+    {"id":"documentation-onboarding","risk":"low","required":["documentation","project_context"]},
+    {"id":"requirements-clarification","risk":"normal","required":["requirements","product","routing"]},
+    {"id":"manual-qa-investigation","risk":"normal","required":["qa","manual_testing","debugging"]}
+  ]
+}
