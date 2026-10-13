@@ -16,12 +16,23 @@ def issue(number, labels, title="Task", state="open", pull_request=False):
 
 
 class AgentOperatorTests(unittest.TestCase):
-    def test_candidate_requires_ready_and_excludes_paused_claimed_or_pr(self):
+    def test_candidate_requires_ready_and_excludes_other_lifecycle_states_or_pr(self):
         self.assertTrue(is_candidate(issue(1, ["agent:ready"])))
         self.assertFalse(is_candidate(issue(2, [])))
-        self.assertFalse(is_candidate(issue(3, ["agent:ready", "agent:paused"])))
-        self.assertFalse(is_candidate(issue(4, ["agent:ready", "agent:claimed"])))
-        self.assertFalse(is_candidate(issue(5, ["agent:ready"], pull_request=True)))
+        for index, state_label in enumerate(
+            [
+                "agent:paused",
+                "agent:claimed",
+                "agent:working",
+                "agent:awaiting-review",
+                "agent:blocked",
+                "needs:human",
+            ],
+            start=3,
+        ):
+            with self.subTest(state=state_label):
+                self.assertFalse(is_candidate(issue(index, ["agent:ready", state_label])))
+        self.assertFalse(is_candidate(issue(20, ["agent:ready"], pull_request=True)))
 
     def test_select_next_issue_is_priority_then_issue_number(self):
         issues = [
