@@ -1,4 +1,4 @@
-name: Claude Code
+name: Claude Code (On Demand)
 
 on:
   issue_comment:
@@ -12,6 +12,8 @@ on:
 
 jobs:
   claude:
+    # Usage guard: Claude only runs when a write-authorized repo participant
+    # explicitly includes @claude in an issue/PR interaction.
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
@@ -23,7 +25,8 @@ jobs:
       pull-requests: read
       issues: read
       id-token: write
-      actions: read # Required for Claude to read CI results on PRs
+      actions: read # Allows Claude to inspect CI evidence when explicitly invoked.
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,16 +38,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-
-          # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
             actions: read
 
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Optional: Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr *)'
-
+          # No automatic prompt is configured. Claude acts only on the explicit
+          # GitHub instruction that tagged @claude.
+          # Add tools later only when a tested workflow requires them; default
+          # to least privilege to reduce risk and unnecessary usage.
