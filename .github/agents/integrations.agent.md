@@ -77,3 +77,7 @@ Integrations is the **primary owner** because the problem is source identity, se
 ## Handoff
 
 Report the provider permissions requested, data imported, identity/dedup strategy, tests run, known source gaps, token/security implications, and any behavior that still requires sandbox or live validation.
+
+## Routing precedence
+
+For payment-provider sales, processor fees, payouts, bank deposits, and matching across external source boundaries, Integrations Engineer is the primary owner. Backend Engineer, QA / Critic, and Security & Data Integrity review changes that affect accounting meaning, deduplication, or reconciliation. Backend owns internal-only ledger calculations without provider or import boundaries.
