@@ -58,6 +58,15 @@ SECURITY_REVIEW_LABELS = {
     "permission:expand",
 }
 
+NON_READY_LIFECYCLE_LABELS = {
+    "agent:paused",
+    "agent:claimed",
+    "agent:working",
+    "agent:awaiting-review",
+    "agent:blocked",
+    "needs:human",
+}
+
 
 @dataclass(frozen=True)
 class DispatchPlan:
@@ -95,7 +104,7 @@ def is_candidate(issue: Mapping) -> bool:
     labels = _labels(issue)
     if "agent:ready" not in labels:
         return False
-    if labels.intersection({"agent:paused", "agent:claimed", "needs:human"}):
+    if labels.intersection(NON_READY_LIFECYCLE_LABELS):
         return False
     return True
 
