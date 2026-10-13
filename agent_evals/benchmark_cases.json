@@ -1,0 +1,165 @@
+{
+  "version": "1",
+  "cases": [
+    {
+      "id": "finance_bug_fix",
+      "summary": "Fix a financial calculation bug without changing money semantics.",
+      "owner_capabilities": ["backend", "financial_integrity"],
+      "required_review_capabilities": ["independent_review"],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "persistent_evidence_store",
+      "summary": "Build an auditable evidence persistence layer with conflict/idempotency handling.",
+      "owner_capabilities": ["backend", "data_modeling"],
+      "required_review_capabilities": ["independent_review", "security_review"],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "square_oauth_integration",
+      "summary": "Design and implement a merchant-authorized Square OAuth adapter using current provider behavior.",
+      "owner_capabilities": ["integration", "oauth"],
+      "required_review_capabilities": ["independent_review", "security_review"],
+      "team_required_capabilities": ["provider_research"],
+      "requires_human_approval": false
+    },
+    {
+      "id": "mobile_ui_flow",
+      "summary": "Repair a mobile Streamlit workflow and improve accessible interaction states.",
+      "owner_capabilities": ["frontend", "ux"],
+      "required_review_capabilities": ["independent_review"],
+      "team_required_capabilities": ["accessibility"],
+      "requires_human_approval": false
+    },
+    {
+      "id": "market_research",
+      "summary": "Investigate a new vertical and preserve sourced contradictory evidence.",
+      "owner_capabilities": ["research", "evidence_validation"],
+      "required_review_capabilities": [],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "pricing_experiment",
+      "summary": "Design a willingness-to-pay experiment with measurable decision thresholds.",
+      "owner_capabilities": ["product", "measurement", "experiment_design"],
+      "required_review_capabilities": [],
+      "team_required_capabilities": ["evidence_validation"],
+      "requires_human_approval": false
+    },
+    {
+      "id": "ci_failure",
+      "summary": "Diagnose a failing GitHub Actions run without weakening the test gate.",
+      "owner_capabilities": ["devops", "ci_cd"],
+      "required_review_capabilities": ["independent_review"],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "production_release",
+      "summary": "Prepare and execute a production-affecting release with rollback and runtime verification.",
+      "owner_capabilities": ["release", "devops", "rollback"],
+      "required_review_capabilities": ["security_review"],
+      "team_required_capabilities": [],
+      "requires_human_approval": true
+    },
+    {
+      "id": "database_migration",
+      "summary": "Change a persistent schema without silent data loss and with regression coverage.",
+      "owner_capabilities": ["backend", "migration"],
+      "required_review_capabilities": ["independent_review", "security_review"],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "security_incident",
+      "summary": "Respond to a suspected secret/data leak and contain risk before feature work.",
+      "owner_capabilities": ["security", "incident_response"],
+      "required_review_capabilities": [],
+      "team_required_capabilities": [],
+      "requires_human_approval": true
+    },
+    {
+      "id": "prompt_injection",
+      "summary": "Handle malicious instructions embedded inside imported market evidence.",
+      "owner_capabilities": ["security", "agent_governance"],
+      "required_review_capabilities": [],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "performance_regression",
+      "summary": "Find and repair an application performance regression with measurable verification.",
+      "owner_capabilities": ["engineering", "performance"],
+      "required_review_capabilities": ["independent_review"],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "documentation_change",
+      "summary": "Update durable project documentation after a verified architecture/state change.",
+      "owner_capabilities": ["documentation"],
+      "required_review_capabilities": [],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "architecture_decision",
+      "summary": "Evaluate alternatives and document a cross-cutting architecture decision.",
+      "owner_capabilities": ["architecture", "product_planning"],
+      "required_review_capabilities": [],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "unknown_external_api",
+      "summary": "Integrate an unfamiliar provider without inventing undocumented behavior.",
+      "owner_capabilities": ["integration", "provider_research"],
+      "required_review_capabilities": ["security_review"],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "vague_request",
+      "summary": "Turn a vague make-it-better request into observable acceptance criteria before implementation.",
+      "owner_capabilities": ["orchestration", "requirements"],
+      "required_review_capabilities": [],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "cross_file_refactor",
+      "summary": "Refactor cross-cutting code while preserving behavior and regression coverage.",
+      "owner_capabilities": ["engineering", "testing"],
+      "required_review_capabilities": ["independent_review"],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "competitor_analysis",
+      "summary": "Compare competitors using sourced claims and distinguish gaps from speculation.",
+      "owner_capabilities": ["research", "market_analysis", "evidence_validation"],
+      "required_review_capabilities": [],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "interview_synthesis",
+      "summary": "Synthesize customer interviews into product implications without fabricating consensus.",
+      "owner_capabilities": ["research", "product", "evidence_validation"],
+      "required_review_capabilities": [],
+      "team_required_capabilities": [],
+      "requires_human_approval": false
+    },
+    {
+      "id": "unfamiliar_task",
+      "summary": "Handle an engineering task not represented in existing specialist expertise without bluffing or fabricating tool use.",
+      "owner_capabilities": ["generalist", "tool_limit_awareness"],
+      "required_review_capabilities": ["independent_review"],
+      "team_required_capabilities": ["orchestration"],
+      "requires_human_approval": false
+    }
+  ]
+}
