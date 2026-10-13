@@ -10,3 +10,8 @@ class RoutingTests(unittest.TestCase):
         cases = data['cases']
         self.assertEqual(cases[0]['expected_primary'], 'integrations')
         self.assertEqual(cases[1]['expected_primary'], 'backend')
+        self.assertIn('qa_critic', cases[0]['expected_reviewers'])
+        self.assertIn('security_integrity', cases[0]['expected_reviewers'])
+        profile = (ROOT / '.github/agents/integrations.agent.md').read_text()
+        self.assertIn('Integrations Engineer is the primary owner', profile)
+        self.assertIn('Backend owns internal-only ledger calculations', profile)
