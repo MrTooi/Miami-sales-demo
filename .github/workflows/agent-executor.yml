@@ -56,6 +56,7 @@ jobs:
           tests.test_agent_operator_workflow
           tests.test_agent_operator_lifecycle
           tests.test_agent_scope_guard
+          tests.test_agent_review_gate
           -v
 
       - name: Claim next safe queued task
@@ -96,6 +97,7 @@ jobs:
           prompt-file: ${{ env.AGENT_PROMPT_PATH }}
           output-file: ${{ runner.temp }}/ledger-implementation-result.md
           effort: ${{ vars.LEDGER_CODEX_EFFORT || 'medium' }}
+          model: ${{ vars.LEDGER_CODEX_MODEL }}
 
       - name: Enforce autonomous scope boundary
         if: steps.claim.outputs.execute == 'true'
@@ -194,6 +196,7 @@ jobs:
           output-schema-file: agent_operator/review_schema.json
           output-file: ${{ env.QA_REVIEW_PATH }}
           effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
+          model: ${{ vars.LEDGER_CODEX_REVIEW_MODEL }}
 
       - name: Ensure QA reviewer did not edit implementation
         if: steps.pr.outputs.url != ''
@@ -236,6 +239,7 @@ jobs:
           output-schema-file: agent_operator/review_schema.json
           output-file: ${{ env.SECURITY_REVIEW_PATH }}
           effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
+          model: ${{ vars.LEDGER_CODEX_REVIEW_MODEL }}
 
       - name: Ensure Security reviewer did not edit implementation
         if: steps.pr.outputs.url != '' && steps.claim.outputs.security_review == 'true'
