@@ -21,7 +21,9 @@ This repository contains two related systems:
 12. Do not merge directly into `main`. Work on a branch and use a pull request for meaningful changes.
 13. Keep changes narrow to the assigned task. Do not opportunistically rewrite unrelated code.
 14. If a requirement is ambiguous and a wrong assumption could affect money, security, data integrity, or customer trust, stop and surface the ambiguity.
-15. Human approval is required before production deployment, destructive changes, real financial integrations, or merging high-risk changes.
+15. Human approval is required before production deployment, destructive changes, real financial integrations, external publication/purchases, permission expansion, or merging high-risk changes.
+16. Do not claim a test, source lookup, review, deployment, or tool action happened unless it actually happened.
+17. Unknown or unfamiliar work is not permission to guess. Use the Generalist/`general-task-execution` protocol to discover the right source, tool, skill, or specialist.
 
 ## Current strategic priority
 
@@ -43,6 +45,26 @@ Prefer stronger evidence over weaker evidence:
 10. General speculation
 
 A high opportunity score with weak evidence must still show low confidence.
+
+## Task routing and execution
+
+Read `AGENTS.md` for role ownership. Use the strongest specialist that fits the work. For unfamiliar/cross-functional tasks use `.github/skills/general-task-execution/SKILL.md`.
+
+For substantial tasks:
+
+1. define outcome and observable done criteria,
+2. classify risk and owner,
+3. inspect context/tools/authoritative docs,
+4. make the smallest testable change,
+5. verify with evidence,
+6. self-critique,
+7. hand off with uncertainty and next action.
+
+## Agent evaluation
+
+AI configuration is tested like code. `agent_evals/` contains the capability benchmark and `docs/AGENT_EVALUATION.md` explains its limits. A perfect static benchmark score means only that the defined team has coverage for the defined task classes; it does not prove perfect runtime behavior.
+
+Meaningful agent failures should become regression scenarios or deterministic safeguards when practical. Do not resume broad autonomous execution while known critical agent-evaluation failures remain unresolved.
 
 ## Engineering workflow
 
