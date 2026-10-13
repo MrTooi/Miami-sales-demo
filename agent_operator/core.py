@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Iterable, Mapping, Sequence
+from typing import Mapping, Sequence
 
 
 OWNER_LABELS = {
@@ -131,11 +131,12 @@ def _infer_owner(labels: set[str]) -> tuple[str, str]:
 
 
 def _infer_risk(labels: set[str]) -> str:
+    # High-impact external actions are never downgradeable by an issue label.
+    if labels.intersection(HIGH_IMPACT_LABELS):
+        return "high"
     explicit = [risk for risk in ("high", "medium", "low") if f"risk:{risk}" in labels]
     if explicit:
         return explicit[0]
-    if labels.intersection(HIGH_IMPACT_LABELS):
-        return "high"
     if labels.intersection(SECURITY_REVIEW_LABELS):
         return "medium"
     return "low"
