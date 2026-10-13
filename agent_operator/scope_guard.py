@@ -9,17 +9,16 @@ PROTECTED_EXACT = {
     "AGENTS.md",
     "PROJECT_BRIEF.md",
     "LAUNCH_RISK_REGISTER.md",
-    ".github/copilot-instructions.md",
+    "requirements.txt",
     "docs/AGENT_OPERATOR.md",
     "docs/AI_ENGINEERING_PIPELINE.md",
-    ".github/workflows/agent-operator.yml",
-    ".github/workflows/agent-executor.yml",
     "tests/test_agent_behavioral_cases.py",
     "tests/test_agent_benchmark.py",
     "tests/test_agent_configuration.py",
     "tests/test_agent_operator.py",
     "tests/test_agent_operator_lifecycle.py",
     "tests/test_agent_operator_workflow.py",
+    "tests/test_agent_review_gate.py",
     "tests/test_agent_routing_regressions.py",
     "tests/test_agent_scope_guard.py",
 }
@@ -27,8 +26,7 @@ PROTECTED_EXACT = {
 PROTECTED_PREFIXES = (
     "agent_operator/",
     "agent_evals/",
-    ".github/agents/",
-    ".github/skills/",
+    ".github/",
 )
 
 MAX_CHANGED_FILES = 30
