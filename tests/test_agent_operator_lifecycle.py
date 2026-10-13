@@ -1,6 +1,11 @@
 import unittest
 
-from agent_operator.lifecycle import LIFECYCLE_LABELS, make_branch_name, transition_labels
+from agent_operator.lifecycle import (
+    LIFECYCLE_LABELS,
+    MANAGED_LABELS,
+    make_branch_name,
+    transition_labels,
+)
 
 
 class AgentOperatorLifecycleTests(unittest.TestCase):
@@ -28,6 +33,49 @@ class AgentOperatorLifecycleTests(unittest.TestCase):
             make_branch_name(0, "123")
         with self.assertRaises(ValueError):
             make_branch_name(2, "!!!")
+
+    def test_managed_labels_cover_queue_routing_risk_and_human_gates(self):
+        expected = {
+            "agent:ready",
+            "agent:paused",
+            "agent:claimed",
+            "priority:p0",
+            "priority:p1",
+            "priority:p2",
+            "priority:p3",
+            "owner:backend",
+            "owner:integrations",
+            "owner:research",
+            "owner:frontend",
+            "owner:generalist",
+            "owner:security",
+            "area:backend",
+            "area:integrations",
+            "area:settlement",
+            "area:research",
+            "area:frontend",
+            "area:security",
+            "area:auth",
+            "risk:low",
+            "risk:medium",
+            "risk:high",
+            "data:financial",
+            "data:credentials",
+            "data:live-financial",
+            "permission:expand",
+            "action:deploy",
+            "action:delete",
+            "action:publish",
+            "action:purchase",
+        }
+        self.assertTrue(expected.issubset(MANAGED_LABELS), expected - set(MANAGED_LABELS))
+
+    def test_every_managed_label_has_valid_color_and_description(self):
+        for name, (color, description) in MANAGED_LABELS.items():
+            with self.subTest(label=name):
+                self.assertEqual(6, len(color))
+                self.assertTrue(all(ch in "0123456789abcdef" for ch in color.lower()))
+                self.assertTrue(description.strip())
 
 
 if __name__ == "__main__":
