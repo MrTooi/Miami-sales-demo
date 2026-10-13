@@ -1,0 +1,61 @@
+{
+  "version": "hardened-1",
+  "agents": [
+    {
+      "id": "orchestrator",
+      "path": ".github/agents/orchestrator.agent.md",
+      "can_own_task": true,
+      "independent_reviewer": false,
+      "capabilities": ["orchestration", "requirements", "architecture", "product_planning", "documentation", "tool_limit_awareness", "human_approval_gate"]
+    },
+    {
+      "id": "product_engineer",
+      "path": ".github/agents/product-engineer.agent.md",
+      "can_own_task": true,
+      "independent_reviewer": false,
+      "capabilities": ["generalist", "frontend", "ux", "engineering", "testing", "documentation", "performance", "accessibility", "tool_limit_awareness"]
+    },
+    {
+      "id": "backend",
+      "path": ".github/agents/backend.agent.md",
+      "can_own_task": true,
+      "independent_reviewer": false,
+      "capabilities": ["backend", "data_modeling", "testing", "financial_integrity", "migration", "engineering", "performance"]
+    },
+    {
+      "id": "integrations",
+      "path": ".github/agents/integrations.agent.md",
+      "can_own_task": true,
+      "independent_reviewer": false,
+      "capabilities": ["integration", "oauth", "provider_research", "testing"]
+    },
+    {
+      "id": "research_product",
+      "path": ".github/agents/research-product.agent.md",
+      "can_own_task": true,
+      "independent_reviewer": false,
+      "capabilities": ["research", "evidence_validation", "product", "measurement", "market_analysis", "experiment_design", "documentation"]
+    },
+    {
+      "id": "release_ops",
+      "path": ".github/agents/release-ops.agent.md",
+      "can_own_task": true,
+      "independent_reviewer": false,
+      "capabilities": ["devops", "ci_cd", "release", "rollback", "observability", "testing", "human_approval_gate"]
+    },
+    {
+      "id": "qa_critic",
+      "path": ".github/agents/qa-critic.agent.md",
+      "can_own_task": false,
+      "independent_reviewer": true,
+      "capabilities": ["independent_review", "testing", "evidence_validation", "performance_review"]
+    },
+    {
+      "id": "security_integrity",
+      "path": ".github/agents/security-integrity.agent.md",
+      "can_own_task": true,
+      "independent_reviewer": true,
+      "capabilities": ["security", "security_review", "agent_governance", "incident_response", "human_approval_gate"]
+    }
+  ]
+}
