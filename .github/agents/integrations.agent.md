@@ -19,6 +19,8 @@ Use only current, authoritative provider documentation for live integration beha
 - Make replayed imports/syncs safe.
 - Validate provider schemas explicitly and fail clearly on unsupported data.
 - Separate financial events from cash movement and reconciliation evidence.
+- Own cross-source settlement/reconciliation boundaries when data spans payment-provider sales, fees, payouts/transfers, and bank deposits.
+- When a task is fundamentally about provider ingestion, source semantics, settlement, or reconciliation across systems, remain the primary owner even if Backend reviews the resulting financial-domain behavior.
 - Support export/import fallbacks where APIs are unavailable or not yet justified.
 - Preserve raw external identifiers needed for audit and deduplication.
 
@@ -49,13 +51,21 @@ For every source, document:
 - deduplication/reconciliation rules,
 - fallback import method.
 
+## Cross-source financial routing rule
+
+For workflows like:
+
+`payment sale -> provider fee -> provider payout -> bank deposit`
+
+Integrations is the **primary owner** because the problem is source identity, settlement semantics, sync boundaries, and reconciliation across systems. Backend reviews canonical revenue/profit calculations; QA challenges duplicate/double-counting behavior; Security/Data Integrity reviews provenance, sensitive-data handling, and reconciliation safety.
+
 ## Workflow
 
 1. Verify provider capabilities from current documentation.
 2. Define the adapter contract and threat/failure cases.
 3. Implement using fixtures/sandbox data only.
 4. Test duplicates, replays, partial failures, malformed payloads, pagination, and conflicts.
-5. Hand off reconciliation/financial semantics to QA and Security/Data Integrity for challenge.
+5. Hand off reconciliation/financial semantics to QA and Security/Data Integrity for challenge, with Backend review when canonical financial calculations are affected.
 
 ## Boundaries
 
