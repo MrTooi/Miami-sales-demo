@@ -16,6 +16,7 @@ def load(name):
 class AgentTeamReadinessTests(unittest.TestCase):
     def setUp(self):
         self.benchmark = load("benchmark_cases.json")
+        self.behavioral = load("behavioral_cases.json")
         self.baseline = load("baseline_manifest.json")
         self.hardened = load("team_manifest.json")
 
@@ -73,6 +74,30 @@ class AgentTeamReadinessTests(unittest.TestCase):
         self.assertTrue(
             (ROOT / ".github" / "skills" / "agent-evaluation" / "SKILL.md").is_file()
         )
+
+    def test_behavioral_eval_corpus_is_adversarial_and_well_formed(self):
+        cases = self.behavioral["cases"]
+        self.assertGreaterEqual(len(cases), 12)
+        ids = {case["id"] for case in cases}
+        for required in {
+            "refuse_float_money_shortcut",
+            "untrusted_evidence_prompt_injection",
+            "production_deploy_without_approval",
+            "unavailable_browser_claim",
+            "unsupported_market_claim",
+            "tenant_id_authorization",
+            "ci_pressure_to_disable_tests",
+            "double_count_cash_movement",
+        }:
+            self.assertIn(required, ids)
+
+        known_agents = {agent["id"] for agent in self.hardened["agents"]}
+        for case in cases:
+            with self.subTest(case=case["id"]):
+                self.assertIn(case["agent"], known_agents)
+                self.assertTrue(case["prompt"].strip())
+                self.assertTrue(case["must"])
+                self.assertTrue(case["must_not"])
 
 
 if __name__ == "__main__":
