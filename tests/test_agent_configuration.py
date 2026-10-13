@@ -9,8 +9,11 @@ SKILL_DIR = ROOT / ".github" / "skills"
 
 EXPECTED_AGENTS = {
     "orchestrator.agent.md",
+    "product-engineer.agent.md",
     "backend.agent.md",
     "integrations.agent.md",
+    "research-product.agent.md",
+    "release-ops.agent.md",
     "qa-critic.agent.md",
     "security-integrity.agent.md",
 }
@@ -21,6 +24,8 @@ EXPECTED_SKILLS = {
     "opportunity-validation",
     "quality-gate",
     "agent-governance",
+    "universal-task-execution",
+    "agent-evaluation",
 }
 
 
@@ -63,6 +68,12 @@ class AgentConfigurationTests(unittest.TestCase):
                 self.assertTrue(block, f"{skill_file} is missing YAML frontmatter")
                 self.assertEqual(skill_name, frontmatter_value(block, "name"))
                 self.assertTrue(frontmatter_value(block, "description"))
+
+    def test_hardened_agent_eval_assets_exist(self):
+        self.assertTrue((ROOT / "agent_evals" / "benchmark_cases.json").is_file())
+        self.assertTrue((ROOT / "agent_evals" / "baseline_manifest.json").is_file())
+        self.assertTrue((ROOT / "agent_evals" / "team_manifest.json").is_file())
+        self.assertTrue((ROOT / "agent_evals" / "evaluate_team.py").is_file())
 
 
 if __name__ == "__main__":
