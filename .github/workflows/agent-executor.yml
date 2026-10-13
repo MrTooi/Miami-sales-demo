@@ -1,0 +1,304 @@
+name: LEDGER AI Task Executor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '22 * * * *'
+
+permissions: {}
+
+concurrency:
+  group: ledger-agent-executor-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  execute-next-task:
+    if: github.event_name == 'workflow_dispatch' || vars.LEDGER_AGENT_EXECUTOR_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      AGENT_TASK_PATH: ${{ runner.temp }}/ledger-agent-task.json
+      AGENT_PROMPT_PATH: ${{ runner.temp }}/ledger-agent-prompt.md
+      QA_REVIEW_PATH: ${{ runner.temp }}/ledger-qa-review.json
+      SECURITY_REVIEW_PATH: ${{ runner.temp }}/ledger-security-review.json
+    steps:
+      - name: Checkout main without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Install repository dependencies before model execution
+        run: python -m pip install -r requirements.txt
+
+      - name: Verify executor credential exists before claiming work
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY is not configured; refusing to claim a task." >&2
+            exit 1
+          fi
+
+      - name: Verify operator safety tests
+        run: >-
+          python -m unittest
+          tests.test_agent_operator
+          tests.test_agent_operator_workflow
+          tests.test_agent_operator_lifecycle
+          tests.test_agent_scope_guard
+          -v
+
+      - name: Claim next safe queued task
+        id: claim
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -m agent_operator.claim
+
+      - name: Report empty queue
+        if: steps.claim.outputs.has_task != 'true'
+        run: echo "No eligible queued task; executor is idle."
+
+      - name: Create isolated task branch
+        if: steps.claim.outputs.execute == 'true'
+        env:
+          BRANCH: ${{ steps.claim.outputs.branch }}
+        run: git checkout -b "$BRANCH"
+
+      - name: Mark task working
+        if: steps.claim.outputs.execute == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
+          BRANCH: ${{ steps.claim.outputs.branch }}
+        run: >-
+          python -m agent_operator.transition
+          --issue "$ISSUE_NUMBER"
+          --state agent:working
+          --comment "Background implementation started on branch \`$BRANCH\`."
+
+      - name: Run primary Codex implementation agent
+        if: steps.claim.outputs.execute == 'true'
+        id: implement
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':workspace'
+          prompt-file: ${{ env.AGENT_PROMPT_PATH }}
+          output-file: ${{ runner.temp }}/ledger-implementation-result.md
+          effort: ${{ vars.LEDGER_CODEX_EFFORT || 'medium' }}
+
+      - name: Enforce autonomous scope boundary
+        if: steps.claim.outputs.execute == 'true'
+        run: python -m agent_operator.scope_guard
+
+      - name: Run full repository test suite
+        if: steps.claim.outputs.execute == 'true'
+        run: python -m unittest discover -s tests -v
+
+      - name: Detect implementation changes
+        if: steps.claim.outputs.execute == 'true'
+        id: changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stop safely when implementation produced no change
+        if: steps.claim.outputs.execute == 'true' && steps.changes.outputs.has_changes != 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
+        run: >-
+          python -m agent_operator.transition
+          --issue "$ISSUE_NUMBER"
+          --state agent:blocked
+          --comment "The implementation agent completed without a repository change. No PR was opened; human triage is required before retrying."
+
+      - name: Commit and push verified implementation branch
+        if: steps.claim.outputs.execute == 'true' && steps.changes.outputs.has_changes == 'true'
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.claim.outputs.branch }}
+          ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
+        run: |
+          git config user.name "ledger-agent[bot]"
+          git config user.email "ledger-agent[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Agent implementation for issue #$ISSUE_NUMBER"
+          gh auth setup-git
+          git push --set-upstream origin "$BRANCH"
+
+      - name: Open draft pull request
+        if: steps.claim.outputs.execute == 'true' && steps.changes.outputs.has_changes == 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.claim.outputs.branch }}
+          ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
+          OWNER: ${{ steps.claim.outputs.owner }}
+          RISK: ${{ steps.claim.outputs.risk }}
+        run: |
+          TITLE="$(gh issue view "$ISSUE_NUMBER" --json title --jq .title)"
+          BODY_FILE="$RUNNER_TEMP/ledger-agent-pr-body.md"
+          cat > "$BODY_FILE" <<EOF
+          ## Autonomous agent work
+
+          Relates to #$ISSUE_NUMBER.
+
+          - Primary owner: \`$OWNER\`
+          - Risk: \`$RISK\`
+          - Full repository tests passed before this PR was opened.
+          - Scope guard passed before publication.
+          - This PR is intentionally **draft**.
+          - No deployment, external action, or merge was performed.
+
+          Automated QA review follows in this workflow. Claude is not invoked automatically.
+          EOF
+          PR_URL="$(gh pr create --draft --base main --head "$BRANCH" --title "Agent: $TITLE" --body-file "$BODY_FILE")"
+          echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare independent QA review prompt
+        if: steps.pr.outputs.url != ''
+        run: |
+          cat > "$RUNNER_TEMP/ledger-qa-prompt.md" <<'EOF'
+          Act as LEDGER's independent QA / Critic reviewer. Read AGENTS.md, PROJECT_BRIEF.md,
+          docs/AI_ENGINEERING_PIPELINE.md, .github/agents/qa-critic.agent.md, the issue context
+          available in git history/task branch, and inspect ONLY the changes in origin/main...HEAD.
+          Do not modify any file. Try to disprove correctness. Check acceptance intent, regressions,
+          edge cases, misleading claims, skipped validation, test quality, and whether the change is
+          actually supported by the evidence in the repository. Return the required structured JSON.
+          A pass means there is no concrete blocking correctness or trust defect in the scoped change.
+          EOF
+
+      - name: Run independent QA / Critic agent
+        if: steps.pr.outputs.url != ''
+        id: qa
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':workspace'
+          prompt-file: ${{ runner.temp }}/ledger-qa-prompt.md
+          output-schema-file: agent_operator/review_schema.json
+          output-file: ${{ env.QA_REVIEW_PATH }}
+          effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
+
+      - name: Ensure QA reviewer did not edit implementation
+        if: steps.pr.outputs.url != ''
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "QA reviewer modified the working tree; rejecting review." >&2
+            git reset --hard HEAD
+            git clean -fd
+            exit 1
+          fi
+
+      - name: Post QA review evidence
+        if: steps.pr.outputs.url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: gh pr comment "$PR_URL" --body-file "$QA_REVIEW_PATH"
+
+      - name: Prepare Security & Data Integrity review prompt
+        if: steps.pr.outputs.url != '' && steps.claim.outputs.security_review == 'true'
+        run: |
+          cat > "$RUNNER_TEMP/ledger-security-prompt.md" <<'EOF'
+          Act as LEDGER's independent Security & Data Integrity reviewer. Read AGENTS.md,
+          PROJECT_BRIEF.md, .github/agents/security-integrity.agent.md and inspect ONLY the changes
+          in origin/main...HEAD. Do not modify any file. Focus on secrets, auth/authorization,
+          permissions, tenant/data boundaries, financial semantics, transaction provenance,
+          double-counting risk, destructive behavior, third-party integration trust boundaries,
+          auditability, and whether any claim exceeds the evidence. Return the required structured
+          JSON. Use needs-human whenever a sensitive ambiguity cannot be resolved from repository evidence.
+          EOF
+
+      - name: Run Security & Data Integrity reviewer
+        if: steps.pr.outputs.url != '' && steps.claim.outputs.security_review == 'true'
+        id: security
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':workspace'
+          prompt-file: ${{ runner.temp }}/ledger-security-prompt.md
+          output-schema-file: agent_operator/review_schema.json
+          output-file: ${{ env.SECURITY_REVIEW_PATH }}
+          effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
+
+      - name: Ensure Security reviewer did not edit implementation
+        if: steps.pr.outputs.url != '' && steps.claim.outputs.security_review == 'true'
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Security reviewer modified the working tree; rejecting review." >&2
+            git reset --hard HEAD
+            git clean -fd
+            exit 1
+          fi
+
+      - name: Post Security review evidence
+        if: steps.pr.outputs.url != '' && steps.claim.outputs.security_review == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: gh pr comment "$PR_URL" --body-file "$SECURITY_REVIEW_PATH"
+
+      - name: Evaluate independent review gate
+        if: steps.pr.outputs.url != ''
+        id: review_gate
+        continue-on-error: true
+        env:
+          SECURITY_REQUIRED: ${{ steps.claim.outputs.security_review }}
+        run: |
+          if [ "$SECURITY_REQUIRED" = "true" ]; then
+            python -m agent_operator.review_gate "$QA_REVIEW_PATH" "$SECURITY_REVIEW_PATH"
+          else
+            python -m agent_operator.review_gate "$QA_REVIEW_PATH"
+          fi
+
+      - name: Mark reviewed work awaiting human merge review
+        if: steps.pr.outputs.url != '' && steps.review_gate.outcome == 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: >-
+          python -m agent_operator.transition
+          --issue "$ISSUE_NUMBER"
+          --state agent:awaiting-review
+          --comment "Automated implementation, tests, scope guard, and required reviewer gates passed. Draft PR: $PR_URL. Human merge review is still required during the initial rollout."
+
+      - name: Stop on reviewer rejection
+        if: steps.pr.outputs.url != '' && steps.review_gate.outcome != 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          python -m agent_operator.transition \
+            --issue "$ISSUE_NUMBER" \
+            --state agent:blocked \
+            --comment "Automated reviewer gate rejected or escalated the change. Draft PR preserved for diagnosis: $PR_URL."
+          exit 1
+
+      - name: Fail-safe lifecycle cleanup
+        if: failure() && steps.claim.outputs.execute == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
+        run: >-
+          python -m agent_operator.transition
+          --issue "$ISSUE_NUMBER"
+          --state agent:blocked
+          --comment "The autonomous executor stopped on a failed safety, test, publication, or review step. Inspect the workflow run before retrying."
