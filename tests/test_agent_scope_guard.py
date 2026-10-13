@@ -7,14 +7,18 @@ class AgentScopeGuardTests(unittest.TestCase):
     def test_normal_product_paths_are_allowed(self):
         self.assertEqual([], validate_changed_paths(["opportunity_radar/models.py", "tests/test_opportunity_radar.py"]))
 
-    def test_agent_control_plane_paths_are_blocked(self):
+    def test_agent_control_plane_and_dependency_paths_are_blocked(self):
         paths = [
             "agent_operator/core.py",
             "AGENTS.md",
+            "requirements.txt",
             ".github/agents/backend.agent.md",
             ".github/skills/quality-gate/SKILL.md",
             ".github/workflows/agent-executor.yml",
+            ".github/copilot-instructions.md",
             "docs/AGENT_OPERATOR.md",
+            "agent_evals/scenarios.json",
+            "tests/test_agent_review_gate.py",
         ]
         errors = validate_changed_paths(paths)
         self.assertEqual(len(paths), len(errors))
