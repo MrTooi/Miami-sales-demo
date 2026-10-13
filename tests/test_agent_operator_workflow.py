@@ -29,6 +29,13 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertNotIn("openai_api_key", text)
         self.assertNotIn("codex", text)
 
+    def test_scheduler_prevents_overlapping_runs_and_has_timeout(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("concurrency:", text)
+        self.assertIn("group: ledger-agent-operator-${{ github.repository }}", text)
+        self.assertIn("cancel-in-progress: false", text)
+        self.assertIn("timeout-minutes: 10", text)
+
 
 if __name__ == "__main__":
     unittest.main()
