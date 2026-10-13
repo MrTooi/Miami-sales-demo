@@ -74,6 +74,14 @@ class AgentConfigurationTests(unittest.TestCase):
         self.assertTrue((ROOT / "agent_evals" / "scenarios.json").is_file())
         self.assertTrue((ROOT / "agent_evals" / "benchmark.py").is_file())
 
+    def test_cross_source_settlement_routes_to_integrations_primary(self):
+        instructions = (ROOT / ".github" / "copilot-instructions.md").read_text(encoding="utf-8")
+        integration_profile = (AGENT_DIR / "integrations.agent.md").read_text(encoding="utf-8")
+        self.assertIn("Integrations Engineer as primary", instructions)
+        self.assertIn("Cross-source payment-provider settlement and reconciliation", instructions)
+        self.assertIn("payment sale -> provider fee -> provider payout -> bank deposit", integration_profile)
+        self.assertIn("Integrations is the **primary owner**", integration_profile)
+
 
 if __name__ == "__main__":
     unittest.main()
