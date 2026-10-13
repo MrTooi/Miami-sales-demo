@@ -7,14 +7,26 @@ from typing import Iterable
 
 PROTECTED_EXACT = {
     "AGENTS.md",
+    "PROJECT_BRIEF.md",
+    "LAUNCH_RISK_REGISTER.md",
+    ".github/copilot-instructions.md",
     "docs/AGENT_OPERATOR.md",
     "docs/AI_ENGINEERING_PIPELINE.md",
     ".github/workflows/agent-operator.yml",
     ".github/workflows/agent-executor.yml",
+    "tests/test_agent_behavioral_cases.py",
+    "tests/test_agent_benchmark.py",
+    "tests/test_agent_configuration.py",
+    "tests/test_agent_operator.py",
+    "tests/test_agent_operator_lifecycle.py",
+    "tests/test_agent_operator_workflow.py",
+    "tests/test_agent_routing_regressions.py",
+    "tests/test_agent_scope_guard.py",
 }
 
 PROTECTED_PREFIXES = (
     "agent_operator/",
+    "agent_evals/",
     ".github/agents/",
     ".github/skills/",
 )
@@ -41,26 +53,21 @@ def validate_changed_paths(paths: Iterable[str]) -> list[str]:
     return errors
 
 
-def changed_paths() -> list[str]:
+def _git_lines(args: list[str]) -> list[str]:
     result = subprocess.run(
-        ["git", "status", "--porcelain=v1", "-z"],
+        args,
         check=True,
         stdout=subprocess.PIPE,
-        text=False,
+        text=True,
+        encoding="utf-8",
     )
-    entries = result.stdout.decode("utf-8", errors="strict").split("\0")
-    paths: list[str] = []
-    for entry in entries:
-        if not entry:
-            continue
-        # XY<space>path. Renames may be rendered as old -> new; validate both.
-        payload = entry[3:] if len(entry) >= 3 else entry
-        if " -> " in payload:
-            old, new = payload.split(" -> ", 1)
-            paths.extend([old, new])
-        else:
-            paths.append(payload)
-    return paths
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def changed_paths() -> list[str]:
+    tracked = _git_lines(["git", "diff", "--name-only", "HEAD"])
+    untracked = _git_lines(["git", "ls-files", "--others", "--exclude-standard"])
+    return sorted(set(tracked + untracked))
 
 
 def main() -> int:
