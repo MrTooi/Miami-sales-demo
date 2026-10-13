@@ -52,6 +52,14 @@ class AgentOperatorTests(unittest.TestCase):
         self.assertTrue(plan.requires_human_approval)
         self.assertIn("external action blocked", plan.execution_scope)
 
+    def test_low_risk_label_cannot_downgrade_high_impact_action(self):
+        plan = build_dispatch_plan(
+            issue(15, ["agent:ready", "risk:low", "data:credentials"], "Credential task")
+        )
+        self.assertEqual("high", plan.risk)
+        self.assertTrue(plan.requires_human_approval)
+        self.assertIn("security-integrity", plan.reviewers)
+
     def test_conflicting_owner_labels_fall_back_to_generalist_triage(self):
         plan = build_dispatch_plan(
             issue(13, ["agent:ready", "owner:backend", "owner:frontend"], "Mixed task")
