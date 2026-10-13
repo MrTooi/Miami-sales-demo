@@ -21,10 +21,10 @@ jobs:
       issues: write
       pull-requests: write
     env:
-      AGENT_TASK_PATH: ${{ runner.temp }}/ledger-agent-task.json
-      AGENT_PROMPT_PATH: ${{ runner.temp }}/ledger-agent-prompt.md
-      QA_REVIEW_PATH: ${{ runner.temp }}/ledger-qa-review.json
-      SECURITY_REVIEW_PATH: ${{ runner.temp }}/ledger-security-review.json
+      AGENT_TASK_PATH: /tmp/ledger-agent-task.json
+      AGENT_PROMPT_PATH: /tmp/ledger-agent-prompt.md
+      QA_REVIEW_PATH: /tmp/ledger-qa-review.json
+      SECURITY_REVIEW_PATH: /tmp/ledger-security-review.json
     steps:
       - name: Checkout main without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
