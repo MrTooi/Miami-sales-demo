@@ -1,0 +1,71 @@
+import unittest
+
+from agent_operator.core import build_dispatch_plan, is_candidate, select_next_issue
+
+
+def issue(number, labels, title="Task", state="open", pull_request=False):
+    payload = {
+        "number": number,
+        "title": title,
+        "state": state,
+        "labels": [{"name": label} for label in labels],
+    }
+    if pull_request:
+        payload["pull_request"] = {"url": "https://example.invalid/pr"}
+    return payload
+
+
+class AgentOperatorTests(unittest.TestCase):
+    def test_candidate_requires_ready_and_excludes_paused_claimed_or_pr(self):
+        self.assertTrue(is_candidate(issue(1, ["agent:ready"])))
+        self.assertFalse(is_candidate(issue(2, [])))
+        self.assertFalse(is_candidate(issue(3, ["agent:ready", "agent:paused"])))
+        self.assertFalse(is_candidate(issue(4, ["agent:ready", "agent:claimed"])))
+        self.assertFalse(is_candidate(issue(5, ["agent:ready"], pull_request=True)))
+
+    def test_select_next_issue_is_priority_then_issue_number(self):
+        issues = [
+            issue(20, ["agent:ready", "priority:p2"]),
+            issue(30, ["agent:ready", "priority:p1"]),
+            issue(10, ["agent:ready", "priority:p1"]),
+            issue(1, ["agent:ready", "priority:p0", "agent:paused"]),
+        ]
+        self.assertEqual(10, select_next_issue(issues)["number"])
+
+    def test_settlement_routes_to_integrations_with_independent_security_review(self):
+        plan = build_dispatch_plan(
+            issue(11, ["agent:ready", "area:settlement", "priority:p1"], "Reconcile payouts")
+        )
+        self.assertEqual("integrations", plan.owner)
+        self.assertEqual("medium", plan.risk)
+        self.assertEqual(("qa-critic", "security-integrity"), plan.reviewers)
+        self.assertFalse(plan.requires_human_approval)
+        self.assertEqual("branch-only", plan.execution_scope)
+
+    def test_high_impact_external_action_is_blocked_and_requires_human(self):
+        plan = build_dispatch_plan(
+            issue(12, ["agent:ready", "owner:backend", "action:deploy"], "Deploy change")
+        )
+        self.assertEqual("backend", plan.owner)
+        self.assertEqual("high", plan.risk)
+        self.assertTrue(plan.blocked_external_action)
+        self.assertTrue(plan.requires_human_approval)
+        self.assertIn("external action blocked", plan.execution_scope)
+
+    def test_conflicting_owner_labels_fall_back_to_generalist_triage(self):
+        plan = build_dispatch_plan(
+            issue(13, ["agent:ready", "owner:backend", "owner:frontend"], "Mixed task")
+        )
+        self.assertEqual("generalist", plan.owner)
+        self.assertIn("conflicting", plan.reason)
+
+    def test_unclassified_task_uses_generalist_without_inventing_specialism(self):
+        plan = build_dispatch_plan(issue(14, ["agent:ready"], "Unknown task"))
+        self.assertEqual("generalist", plan.owner)
+        self.assertEqual("low", plan.risk)
+        self.assertEqual(("qa-critic",), plan.reviewers)
+        self.assertFalse(plan.requires_human_approval)
+
+
+if __name__ == "__main__":
+    unittest.main()
