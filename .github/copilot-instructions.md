@@ -24,6 +24,7 @@ This repository contains two related systems:
 15. Human approval is required before production deployment, destructive changes, real financial integrations, external publication/purchases, permission expansion, or merging high-risk changes.
 16. Do not claim a test, source lookup, review, deployment, or tool action happened unless it actually happened.
 17. Unknown or unfamiliar work is not permission to guess. Use the Generalist/`general-task-execution` protocol to discover the right source, tool, skill, or specialist.
+18. Cross-source payment-provider settlement and reconciliation work involving provider sales, fees, payouts, transfers, and bank deposits is owned primarily by the **Integrations Engineer**. Backend owns canonical calculation/domain logic, but should review rather than replace Integrations as primary when the core task is source sync, settlement, or reconciliation boundaries.
 
 ## Current strategic priority
 
@@ -49,6 +50,8 @@ A high opportunity score with weak evidence must still show low confidence.
 ## Task routing and execution
 
 Read `AGENTS.md` for role ownership. Use the strongest specialist that fits the work. For unfamiliar/cross-functional tasks use `.github/skills/general-task-execution/SKILL.md`.
+
+For payment-provider sale/fee/payout/bank-deposit ingestion or cross-source settlement/reconciliation, route **Integrations Engineer as primary**. Add Backend + QA/Critic + Security/Data Integrity review when revenue semantics, canonical financial state, or sensitive external data are affected.
 
 For substantial tasks:
 
