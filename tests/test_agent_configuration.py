@@ -13,6 +13,9 @@ EXPECTED_AGENTS = {
     "integrations.agent.md",
     "qa-critic.agent.md",
     "security-integrity.agent.md",
+    "research-product.agent.md",
+    "frontend-ux.agent.md",
+    "generalist.agent.md",
 }
 
 EXPECTED_SKILLS = {
@@ -21,6 +24,8 @@ EXPECTED_SKILLS = {
     "opportunity-validation",
     "quality-gate",
     "agent-governance",
+    "general-task-execution",
+    "agent-evaluation",
 }
 
 
@@ -63,6 +68,11 @@ class AgentConfigurationTests(unittest.TestCase):
                 self.assertTrue(block, f"{skill_file} is missing YAML frontmatter")
                 self.assertEqual(skill_name, frontmatter_value(block, "name"))
                 self.assertTrue(frontmatter_value(block, "description"))
+
+    def test_agent_benchmark_assets_exist(self):
+        self.assertTrue((ROOT / "agent_evals" / "team_profiles.json").is_file())
+        self.assertTrue((ROOT / "agent_evals" / "scenarios.json").is_file())
+        self.assertTrue((ROOT / "agent_evals" / "benchmark.py").is_file())
 
 
 if __name__ == "__main__":

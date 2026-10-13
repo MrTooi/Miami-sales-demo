@@ -1,0 +1,72 @@
+{
+  "agents": {
+    "orchestrator": {
+      "source": "repo",
+      "file": ".github/agents/orchestrator.agent.md",
+      "capabilities": ["planning", "routing", "architecture", "project_context", "risk_triage", "requirements", "documentation"],
+      "independent_review": false
+    },
+    "backend": {
+      "source": "repo",
+      "file": ".github/agents/backend.agent.md",
+      "capabilities": ["backend", "persistence", "api", "debugging", "architecture", "finance", "performance", "migrations", "testing"],
+      "independent_review": false
+    },
+    "integrations": {
+      "source": "repo",
+      "file": ".github/agents/integrations.agent.md",
+      "capabilities": ["integrations", "oauth", "api", "data_sync", "reconciliation", "debugging", "testing"],
+      "independent_review": false
+    },
+    "qa_critic": {
+      "source": "repo",
+      "file": ".github/agents/qa-critic.agent.md",
+      "capabilities": ["qa", "testing", "debugging", "release", "requirements", "manual_testing"],
+      "independent_review": true
+    },
+    "security_integrity": {
+      "source": "repo",
+      "file": ".github/agents/security-integrity.agent.md",
+      "capabilities": ["security", "privacy", "auth", "tenant_isolation", "data_integrity", "agent_governance", "audit", "risk_triage"],
+      "independent_review": true
+    },
+    "research_product": {
+      "source": "repo",
+      "file": ".github/agents/research-product.agent.md",
+      "capabilities": ["research", "product", "market", "customer_evidence", "competitive_analysis", "requirements", "documentation", "data_analysis"],
+      "independent_review": false
+    },
+    "frontend_ux": {
+      "source": "repo",
+      "file": ".github/agents/frontend-ux.agent.md",
+      "capabilities": ["frontend", "ux", "accessibility", "streamlit", "manual_testing", "product", "documentation"],
+      "independent_review": false
+    },
+    "generalist": {
+      "source": "repo",
+      "file": ".github/agents/generalist.agent.md",
+      "capabilities": ["unknown_task", "automation", "operations", "documentation", "data_analysis", "research", "debugging", "testing", "incident_response"],
+      "independent_review": false
+    },
+    "github_producer_reference": {
+      "source": "reference",
+      "capabilities": ["planning", "routing", "project_context", "requirements", "documentation"],
+      "independent_review": false
+    },
+    "github_dev_reference": {
+      "source": "reference",
+      "capabilities": ["backend", "frontend", "ux", "api", "integrations", "debugging", "testing", "documentation"],
+      "independent_review": false
+    },
+    "github_qa_reference": {
+      "source": "reference",
+      "capabilities": ["qa", "testing", "debugging", "release", "manual_testing"],
+      "independent_review": true
+    }
+  },
+  "lineups": {
+    "current_five": ["orchestrator", "backend", "integrations", "qa_critic", "security_integrity"],
+    "github_three_reference": ["github_producer_reference", "github_dev_reference", "github_qa_reference"],
+    "candidate_eight": ["orchestrator", "backend", "integrations", "qa_critic", "security_integrity", "research_product", "frontend_ux", "generalist"]
+  }
+}
