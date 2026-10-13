@@ -12,8 +12,7 @@ on:
 
 jobs:
   claude:
-    # Usage guard: Claude only runs when a write-authorized repo participant
-    # explicitly includes @claude in an issue/PR interaction.
+    # Usage guard: Claude only runs when explicitly tagged with @claude.
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
