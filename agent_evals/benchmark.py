@@ -16,7 +16,7 @@ class ScenarioResult:
     scenario_id: str
     covered: bool
     missing_capabilities: tuple[str, ...]
-    high_risk_review_ready: bool
+    high_risk_review_ready: bool | None
 
 
 @dataclass(frozen=True)
@@ -32,10 +32,12 @@ class TeamResult:
 
     @property
     def high_risk_review_rate(self) -> float:
-        high_risk = [result for result in self.scenario_results if result.high_risk_review_ready is not None]
+        high_risk = [
+            result for result in self.scenario_results if result.high_risk_review_ready is not None
+        ]
         if not high_risk:
             return 1.0
-        return sum(result.high_risk_review_ready for result in high_risk) / len(high_risk)
+        return sum(bool(result.high_risk_review_ready) for result in high_risk) / len(high_risk)
 
     @property
     def score(self) -> float:
@@ -75,12 +77,18 @@ def independent_review_capabilities(profile_data: dict, lineup: str) -> set[str]
 
 def _high_risk_review_ready(required: Iterable[str], reviewer_caps: set[str]) -> bool:
     required = set(required)
-    # High-risk work must have independent quality review and independent
-    # security/data-integrity review where those concerns are present.
     if "testing" in required or "release" in required:
         if not ({"qa", "testing"} & reviewer_caps):
             return False
-    if required & {"security", "auth", "privacy", "tenant_isolation", "data_integrity", "agent_governance", "risk_triage"}:
+    if required & {
+        "security",
+        "auth",
+        "privacy",
+        "tenant_isolation",
+        "data_integrity",
+        "agent_governance",
+        "risk_triage",
+    }:
         if not ({"security", "data_integrity", "agent_governance"} & reviewer_caps):
             return False
     return True
@@ -96,7 +104,7 @@ def benchmark_lineup(lineup: str) -> TeamResult:
         required = set(scenario["required"])
         missing = tuple(sorted(required - capabilities))
         covered = not missing
-        review_ready = True
+        review_ready: bool | None = None
         if scenario["risk"] == "high":
             review_ready = _high_risk_review_ready(required, reviewer_caps)
         results.append(
