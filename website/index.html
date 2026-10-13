@@ -3,275 +3,215 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="LEDGER helps growing businesses see where profit is being created or lost, why it is happening, and what to do next." />
-  <title>LEDGER — See where your profit is going</title>
+  <meta name="description" content="LEDGER is a profit intelligence layer that helps operators see where profit is leaking, why it changed, and what to fix next." />
+  <meta name="theme-color" content="#05070b" />
+  <title>LEDGER — Profit intelligence for operators</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
 
-  <header class="site-header" aria-label="Primary navigation">
+  <div class="page-grid" aria-hidden="true"></div>
+  <div class="ambient-glow glow-one" aria-hidden="true"></div>
+  <div class="ambient-glow glow-two" aria-hidden="true"></div>
+
+  <header class="site-header">
     <div class="shell nav-wrap">
       <a class="brand" href="#top" aria-label="LEDGER home">
-        <span class="brand-mark" aria-hidden="true">L</span>
+        <span class="brand-mark" aria-hidden="true"><span></span></span>
         <span>LEDGER</span>
       </a>
-      <nav class="desktop-nav" aria-label="Main menu">
-        <a href="#problem">Why LEDGER</a>
-        <a href="#how">How it works</a>
-        <a href="#answers">What it answers</a>
+      <nav class="desktop-nav" aria-label="Primary navigation">
+        <a href="#system">System</a>
+        <a href="#signals">Signals</a>
+        <a href="#decisions">Decision engine</a>
+        <a href="#trust">Trust</a>
       </nav>
-      <a class="button button-small button-ghost" href="#early-access">Early access</a>
+      <a class="nav-cta" href="#access">Request access <span>↗</span></a>
     </div>
   </header>
 
   <main id="main">
     <section class="hero" id="top">
-      <div class="hero-glow hero-glow-one" aria-hidden="true"></div>
-      <div class="hero-glow hero-glow-two" aria-hidden="true"></div>
       <div class="shell hero-grid">
-        <div class="hero-copy reveal">
-          <div class="eyebrow">PROFIT INTELLIGENCE FOR GROWING BUSINESSES</div>
-          <h1>See where your profit is going.</h1>
-          <p class="hero-lede">
-            LEDGER brings revenue, costs, payments, and operations into one clear view so you can spot margin leaks, understand what changed, and decide what to fix next.
-          </p>
+        <div class="hero-copy" data-reveal>
+          <div class="system-pill"><span class="pulse-dot"></span> PROFIT INTELLIGENCE // LIVE MODEL</div>
+          <h1>See where profit is leaking. <span>Know what to fix next.</span></h1>
+          <p class="hero-lede">LEDGER turns revenue, cost, payment, and operating data into a ranked set of decisions for protecting and growing profit.</p>
           <div class="hero-actions">
-            <a class="button button-primary" href="#early-access">Join early access</a>
-            <a class="button button-secondary" href="#how">See how it works</a>
+            <a class="button button-primary" href="#access">Enter early access <span>↗</span></a>
+            <a class="button button-secondary" href="#system">Explore the system</a>
           </div>
-          <p class="hero-note">Built to support better decisions — not replace your accountant or accounting system.</p>
+          <div class="proof-row" aria-label="Product principles">
+            <span>Real-time signals</span>
+            <span>Data confidence</span>
+            <span>Action priority</span>
+          </div>
         </div>
 
-        <div class="product-window reveal" aria-label="Example LEDGER dashboard preview">
-          <div class="window-topbar">
-            <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
-            <div class="window-label">Owner Brief · This Month</div>
-            <div class="live-pill"><span></span> Verified view</div>
-          </div>
-
-          <div class="dashboard-body">
-            <div class="dashboard-kpis">
-              <article class="kpi-card">
-                <span class="kpi-label">Revenue</span>
-                <strong>$184,260</strong>
-                <span class="kpi-delta positive">+8.4% vs last month</span>
-              </article>
-              <article class="kpi-card">
-                <span class="kpi-label">Gross profit</span>
-                <strong>$61,940</strong>
-                <span class="kpi-delta neutral">33.6% margin</span>
-              </article>
-              <article class="kpi-card attention">
-                <span class="kpi-label">Profit at risk</span>
-                <strong>$12,480</strong>
-                <span class="kpi-delta warning">3 issues need review</span>
-              </article>
+        <div class="ai-core-wrap" data-reveal aria-label="Illustrative LEDGER intelligence core">
+          <div class="ai-core">
+            <div class="core-ring ring-one"></div>
+            <div class="core-ring ring-two"></div>
+            <div class="core-ring ring-three"></div>
+            <div class="core-node">
+              <span>LEDGER AI</span>
+              <strong data-counter="92" data-suffix="%">92%</strong>
+              <small>DATA CONFIDENCE</small>
             </div>
+            <article class="orbit-card orbit-one tilt-card">
+              <span class="orbit-kicker">MARGIN SIGNAL</span>
+              <strong>−4.2 pts</strong>
+              <small>Repeat work weakening</small>
+            </article>
+            <article class="orbit-card orbit-two tilt-card">
+              <span class="orbit-kicker">FEE DRIFT</span>
+              <strong>+$1.86k</strong>
+              <small>30 day impact</small>
+            </article>
+            <article class="orbit-card orbit-three tilt-card">
+              <span class="orbit-kicker">NEXT MOVE</span>
+              <strong>REPRICE</strong>
+              <small>Before next quote cycle</small>
+            </article>
+            <div class="scan-line" aria-hidden="true"></div>
+          </div>
+          <p class="illustrative">Illustrative product data only. No customer data shown.</p>
+        </div>
+      </div>
+    </section>
 
-            <div class="dashboard-main">
-              <article class="signal-card">
-                <div class="card-heading">
-                  <div>
-                    <span class="card-kicker">Highest-impact signal</span>
-                    <h2>Material costs are eroding margin on repeat jobs.</h2>
-                  </div>
-                  <span class="severity">High impact</span>
-                </div>
-                <div class="signal-metric">
-                  <span>Estimated margin pressure</span>
-                  <strong>$7,240</strong>
-                </div>
-                <p>Costs increased while quoted prices stayed flat across a group of recurring jobs.</p>
-                <div class="recommended-action">
-                  <span class="action-icon" aria-hidden="true">↗</span>
-                  <div>
-                    <small>Recommended next step</small>
-                    <strong>Review pricing before the next quote cycle.</strong>
-                  </div>
-                </div>
-              </article>
+    <section class="section" id="system">
+      <div class="shell">
+        <div class="section-heading" data-reveal>
+          <div class="section-code">01 // SYSTEM</div>
+          <h2>One intelligence layer across the business.</h2>
+          <p>LEDGER connects signals across the company, checks what can be trusted, then turns the strongest evidence into a ranked list of next moves.</p>
+        </div>
 
-              <aside class="confidence-card">
-                <span class="card-kicker">Data confidence</span>
-                <div class="confidence-score">92<span>%</span></div>
-                <div class="confidence-bar"><span style="width:92%"></span></div>
-                <ul>
-                  <li><span class="status-dot good"></span> Sales data current</li>
-                  <li><span class="status-dot good"></span> Payment data reconciled</li>
-                  <li><span class="status-dot warn"></span> Expenses 2 days behind</li>
-                </ul>
-              </aside>
-            </div>
+        <div class="system-console" data-reveal>
+          <div class="console-topbar">
+            <span><i></i> SYSTEM ONLINE</span>
+            <span>DATA WINDOW // 30D</span>
+          </div>
+          <div class="console-grid">
+            <article class="console-panel tilt-card">
+              <span class="panel-index">01</span>
+              <h3>CONNECT</h3>
+              <p>Revenue, payments, banking, expenses, job data, and operations.</p>
+              <div class="data-stream"><i></i><i></i><i></i><i></i></div>
+            </article>
+            <article class="console-panel tilt-card">
+              <span class="panel-index">02</span>
+              <h3>VERIFY</h3>
+              <p>Freshness, completeness, conflicts, timing, and reconciliation.</p>
+              <div class="meter"><span></span></div>
+              <small>92% CONFIDENCE</small>
+            </article>
+            <article class="console-panel tilt-card">
+              <span class="panel-index">03</span>
+              <h3>DIAGNOSE</h3>
+              <p>Find the changes creating or destroying profit beneath the surface.</p>
+              <div class="mini-chart"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            </article>
+            <article class="console-panel tilt-card">
+              <span class="panel-index">04</span>
+              <h3>ACT</h3>
+              <p>Prioritize the move with the strongest expected economic impact.</p>
+              <div class="action-chip">REPRICE REPEAT WORK ↗</div>
+            </article>
           </div>
         </div>
       </div>
     </section>
 
-    <section class="trust-strip" aria-label="Product principles">
-      <div class="shell trust-row">
-        <span>Traceable numbers</span>
-        <span>Clear confidence</span>
-        <span>Actionable signals</span>
-        <span>Measured outcomes</span>
-      </div>
-    </section>
-
-    <section class="section problem-section" id="problem">
-      <div class="shell split-section">
-        <div class="section-heading reveal">
-          <div class="eyebrow">THE PROBLEM</div>
-          <h2>Your business has the numbers. The hard part is knowing what they mean together.</h2>
-        </div>
-        <div class="problem-copy reveal">
-          <p>
-            Revenue may live in one system, expenses in another, payouts somewhere else, and job details in spreadsheets or software your team already uses.
-          </p>
-          <p>
-            That makes it easy to know what happened — but harder to see <strong>where margin changed, why it changed, and what deserves attention first.</strong>
-          </p>
-        </div>
-      </div>
-
-      <div class="shell problem-grid">
-        <article class="problem-card reveal">
-          <span class="problem-number">01</span>
-          <h3>Scattered data</h3>
-          <p>Important financial and operational information lives across systems that were never designed to explain each other.</p>
-        </article>
-        <article class="problem-card reveal">
-          <span class="problem-number">02</span>
-          <h3>Late visibility</h3>
-          <p>Margin problems often become obvious after the month closes, after the quote goes out, or after the work is already done.</p>
-        </article>
-        <article class="problem-card reveal">
-          <span class="problem-number">03</span>
-          <h3>Too much noise</h3>
-          <p>Dashboards can show dozens of metrics without telling an owner which change matters enough to act on today.</p>
-        </article>
-      </div>
-    </section>
-
-    <section class="section how-section" id="how">
+    <section class="section signal-section" id="signals">
       <div class="shell">
-        <div class="section-heading centered reveal">
-          <div class="eyebrow">HOW LEDGER WORKS</div>
-          <h2>From disconnected numbers to a clear next move.</h2>
-          <p>LEDGER is designed around a simple operating loop.</p>
+        <div class="section-heading compact" data-reveal>
+          <div class="section-code">02 // SIGNAL FEED</div>
+          <h2>Catch expensive changes early.</h2>
         </div>
 
-        <div class="steps-grid">
-          <article class="step-card reveal">
-            <div class="step-icon">01</div>
-            <h3>Connect</h3>
-            <p>Bring together the business data needed to understand revenue, costs, payments, and operations.</p>
+        <div class="signal-feed">
+          <article class="signal-card tilt-card" data-reveal>
+            <div class="signal-top"><span>MARGIN COMPRESSION</span><em>HIGH</em></div>
+            <strong class="signal-number">$7,240</strong>
+            <p>Estimated 30-day pressure from material costs outpacing quoted price.</p>
+            <div class="signal-meta"><span>CONFIDENCE 94%</span><span>UPDATED 4M AGO</span></div>
           </article>
-          <article class="step-card reveal">
-            <div class="step-icon">02</div>
-            <h3>Verify</h3>
-            <p>Separate real revenue from cash movement, flag incomplete data, and make important numbers traceable.</p>
+          <article class="signal-card tilt-card" data-reveal>
+            <div class="signal-top"><span>PAYMENT MIX</span><em class="watch">WATCH</em></div>
+            <strong class="signal-number">+18.6%</strong>
+            <p>Higher-cost payment methods are taking a larger share of volume.</p>
+            <div class="signal-meta"><span>CONFIDENCE 89%</span><span>UPDATED 7M AGO</span></div>
           </article>
-          <article class="step-card reveal">
-            <div class="step-icon">03</div>
-            <h3>Diagnose</h3>
-            <p>Surface the few changes most likely to be affecting profit and show the evidence behind each signal.</p>
+          <article class="signal-card tilt-card" data-reveal>
+            <div class="signal-top"><span>LABOR EFFICIENCY</span><em class="watch">WATCH</em></div>
+            <strong class="signal-number">−6.7%</strong>
+            <p>Overtime increased without a matching rise in completed output.</p>
+            <div class="signal-meta"><span>CONFIDENCE 91%</span><span>UPDATED 11M AGO</span></div>
           </article>
-          <article class="step-card reveal">
-            <div class="step-icon">04</div>
-            <h3>Act + measure</h3>
-            <p>Turn findings into decisions, then compare what happened before and after the change.</p>
-          </article>
+        </div>
+        <p class="section-note">Illustrative signals shown for product demonstration only.</p>
+      </div>
+    </section>
+
+    <section class="section decision-section" id="decisions">
+      <div class="shell decision-grid">
+        <div class="decision-copy" data-reveal>
+          <div class="section-code">03 // DECISION ENGINE</div>
+          <h2>From signal to next move.</h2>
+          <p>Every signal should end with one thing: what the owner should consider doing next, why it matters, and how confident the system is.</p>
+        </div>
+        <div class="decision-queue" data-reveal>
+          <article><span class="rank">01</span><div><strong>Reprice repeat work</strong><small>Margin deterioration detected across recurring jobs</small></div><b>94</b></article>
+          <article><span class="rank">02</span><div><strong>Review payment routing</strong><small>Processing mix is creating avoidable fee pressure</small></div><b>89</b></article>
+          <article><span class="rank">03</span><div><strong>Investigate overtime pattern</strong><small>Labor cost drift is not matched by output growth</small></div><b>86</b></article>
         </div>
       </div>
     </section>
 
-    <section class="section answers-section" id="answers">
-      <div class="shell answers-grid">
-        <div class="section-heading reveal">
-          <div class="eyebrow">BUILT AROUND BUSINESS QUESTIONS</div>
-          <h2>Less dashboard. More answers.</h2>
-          <p>LEDGER is being designed to help owners answer questions that affect margin, pricing, and cash decisions.</p>
+    <section class="section trust-section" id="trust">
+      <div class="shell trust-panel" data-reveal>
+        <div class="trust-visual">
+          <div class="trust-orb"><strong data-counter="92" data-suffix="%">92%</strong><span>DATA CONFIDENCE</span></div>
         </div>
-
-        <div class="question-list reveal">
-          <article>
-            <span>01</span>
-            <div><h3>Which work is actually profitable?</h3><p>Compare what was expected with what the job really cost to deliver.</p></div>
-          </article>
-          <article>
-            <span>02</span>
-            <div><h3>Where is margin quietly shrinking?</h3><p>Spot changes in costs, fees, pricing, or mix before they become normal.</p></div>
-          </article>
-          <article>
-            <span>03</span>
-            <div><h3>What changed this week?</h3><p>Prioritize the few changes that are financially meaningful instead of reviewing every metric.</p></div>
-          </article>
-          <article>
-            <span>04</span>
-            <div><h3>Did our fix actually work?</h3><p>Track the result of pricing, process, or cost decisions against the original problem.</p></div>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <section class="section principles-section">
-      <div class="shell">
-        <div class="principles-panel reveal">
-          <div>
-            <div class="eyebrow">TRUST BEFORE AUTOMATION</div>
-            <h2>If the data is incomplete, LEDGER should say so.</h2>
-          </div>
-          <p>
-            We are building around a simple rule: financial software should never sound more certain than the underlying data deserves. Important numbers should be explainable, traceable, and clear about what is still missing.
-          </p>
-        </div>
-      </div>
-    </section>
-
-    <section class="section early-access" id="early-access">
-      <div class="shell early-access-panel reveal">
         <div>
-          <div class="eyebrow">EARLY ACCESS</div>
-          <h2>Help us build the profit view owners actually need.</h2>
-          <p>
-            We are speaking with a small number of businesses to understand where profit visibility breaks down in the real world. Early conversations are about your workflow and pain points — not a hard sell.
-          </p>
+          <div class="section-code">04 // TRUST LAYER</div>
+          <h2>See the confidence behind every recommendation.</h2>
+          <p>LEDGER is being designed to surface freshness, gaps, reconciliation conflicts, and confidence next to every recommendation instead of hiding weak data behind polished charts.</p>
+          <div class="trust-tags"><span>FRESHNESS VISIBLE</span><span>GAPS FLAGGED</span><span>CONFLICTS SURFACED</span><span>CONFIDENCE EXPLAINED</span></div>
         </div>
-        <div class="access-card">
-          <h3>Interested in an early conversation?</h3>
-          <p>We are preparing a small pilot group. Leave your details and we will follow up when intake opens.</p>
-          <form id="interest-form" novalidate>
-            <label>
-              <span>Name</span>
-              <input type="text" name="name" autocomplete="name" placeholder="Your name" required />
-            </label>
-            <label>
-              <span>Work email</span>
-              <input type="email" name="email" autocomplete="email" placeholder="you@company.com" required />
-            </label>
-            <label>
-              <span>Company</span>
-              <input type="text" name="company" autocomplete="organization" placeholder="Company name" required />
-            </label>
-            <button class="button button-primary button-full" type="submit">Request early access</button>
-            <p class="form-note" id="form-note">Preview form only — lead capture will be connected before launch.</p>
-          </form>
+      </div>
+    </section>
+
+    <section class="cta-section" id="access">
+      <div class="cta-glow" aria-hidden="true"></div>
+      <div class="shell cta-grid" data-reveal>
+        <div>
+          <div class="section-code">05 // EARLY ACCESS</div>
+          <h2>Put an intelligence layer on top of your business.</h2>
+          <p>Join early access for the first LEDGER owner brief. We are looking for operators who care more about profit quality than vanity growth.</p>
         </div>
+        <form class="access-form" id="interest-form" novalidate>
+          <label><span>Name</span><input type="text" name="name" autocomplete="name" placeholder="Your name" required /></label>
+          <label><span>Work email</span><input type="email" name="email" autocomplete="email" placeholder="you@company.com" required /></label>
+          <label><span>Company</span><input type="text" name="company" autocomplete="organization" placeholder="Company name" required /></label>
+          <button class="button button-primary button-full" type="submit">Request early access <span>↗</span></button>
+          <p class="form-note" id="form-note">Preview only — lead capture is not connected yet.</p>
+        </form>
       </div>
     </section>
   </main>
 
   <footer class="site-footer">
-    <div class="shell footer-row">
-      <a class="brand" href="#top" aria-label="LEDGER home">
-        <span class="brand-mark" aria-hidden="true">L</span>
-        <span>LEDGER</span>
-      </a>
-      <p>Profit intelligence built around evidence, clarity, and action.</p>
-      <span>© <span id="year"></span> LEDGER</span>
+    <div class="shell footer-grid">
+      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"><span></span></span><span>LEDGER</span></a>
+      <span>PROFIT INTELLIGENCE FOR OPERATORS</span>
+      <span>© <span id="year"></span> // EARLY CONCEPT</span>
     </div>
   </footer>
 
