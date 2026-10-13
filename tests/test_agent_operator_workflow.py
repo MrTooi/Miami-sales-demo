@@ -67,6 +67,12 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertIn("agent:awaiting-review", text)
         self.assertIn("agent:blocked", text)
 
+    def test_executor_job_configuration_does_not_use_runner_context(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        before_steps = text.split("    steps:", 1)[0]
+        self.assertNotIn("${{ runner.", before_steps)
+        self.assertIn("AGENT_TASK_PATH: /tmp/ledger-agent-task.json", before_steps)
+
     def test_executor_never_auto_merges_or_deploys(self):
         text = EXECUTOR.read_text(encoding="utf-8").lower()
         self.assertNotIn("gh pr merge", text)
