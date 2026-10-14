@@ -32,7 +32,7 @@ class AgentOperatorTests(unittest.TestCase):
         ):
             with self.subTest(state=state_label):
                 self.assertFalse(is_candidate(issue(index, ["agent:ready", state_label])))
-        self.assertFalse(is_candidate(issue(20, ["agent:ready"], pull_request=True))
+        self.assertFalse(is_candidate(issue(20, ["agent:ready"], pull_request=True)))
 
     def test_select_next_issue_is_priority_then_issue_number(self):
         issues = [
