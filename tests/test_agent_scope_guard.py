@@ -57,6 +57,21 @@ class AgentScopeGuardTests(unittest.TestCase):
         source.mkdir()
         return base, source
 
+    def test_frozen_task_allowlist_rejects_any_extra_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base, source = self._trees(directory)
+            (source / "allowed.py").write_text("ALLOWED = True\n", encoding="utf-8")
+            (source / "surprise.py").write_text("SURPRISE = True\n", encoding="utf-8")
+
+            manifest, errors = build_manifest(
+                source,
+                base,
+                allowed_paths=("allowed.py",),
+            )
+            self.assertEqual({"allowed.py", "surprise.py"}, {entry["path"] for entry in manifest["changes"]})
+            self.assertTrue(any("outside the frozen task allowlist: surprise.py" in error for error in errors))
+            self.assertFalse(any("outside the frozen task allowlist: allowed.py" in error for error in errors))
+
     def test_renaming_protected_file_cannot_hide_original_path(self):
         with tempfile.TemporaryDirectory() as directory:
             base, source = self._trees(directory)
