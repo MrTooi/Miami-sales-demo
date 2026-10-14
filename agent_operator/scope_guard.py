@@ -73,6 +73,23 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def load_allowed_paths(task_contract_path: Path) -> tuple[str, ...]:
+    payload = json.loads(task_contract_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("task contract must be a JSON object")
+    raw_paths = payload.get("allowed_paths")
+    if not isinstance(raw_paths, list) or not raw_paths:
+        raise ValueError("task contract is missing a non-empty allowed_paths list")
+    normalized: list[str] = []
+    for raw in raw_paths:
+        if not isinstance(raw, str):
+            raise ValueError("task contract allowed_paths must contain only strings")
+        normalized.append(_normalize(raw))
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("task contract allowed_paths contains duplicates")
+    return tuple(normalized)
+
+
 def snapshot_tree(root: Path) -> dict[str, dict]:
     """Return a git-independent snapshot of repository-visible filesystem state.
 
@@ -137,8 +154,7 @@ def diff_snapshots(base: dict[str, dict], current: dict[str, dict]) -> list[dict
 
         # Generated caches that exist only in the implementation workspace are
         # ignored because publication is rebuilt from this manifest rather than
-        # from the model-controlled git index. A tracked/base cache is never
-        # ignored and will still appear as a change.
+        # from the model-controlled tree. A base/tracked cache is never ignored.
         if before is None and after is not None and _is_benign_generated(path):
             continue
 
@@ -175,8 +191,14 @@ def validate_changed_paths(paths: Iterable[str]) -> list[str]:
     return errors
 
 
-def validate_changes(changes: list[dict], base_snapshot: dict[str, dict]) -> list[str]:
+def validate_changes(
+    changes: list[dict],
+    base_snapshot: dict[str, dict],
+    *,
+    allowed_paths: tuple[str, ...] | None = None,
+) -> list[str]:
     errors = validate_changed_paths(change["path"] for change in changes)
+    allowed = set(allowed_paths) if allowed_paths is not None else None
 
     for change in changes:
         path = change["path"]
@@ -184,6 +206,9 @@ def validate_changes(changes: list[dict], base_snapshot: dict[str, dict]) -> lis
         before = change.get("before")
         after = change.get("after")
         posix = PurePosixPath(path)
+
+        if allowed is not None and path not in allowed:
+            errors.append(f"path is outside the frozen task allowlist: {path}")
 
         if operation == "delete":
             errors.append(f"autonomous deletion requires human review: {path}")
@@ -210,11 +235,16 @@ def validate_changes(changes: list[dict], base_snapshot: dict[str, dict]) -> lis
     return errors
 
 
-def build_manifest(source: Path, base_tree: Path) -> tuple[dict, list[str]]:
+def build_manifest(
+    source: Path,
+    base_tree: Path,
+    *,
+    allowed_paths: tuple[str, ...] | None = None,
+) -> tuple[dict, list[str]]:
     base_snapshot = snapshot_tree(base_tree)
     current_snapshot = snapshot_tree(source)
     changes = diff_snapshots(base_snapshot, current_snapshot)
-    errors = validate_changes(changes, base_snapshot)
+    errors = validate_changes(changes, base_snapshot, allowed_paths=allowed_paths)
     manifest = {"version": MANIFEST_VERSION, "changes": changes}
     return manifest, errors
 
@@ -266,7 +296,12 @@ def apply_manifest(source: Path, destination: Path, manifest: dict) -> None:
 
 
 def _check_command(args: argparse.Namespace) -> int:
-    manifest, errors = build_manifest(args.source, args.base_tree)
+    allowed_paths = load_allowed_paths(args.allowed_paths_file)
+    manifest, errors = build_manifest(
+        args.source,
+        args.base_tree,
+        allowed_paths=allowed_paths,
+    )
     write_manifest(args.manifest_out, manifest)
     if errors:
         for error in errors:
@@ -294,6 +329,7 @@ def main() -> int:
     check = subparsers.add_parser("check", help="Compare a workspace to a trusted base tree")
     check.add_argument("--source", type=Path, required=True)
     check.add_argument("--base-tree", type=Path, required=True)
+    check.add_argument("--allowed-paths-file", type=Path, required=True)
     check.add_argument("--manifest-out", type=Path, required=True)
     check.set_defaults(handler=_check_command)
 
