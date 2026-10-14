@@ -32,7 +32,7 @@ class AgentOperatorTests(unittest.TestCase):
         ):
             with self.subTest(state=state_label):
                 self.assertFalse(is_candidate(issue(index, ["agent:ready", state_label])))
-        self.assertFalse(is_candidate(issue(20, ["agent:ready"], pull_request=True)))
+        self.assertFalse(is_candidate(issue(20, ["agent:ready"], pull_request=True))
 
     def test_select_next_issue_is_priority_then_issue_number(self):
         issues = [
@@ -78,12 +78,17 @@ class AgentOperatorTests(unittest.TestCase):
         self.assertEqual("generalist", plan.owner)
         self.assertIn("conflicting", plan.reason)
 
-    def test_unclassified_task_uses_generalist_without_inventing_specialism(self):
+    def test_unclassified_task_fails_closed_to_medium_risk(self):
         plan = build_dispatch_plan(issue(14, ["agent:ready"], "Unknown task"))
         self.assertEqual("generalist", plan.owner)
+        self.assertEqual("medium", plan.risk)
+        self.assertEqual(("qa-critic", "security-integrity"), plan.reviewers)
+        self.assertFalse(plan.requires_human_approval)
+
+    def test_explicit_low_risk_remains_available_for_deliberately_classified_work(self):
+        plan = build_dispatch_plan(issue(16, ["agent:ready", "risk:low"], "Known low risk task"))
         self.assertEqual("low", plan.risk)
         self.assertEqual(("qa-critic",), plan.reviewers)
-        self.assertFalse(plan.requires_human_approval)
 
 
 if __name__ == "__main__":
