@@ -1,5 +1,6 @@
 import unittest
 
+from agent_operator.claim import extract_allowed_paths
 from agent_operator.core import build_dispatch_plan, is_candidate, select_next_issue
 
 
@@ -89,6 +90,36 @@ class AgentOperatorTests(unittest.TestCase):
         plan = build_dispatch_plan(issue(16, ["agent:ready", "risk:low"], "Known low risk task"))
         self.assertEqual("low", plan.risk)
         self.assertEqual(("qa-critic",), plan.reviewers)
+
+    def test_allowed_files_section_becomes_exact_machine_scope(self):
+        body = """## Outcome
+Create a feature.
+
+## Allowed files
+
+Create only:
+- `agent_workbench/trial.py`
+- `tests/test_agent_workbench_trial.py`
+
+Do not change anything else.
+
+## Required behavior
+Do the thing.
+"""
+        self.assertEqual(
+            ("agent_workbench/trial.py", "tests/test_agent_workbench_trial.py"),
+            extract_allowed_paths(body),
+        )
+
+    def test_allowed_files_parser_rejects_globs_and_parent_escape(self):
+        for unsafe in ("`tests/*.py`", "`../outside.py`"):
+            with self.subTest(path=unsafe):
+                body = f"## Allowed files\n- {unsafe}\n\n## Next\n"
+                with self.assertRaises(ValueError):
+                    extract_allowed_paths(body)
+
+    def test_missing_allowed_files_section_fails_closed_to_empty_scope(self):
+        self.assertEqual((), extract_allowed_paths("## Outcome\nNo explicit file boundary."))
 
 
 if __name__ == "__main__":
