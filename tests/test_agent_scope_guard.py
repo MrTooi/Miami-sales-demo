@@ -1,11 +1,13 @@
-import subprocess
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
 from agent_operator.scope_guard import (
     MAX_CHANGED_FILES,
-    evaluate_repository,
+    apply_manifest,
+    build_manifest,
+    snapshot_tree,
     validate_changed_paths,
 )
 
@@ -20,10 +22,11 @@ class AgentScopeGuardTests(unittest.TestCase):
             "AGENTS.md",
             "requirements.txt",
             ".gitignore",
+            ".gitattributes",
+            "pyproject.toml",
+            "conftest.py",
             ".github/agents/backend.agent.md",
-            ".github/skills/quality-gate/SKILL.md",
             ".github/workflows/agent-executor.yml",
-            ".github/copilot-instructions.md",
             "docs/AGENT_OPERATOR.md",
             "agent_evals/scenarios.json",
             "finance_engine.py",
@@ -37,14 +40,6 @@ class AgentScopeGuardTests(unittest.TestCase):
         self.assertEqual(len(paths), len(errors))
         self.assertTrue(all("protected" in error for error in errors))
 
-    def test_generated_python_cache_does_not_trigger_scope_failure(self):
-        paths = [
-            "agent_operator/__pycache__/core.cpython-311.pyc",
-            "tests/__pycache__/test_example.cpython-311.pyc",
-            ".pytest_cache/v/cache/nodeids",
-        ]
-        self.assertEqual([], validate_changed_paths(paths))
-
     def test_large_autonomous_change_is_rejected(self):
         paths = [f"safe/file_{index}.py" for index in range(MAX_CHANGED_FILES + 1)]
         errors = validate_changed_paths(paths)
@@ -54,47 +49,128 @@ class AgentScopeGuardTests(unittest.TestCase):
         paths = ["safe/repeated.py"] * (MAX_CHANGED_FILES + 5)
         self.assertEqual([], validate_changed_paths(paths))
 
-    def _repo(self, directory: str) -> tuple[Path, str]:
-        repo = Path(directory)
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
-        subprocess.run(["git", "-C", str(repo), "config", "user.name", "Scope Guard Test"], check=True)
-        (repo / "tests").mkdir()
-        (repo / "safe.py").write_text("VALUE = 1\n", encoding="utf-8")
-        (repo / "tests" / "test_existing.py").write_text("VALUE = 1\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
-        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "base"], check=True)
-        base = subprocess.check_output(
-            ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
-        ).strip()
-        return repo, base
+    def _trees(self, directory: str) -> tuple[Path, Path]:
+        root = Path(directory)
+        base = root / "base"
+        source = root / "source"
+        base.mkdir()
+        source.mkdir()
+        return base, source
 
-    def test_existing_tests_cannot_be_modified_autonomously(self):
+    def test_renaming_protected_file_cannot_hide_original_path(self):
         with tempfile.TemporaryDirectory() as directory:
-            repo, base = self._repo(directory)
-            (repo / "tests" / "test_existing.py").write_text("VALUE = 2\n", encoding="utf-8")
-            paths, errors = evaluate_repository(repo, base)
-            self.assertIn("tests/test_existing.py", paths)
+            base, source = self._trees(directory)
+            (base / "finance_engine.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (source / "x.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+            manifest, errors = build_manifest(source, base)
+            paths = {(entry["operation"], entry["path"]) for entry in manifest["changes"]}
+            self.assertIn(("delete", "finance_engine.py"), paths)
+            self.assertIn(("add", "x.py"), paths)
+            self.assertTrue(any("protected" in error and "finance_engine.py" in error for error in errors))
+            self.assertTrue(any("deletion" in error and "finance_engine.py" in error for error in errors))
+
+    def test_renaming_existing_test_is_blocked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base, source = self._trees(directory)
+            (base / "tests").mkdir()
+            (source / "tests").mkdir()
+            (base / "tests" / "test_finance_engine.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (source / "tests" / "test_new.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+            manifest, errors = build_manifest(source, base)
             self.assertTrue(any("existing test changed" in error for error in errors))
+            self.assertTrue(any("deletion" in error for error in errors))
+            self.assertEqual(
+                {"tests/test_finance_engine.py", "tests/test_new.py"},
+                {entry["path"] for entry in manifest["changes"]},
+            )
 
-    def test_commit_cannot_hide_changes_from_base_sha(self):
+    def test_new_generated_cache_is_ignored_because_it_is_never_published(self):
         with tempfile.TemporaryDirectory() as directory:
-            repo, base = self._repo(directory)
-            (repo / "safe.py").write_text("VALUE = 2\n", encoding="utf-8")
-            subprocess.run(["git", "-C", str(repo), "add", "safe.py"], check=True)
-            subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "agent commit"], check=True)
-            paths, errors = evaluate_repository(repo, base)
-            self.assertIn("safe.py", paths)
-            self.assertTrue(any("HEAD changed" in error for error in errors))
-
-    def test_only_generated_cache_is_ignored_by_repository_evaluation(self):
-        with tempfile.TemporaryDirectory() as directory:
-            repo, base = self._repo(directory)
-            cache = repo / "agent_operator" / "__pycache__"
+            base, source = self._trees(directory)
+            (base / "safe.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (source / "safe.py").write_text("VALUE = 1\n", encoding="utf-8")
+            cache = source / "agent_operator" / "__pycache__"
             cache.mkdir(parents=True)
             (cache / "core.cpython-311.pyc").write_bytes(b"cache")
-            _, errors = evaluate_repository(repo, base)
+
+            manifest, errors = build_manifest(source, base)
+            self.assertEqual([], manifest["changes"])
             self.assertEqual([], errors)
+
+    def test_base_tracked_cache_change_is_not_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base, source = self._trees(directory)
+            base_cache = base / "agent_operator" / "__pycache__"
+            source_cache = source / "agent_operator" / "__pycache__"
+            base_cache.mkdir(parents=True)
+            source_cache.mkdir(parents=True)
+            (base_cache / "core.cpython-311.pyc").write_bytes(b"old")
+            (source_cache / "core.cpython-311.pyc").write_bytes(b"new")
+
+            manifest, errors = build_manifest(source, base)
+            self.assertEqual(1, len(manifest["changes"]))
+            self.assertTrue(any("protected" in error for error in errors))
+
+    def test_existing_test_modification_is_blocked_but_new_test_module_is_allowed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base, source = self._trees(directory)
+            (base / "tests").mkdir()
+            (source / "tests").mkdir()
+            (base / "tests" / "test_existing.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (source / "tests" / "test_existing.py").write_text("VALUE = 2\n", encoding="utf-8")
+            (source / "tests" / "test_feature.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+            _, errors = build_manifest(source, base)
+            self.assertTrue(any("existing test changed" in error for error in errors))
+            self.assertFalse(any("test_feature.py" in error for error in errors))
+
+    def test_new_non_test_python_under_tests_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base, source = self._trees(directory)
+            (source / "tests").mkdir()
+            (source / "tests" / "sitecustomize.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+            _, errors = build_manifest(source, base)
+            self.assertTrue(any("not an allowed test module" in error for error in errors))
+
+    def test_symlink_and_new_executable_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base, source = self._trees(directory)
+            target = source / "target.txt"
+            target.write_text("ok\n", encoding="utf-8")
+            os.symlink("target.txt", source / "link.txt")
+            executable = source / "tool.py"
+            executable.write_text("print('x')\n", encoding="utf-8")
+            executable.chmod(0o755)
+
+            _, errors = build_manifest(source, base)
+            self.assertTrue(any("non-regular" in error and "link.txt" in error for error in errors))
+            self.assertTrue(any("executable-bit" in error and "tool.py" in error for error in errors))
+
+    def test_verified_manifest_materializes_into_clean_checkout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = root / "base"
+            source = root / "source"
+            destination = root / "destination"
+            for path in (base, source, destination):
+                path.mkdir()
+
+            (base / "safe.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (destination / "safe.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (source / "safe.py").write_text("VALUE = 2\n", encoding="utf-8")
+            (source / "feature.py").write_text("FEATURE = True\n", encoding="utf-8")
+
+            manifest, errors = build_manifest(source, base)
+            self.assertEqual([], errors)
+            apply_manifest(source, destination, manifest)
+
+            rebuilt, rebuilt_errors = build_manifest(destination, base)
+            self.assertEqual([], rebuilt_errors)
+            self.assertEqual(manifest, rebuilt)
+            self.assertEqual(snapshot_tree(source), snapshot_tree(destination))
 
 
 if __name__ == "__main__":
