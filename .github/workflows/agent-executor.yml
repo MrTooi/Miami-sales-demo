@@ -25,6 +25,7 @@ jobs:
       AGENT_PROMPT_PATH: /tmp/ledger-agent-prompt.md
       QA_REVIEW_PATH: /tmp/ledger-qa-review.json
       SECURITY_REVIEW_PATH: /tmp/ledger-security-review.json
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - name: Checkout main without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -69,6 +70,17 @@ jobs:
         if: steps.claim.outputs.has_task != 'true'
         run: echo "No eligible queued task; executor is idle."
 
+      - name: Prepare immutable trusted control plane
+        if: steps.claim.outputs.execute == 'true'
+        run: |
+          BASE_SHA="$(git rev-parse HEAD)"
+          echo "AGENT_BASE_SHA=$BASE_SHA" >> "$GITHUB_ENV"
+          TRUSTED="$RUNNER_TEMP/ledger-trusted-control"
+          rm -rf "$TRUSTED"
+          mkdir -p "$TRUSTED"
+          git archive "$BASE_SHA" | tar -x -C "$TRUSTED"
+          echo "Trusted control plane captured from $BASE_SHA outside the model workspace."
+
       - name: Create isolated task branch
         if: steps.claim.outputs.execute == 'true'
         env:
@@ -99,9 +111,13 @@ jobs:
           effort: ${{ vars.LEDGER_CODEX_EFFORT || 'medium' }}
           model: ${{ vars.LEDGER_CODEX_MODEL }}
 
-      - name: Enforce autonomous scope boundary
+      - name: Enforce autonomous scope boundary from trusted control plane
         if: steps.claim.outputs.execute == 'true'
-        run: python -m agent_operator.scope_guard
+        run: >-
+          cd "$RUNNER_TEMP/ledger-trusted-control" &&
+          python -m agent_operator.scope_guard
+          --repo "$GITHUB_WORKSPACE"
+          --base-sha "$AGENT_BASE_SHA"
 
       - name: Snapshot working tree before tests
         if: steps.claim.outputs.execute == 'true'
@@ -120,7 +136,8 @@ jobs:
             diff -u "$RUNNER_TEMP/ledger-pretest-status.txt" "$RUNNER_TEMP/ledger-posttest-status.txt" || true
             exit 1
           fi
-          python -m agent_operator.scope_guard
+          cd "$RUNNER_TEMP/ledger-trusted-control"
+          python -m agent_operator.scope_guard --repo "$GITHUB_WORKSPACE" --base-sha "$AGENT_BASE_SHA"
 
       - name: Detect implementation changes
         if: steps.claim.outputs.execute == 'true'
@@ -138,6 +155,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
         run: >-
+          cd "$RUNNER_TEMP/ledger-trusted-control" &&
           python -m agent_operator.transition
           --issue "$ISSUE_NUMBER"
           --state agent:blocked
@@ -178,7 +196,7 @@ jobs:
           - Primary owner: \`$OWNER\`
           - Risk: \`$RISK\`
           - Full repository tests passed before this PR was opened.
-          - Scope guard passed before publication.
+          - Scope guard passed from an immutable trusted control-plane snapshot before publication.
           - This PR is intentionally **draft**.
           - No deployment, external action, or merge was performed.
 
@@ -285,13 +303,14 @@ jobs:
           PR_URL: ${{ steps.pr.outputs.url }}
         run: gh pr comment "$PR_URL" --body-file "$SECURITY_REVIEW_PATH"
 
-      - name: Evaluate independent review gate
+      - name: Evaluate independent review gate from trusted control plane
         if: steps.pr.outputs.url != ''
         id: review_gate
         continue-on-error: true
         env:
           SECURITY_REQUIRED: ${{ steps.claim.outputs.security_review }}
         run: |
+          cd "$RUNNER_TEMP/ledger-trusted-control"
           if [ "$SECURITY_REQUIRED" = "true" ]; then
             python -m agent_operator.review_gate "$QA_REVIEW_PATH" "$SECURITY_REVIEW_PATH"
           else
@@ -305,10 +324,11 @@ jobs:
           ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
           PR_URL: ${{ steps.pr.outputs.url }}
         run: >-
+          cd "$RUNNER_TEMP/ledger-trusted-control" &&
           python -m agent_operator.transition
           --issue "$ISSUE_NUMBER"
           --state agent:awaiting-review
-          --comment "Automated implementation, tests, scope guard, and required reviewer gates passed. Draft PR: $PR_URL. Human merge review is still required during the initial rollout."
+          --comment "Automated implementation, tests, trusted scope guard, and required reviewer gates passed. Draft PR: $PR_URL. Human merge review is still required during the initial rollout."
 
       - name: Stop on reviewer rejection
         if: steps.pr.outputs.url != '' && steps.review_gate.outcome != 'success'
@@ -317,6 +337,7 @@ jobs:
           ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
           PR_URL: ${{ steps.pr.outputs.url }}
         run: |
+          cd "$RUNNER_TEMP/ledger-trusted-control"
           python -m agent_operator.transition \
             --issue "$ISSUE_NUMBER" \
             --state agent:blocked \
@@ -329,6 +350,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
         run: >-
+          cd "$RUNNER_TEMP/ledger-trusted-control" &&
           python -m agent_operator.transition
           --issue "$ISSUE_NUMBER"
           --state agent:blocked
