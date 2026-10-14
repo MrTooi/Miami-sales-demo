@@ -12,25 +12,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  execute-next-task:
+  claim-task:
     if: github.event_name == 'workflow_dispatch' || vars.LEDGER_AGENT_EXECUTOR_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
       issues: write
-      pull-requests: write
     env:
       AGENT_TASK_PATH: /tmp/ledger-agent-task.json
       AGENT_PROMPT_PATH: /tmp/ledger-agent-prompt.md
-      QA_REVIEW_PATH: /tmp/ledger-qa-review.json
-      SECURITY_REVIEW_PATH: /tmp/ledger-security-review.json
       PYTHONDONTWRITEBYTECODE: '1'
+    outputs:
+      has_task: ${{ steps.claim.outputs.has_task }}
+      execute: ${{ steps.claim.outputs.execute }}
+      issue_number: ${{ steps.claim.outputs.issue_number }}
+      owner: ${{ steps.claim.outputs.owner }}
+      risk: ${{ steps.claim.outputs.risk }}
+      security_review: ${{ steps.claim.outputs.security_review }}
+      branch: ${{ steps.claim.outputs.branch }}
+      base_sha: ${{ steps.base.outputs.sha }}
+      task_sha: ${{ steps.freeze.outputs.task_sha }}
     steps:
       - name: Checkout main without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          ref: main
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Set up Python
@@ -38,7 +46,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install repository dependencies before model execution
+      - name: Install repository dependencies before claiming work
         run: python -m pip install -r requirements.txt
 
       - name: Verify executor credential exists before claiming work
@@ -60,6 +68,16 @@ jobs:
           tests.test_agent_review_gate
           -v
 
+      - name: Record immutable base SHA
+        id: base
+        run: |
+          BASE_SHA="$(git rev-parse HEAD)"
+          if ! printf '%s' "$BASE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Invalid base SHA: $BASE_SHA" >&2
+            exit 1
+          fi
+          echo "sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+
       - name: Claim next safe queued task
         id: claim
         env:
@@ -70,22 +88,24 @@ jobs:
         if: steps.claim.outputs.has_task != 'true'
         run: echo "No eligible queued task; executor is idle."
 
-      - name: Prepare immutable trusted control plane
+      - name: Freeze immutable task contract
         if: steps.claim.outputs.execute == 'true'
+        id: freeze
         run: |
-          BASE_SHA="$(git rev-parse HEAD)"
-          echo "AGENT_BASE_SHA=$BASE_SHA" >> "$GITHUB_ENV"
-          TRUSTED="$RUNNER_TEMP/ledger-trusted-control"
-          rm -rf "$TRUSTED"
-          mkdir -p "$TRUSTED"
-          git archive "$BASE_SHA" | tar -x -C "$TRUSTED"
-          echo "Trusted control plane captured from $BASE_SHA outside the model workspace."
+          mkdir -p "$RUNNER_TEMP/ledger-task-contract"
+          cp "$AGENT_TASK_PATH" "$RUNNER_TEMP/ledger-task-contract/task.json"
+          cp "$AGENT_PROMPT_PATH" "$RUNNER_TEMP/ledger-task-contract/prompt.md"
+          TASK_SHA="$(sha256sum "$RUNNER_TEMP/ledger-task-contract/task.json" | cut -d' ' -f1)"
+          echo "task_sha=$TASK_SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Create isolated task branch
+      - name: Upload immutable task contract
         if: steps.claim.outputs.execute == 'true'
-        env:
-          BRANCH: ${{ steps.claim.outputs.branch }}
-        run: git checkout -b "$BRANCH"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ledger-task-contract
+          path: ${{ runner.temp }}/ledger-task-contract
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Mark task working
         if: steps.claim.outputs.execute == 'true'
@@ -97,94 +117,265 @@ jobs:
           python -m agent_operator.transition
           --issue "$ISSUE_NUMBER"
           --state agent:working
-          --comment "Background implementation started on branch \`$BRANCH\`."
+          --comment "Implementation has started for reserved branch \`$BRANCH\`. Publication remains gated by isolated verification and human review."
+
+  implement-task:
+    needs: claim-task
+    if: needs.claim-task.result == 'success' && needs.claim-task.outputs.execute == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout exact claimed base without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.claim-task.outputs.base_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Install repository dependencies before model execution
+        run: python -m pip install -r requirements.txt
+
+      - name: Download immutable task contract
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ledger-task-contract
+          path: ${{ runner.temp }}/ledger-task-contract
+
+      - name: Verify task contract integrity
+        env:
+          EXPECTED_TASK_SHA: ${{ needs.claim-task.outputs.task_sha }}
+        run: |
+          ACTUAL_TASK_SHA="$(sha256sum "$RUNNER_TEMP/ledger-task-contract/task.json" | cut -d' ' -f1)"
+          test -n "$EXPECTED_TASK_SHA"
+          test "$ACTUAL_TASK_SHA" = "$EXPECTED_TASK_SHA"
 
       - name: Run primary Codex implementation agent
-        if: steps.claim.outputs.execute == 'true'
         id: implement
         uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           permission-profile: ':workspace'
-          prompt-file: ${{ env.AGENT_PROMPT_PATH }}
+          working-directory: ${{ github.workspace }}
+          prompt-file: ${{ runner.temp }}/ledger-task-contract/prompt.md
           output-file: ${{ runner.temp }}/ledger-implementation-result.md
           effort: ${{ vars.LEDGER_CODEX_EFFORT || 'medium' }}
           model: ${{ vars.LEDGER_CODEX_MODEL }}
 
-      - name: Enforce autonomous scope boundary from trusted control plane
-        if: steps.claim.outputs.execute == 'true'
-        run: >-
-          cd "$RUNNER_TEMP/ledger-trusted-control" &&
-          python -m agent_operator.scope_guard
-          --repo "$GITHUB_WORKSPACE"
-          --base-sha "$AGENT_BASE_SHA"
-
-      - name: Snapshot working tree before tests
-        if: steps.claim.outputs.execute == 'true'
-        run: git status --porcelain > "$RUNNER_TEMP/ledger-pretest-status.txt"
-
-      - name: Run full repository test suite
-        if: steps.claim.outputs.execute == 'true'
-        run: python -m unittest discover -s tests -v
-
-      - name: Verify tests did not mutate repository state
-        if: steps.claim.outputs.execute == 'true'
+      - name: Capture implementation filesystem without trusting its git metadata
         run: |
-          git status --porcelain > "$RUNNER_TEMP/ledger-posttest-status.txt"
-          if ! cmp -s "$RUNNER_TEMP/ledger-pretest-status.txt" "$RUNNER_TEMP/ledger-posttest-status.txt"; then
-            echo "Repository state changed while running tests; refusing to publish generated artifacts." >&2
-            diff -u "$RUNNER_TEMP/ledger-pretest-status.txt" "$RUNNER_TEMP/ledger-posttest-status.txt" || true
+          /usr/bin/tar \
+            --exclude='./.git' \
+            --exclude='./.git/**' \
+            -cf "$RUNNER_TEMP/ledger-implementation-tree.tar" \
+            -C "$GITHUB_WORKSPACE" .
+
+      - name: Upload raw implementation tree for isolated verification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ledger-implementation-tree
+          path: ${{ runner.temp }}/ledger-implementation-tree.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  verify-task:
+    needs: [claim-task, implement-task]
+    if: needs.implement-task.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout exact claimed base without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.claim-task.outputs.base_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Install trusted base dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Download raw implementation tree
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ledger-implementation-tree
+          path: ${{ runner.temp }}/ledger-implementation-artifact
+
+      - name: Reconstruct trusted base and isolated model tree
+        env:
+          BASE_SHA: ${{ needs.claim-task.outputs.base_sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ledger-base-tree" "$RUNNER_TEMP/ledger-model-tree"
+          git archive "$BASE_SHA" | /usr/bin/tar -x -C "$RUNNER_TEMP/ledger-base-tree"
+          /usr/bin/tar -xf "$RUNNER_TEMP/ledger-implementation-artifact/ledger-implementation-tree.tar" \
+            -C "$RUNNER_TEMP/ledger-model-tree"
+
+      - name: Enforce scope from trusted base without model git state
+        run: >-
+          cd "$RUNNER_TEMP/ledger-base-tree" &&
+          python -m agent_operator.scope_guard check
+          --source "$RUNNER_TEMP/ledger-model-tree"
+          --base-tree "$RUNNER_TEMP/ledger-base-tree"
+          --manifest-out "$RUNNER_TEMP/ledger-change-manifest.json"
+
+      - name: Require an actual verified implementation change
+        run: |
+          CHANGE_COUNT="$(python -I -S -c 'import json,sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))["changes"]))' "$RUNNER_TEMP/ledger-change-manifest.json")"
+          if [ "$CHANGE_COUNT" -le 0 ]; then
+            echo "Implementation produced no publishable repository change." >&2
             exit 1
           fi
-          cd "$RUNNER_TEMP/ledger-trusted-control"
-          python -m agent_operator.scope_guard --repo "$GITHUB_WORKSPACE" --base-sha "$AGENT_BASE_SHA"
 
-      - name: Detect implementation changes
-        if: steps.claim.outputs.execute == 'true'
-        id: changes
-        run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Stop safely when implementation produced no change
-        if: steps.claim.outputs.execute == 'true' && steps.changes.outputs.has_changes != 'true'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
+      - name: Materialize verified changes into clean base checkout
         run: >-
-          cd "$RUNNER_TEMP/ledger-trusted-control" &&
-          python -m agent_operator.transition
-          --issue "$ISSUE_NUMBER"
-          --state agent:blocked
-          --comment "The implementation agent completed without a repository change. No PR was opened; human triage is required before retrying."
+          cd "$RUNNER_TEMP/ledger-base-tree" &&
+          python -m agent_operator.scope_guard apply
+          --source "$RUNNER_TEMP/ledger-model-tree"
+          --destination "$GITHUB_WORKSPACE"
+          --manifest "$RUNNER_TEMP/ledger-change-manifest.json"
 
-      - name: Commit and push verified implementation branch
-        if: steps.claim.outputs.execute == 'true' && steps.changes.outputs.has_changes == 'true'
-        id: publish
+      - name: Confirm clean reconstruction exactly matches verified manifest
+        run: |
+          cd "$RUNNER_TEMP/ledger-base-tree"
+          python -m agent_operator.scope_guard check \
+            --source "$GITHUB_WORKSPACE" \
+            --base-tree "$RUNNER_TEMP/ledger-base-tree" \
+            --manifest-out "$RUNNER_TEMP/ledger-rebuilt-manifest.json"
+          cmp -s "$RUNNER_TEMP/ledger-change-manifest.json" "$RUNNER_TEMP/ledger-rebuilt-manifest.json"
+
+      - name: Run full repository test suite in no-write-token verification job
+        run: python -m unittest discover -s tests -v
+
+      - name: Verify tests did not change the publishable proposal
+        run: |
+          cd "$RUNNER_TEMP/ledger-base-tree"
+          python -m agent_operator.scope_guard check \
+            --source "$GITHUB_WORKSPACE" \
+            --base-tree "$RUNNER_TEMP/ledger-base-tree" \
+            --manifest-out "$RUNNER_TEMP/ledger-posttest-manifest.json"
+          cmp -s "$RUNNER_TEMP/ledger-change-manifest.json" "$RUNNER_TEMP/ledger-posttest-manifest.json"
+
+  publish-review:
+    needs: [claim-task, implement-task, verify-task]
+    if: needs.verify-task.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      QA_REVIEW_PATH: /tmp/ledger-qa-review.json
+      SECURITY_REVIEW_PATH: /tmp/ledger-security-review.json
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout exact claimed base without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.claim-task.outputs.base_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Download immutable task contract
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ledger-task-contract
+          path: ${{ runner.temp }}/ledger-task-contract
+
+      - name: Download raw implementation tree
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ledger-implementation-tree
+          path: ${{ runner.temp }}/ledger-implementation-artifact
+
+      - name: Reconstruct trusted base and isolated model tree
+        env:
+          BASE_SHA: ${{ needs.claim-task.outputs.base_sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ledger-base-tree" "$RUNNER_TEMP/ledger-model-tree"
+          git archive "$BASE_SHA" | /usr/bin/tar -x -C "$RUNNER_TEMP/ledger-base-tree"
+          /usr/bin/tar -xf "$RUNNER_TEMP/ledger-implementation-artifact/ledger-implementation-tree.tar" \
+            -C "$RUNNER_TEMP/ledger-model-tree"
+
+      - name: Re-verify scope independently before publication
+        run: >-
+          cd "$RUNNER_TEMP/ledger-base-tree" &&
+          python -m agent_operator.scope_guard check
+          --source "$RUNNER_TEMP/ledger-model-tree"
+          --base-tree "$RUNNER_TEMP/ledger-base-tree"
+          --manifest-out "$RUNNER_TEMP/ledger-publish-manifest.json"
+
+      - name: Verify immutable task contract again
+        env:
+          EXPECTED_TASK_SHA: ${{ needs.claim-task.outputs.task_sha }}
+        run: |
+          ACTUAL_TASK_SHA="$(sha256sum "$RUNNER_TEMP/ledger-task-contract/task.json" | cut -d' ' -f1)"
+          test -n "$EXPECTED_TASK_SHA"
+          test "$ACTUAL_TASK_SHA" = "$EXPECTED_TASK_SHA"
+
+      - name: Create clean publication branch and materialize verified files
+        env:
+          BRANCH: ${{ needs.claim-task.outputs.branch }}
+          BASE_SHA: ${{ needs.claim-task.outputs.base_sha }}
+        run: |
+          git switch -c "$BRANCH" "$BASE_SHA"
+          cd "$RUNNER_TEMP/ledger-base-tree"
+          python -m agent_operator.scope_guard apply \
+            --source "$RUNNER_TEMP/ledger-model-tree" \
+            --destination "$GITHUB_WORKSPACE" \
+            --manifest "$RUNNER_TEMP/ledger-publish-manifest.json"
+
+      - name: Confirm publication checkout exactly matches verified manifest
+        run: |
+          cd "$RUNNER_TEMP/ledger-base-tree"
+          python -m agent_operator.scope_guard check \
+            --source "$GITHUB_WORKSPACE" \
+            --base-tree "$RUNNER_TEMP/ledger-base-tree" \
+            --manifest-out "$RUNNER_TEMP/ledger-publication-recheck.json"
+          cmp -s "$RUNNER_TEMP/ledger-publish-manifest.json" "$RUNNER_TEMP/ledger-publication-recheck.json"
+
+      - name: Commit and push only the clean verified proposal
         env:
           GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ steps.claim.outputs.branch }}
-          ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
+          BRANCH: ${{ needs.claim-task.outputs.branch }}
+          ISSUE_NUMBER: ${{ needs.claim-task.outputs.issue_number }}
         run: |
           git config user.name "ledger-agent[bot]"
           git config user.email "ledger-agent[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Agent implementation for issue #$ISSUE_NUMBER"
+          git -c core.hooksPath=/dev/null add -A
+          git -c core.hooksPath=/dev/null commit -m "Agent implementation for issue #$ISSUE_NUMBER"
           gh auth setup-git
-          git push --set-upstream origin "$BRANCH"
+          git -c core.hooksPath=/dev/null push --set-upstream origin "$BRANCH"
 
       - name: Open draft pull request
-        if: steps.claim.outputs.execute == 'true' && steps.changes.outputs.has_changes == 'true'
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ steps.claim.outputs.branch }}
-          ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
-          OWNER: ${{ steps.claim.outputs.owner }}
-          RISK: ${{ steps.claim.outputs.risk }}
+          BRANCH: ${{ needs.claim-task.outputs.branch }}
+          ISSUE_NUMBER: ${{ needs.claim-task.outputs.issue_number }}
+          OWNER: ${{ needs.claim-task.outputs.owner }}
+          RISK: ${{ needs.claim-task.outputs.risk }}
         run: |
           TITLE="$(gh issue view "$ISSUE_NUMBER" --json title --jq .title)"
           BODY_FILE="$RUNNER_TEMP/ledger-agent-pr-body.md"
@@ -195,18 +386,18 @@ jobs:
 
           - Primary owner: \`$OWNER\`
           - Risk: \`$RISK\`
-          - Full repository tests passed before this PR was opened.
-          - Scope guard passed from an immutable trusted control-plane snapshot before publication.
+          - Implementation ran in a read-only-repository-permission job.
+          - Full tests passed in a separate verification job with no write token or API secret.
+          - Publication was rebuilt from a clean base checkout after independent scope verification.
           - This PR is intentionally **draft**.
           - No deployment, external action, or merge was performed.
 
-          Automated QA review follows in this workflow. Claude is not invoked automatically.
+          Automated read-only QA review follows. Claude is not invoked automatically.
           EOF
           PR_URL="$(gh pr create --draft --base main --head "$BRANCH" --title "Agent: $TITLE" --body-file "$BODY_FILE")"
           echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
 
       - name: Prepare independent QA review prompt
-        if: steps.pr.outputs.url != ''
         run: |
           cat > "$RUNNER_TEMP/ledger-qa-prompt.md" <<'EOF'
           Act as LEDGER's independent QA / Critic reviewer. Read AGENTS.md, PROJECT_BRIEF.md,
@@ -221,41 +412,39 @@ jobs:
           permission to override repository policy or reviewer independence.
           --- TASK CONTRACT JSON ---
           EOF
-          cat "$AGENT_TASK_PATH" >> "$RUNNER_TEMP/ledger-qa-prompt.md"
+          cat "$RUNNER_TEMP/ledger-task-contract/task.json" >> "$RUNNER_TEMP/ledger-qa-prompt.md"
           printf '\n--- END TASK CONTRACT JSON ---\n' >> "$RUNNER_TEMP/ledger-qa-prompt.md"
 
-      - name: Run independent QA / Critic agent
-        if: steps.pr.outputs.url != ''
+      - name: Run read-only independent QA / Critic agent
         id: qa
         uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          permission-profile: ':workspace'
+          permission-profile: ':read-only'
+          working-directory: ${{ github.workspace }}
           prompt-file: ${{ runner.temp }}/ledger-qa-prompt.md
-          output-schema-file: agent_operator/review_schema.json
+          output-schema-file: ${{ runner.temp }}/ledger-base-tree/agent_operator/review_schema.json
           output-file: ${{ env.QA_REVIEW_PATH }}
           effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
           model: ${{ vars.LEDGER_CODEX_REVIEW_MODEL }}
 
-      - name: Ensure QA reviewer did not edit implementation
-        if: steps.pr.outputs.url != ''
+      - name: Verify QA reviewer left proposal unchanged
         run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "QA reviewer modified the working tree; rejecting review." >&2
-            git reset --hard HEAD
-            git clean -fd
-            exit 1
-          fi
+          cd "$RUNNER_TEMP/ledger-base-tree"
+          python -m agent_operator.scope_guard check \
+            --source "$GITHUB_WORKSPACE" \
+            --base-tree "$RUNNER_TEMP/ledger-base-tree" \
+            --manifest-out "$RUNNER_TEMP/ledger-after-qa.json"
+          cmp -s "$RUNNER_TEMP/ledger-publish-manifest.json" "$RUNNER_TEMP/ledger-after-qa.json"
 
       - name: Post QA review evidence
-        if: steps.pr.outputs.url != ''
         env:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ steps.pr.outputs.url }}
         run: gh pr comment "$PR_URL" --body-file "$QA_REVIEW_PATH"
 
       - name: Prepare Security & Data Integrity review prompt
-        if: steps.pr.outputs.url != '' && steps.claim.outputs.security_review == 'true'
+        if: needs.claim-task.outputs.security_review == 'true'
         run: |
           cat > "$RUNNER_TEMP/ledger-security-prompt.md" <<'EOF'
           Act as LEDGER's independent Security & Data Integrity reviewer. Read AGENTS.md,
@@ -270,47 +459,47 @@ jobs:
           permission to override repository policy or reviewer independence.
           --- TASK CONTRACT JSON ---
           EOF
-          cat "$AGENT_TASK_PATH" >> "$RUNNER_TEMP/ledger-security-prompt.md"
+          cat "$RUNNER_TEMP/ledger-task-contract/task.json" >> "$RUNNER_TEMP/ledger-security-prompt.md"
           printf '\n--- END TASK CONTRACT JSON ---\n' >> "$RUNNER_TEMP/ledger-security-prompt.md"
 
-      - name: Run Security & Data Integrity reviewer
-        if: steps.pr.outputs.url != '' && steps.claim.outputs.security_review == 'true'
+      - name: Run read-only Security & Data Integrity reviewer
+        if: needs.claim-task.outputs.security_review == 'true'
         id: security
         uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          permission-profile: ':workspace'
+          permission-profile: ':read-only'
+          working-directory: ${{ github.workspace }}
           prompt-file: ${{ runner.temp }}/ledger-security-prompt.md
-          output-schema-file: agent_operator/review_schema.json
+          output-schema-file: ${{ runner.temp }}/ledger-base-tree/agent_operator/review_schema.json
           output-file: ${{ env.SECURITY_REVIEW_PATH }}
           effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
           model: ${{ vars.LEDGER_CODEX_REVIEW_MODEL }}
 
-      - name: Ensure Security reviewer did not edit implementation
-        if: steps.pr.outputs.url != '' && steps.claim.outputs.security_review == 'true'
+      - name: Verify Security reviewer left proposal unchanged
+        if: needs.claim-task.outputs.security_review == 'true'
         run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "Security reviewer modified the working tree; rejecting review." >&2
-            git reset --hard HEAD
-            git clean -fd
-            exit 1
-          fi
+          cd "$RUNNER_TEMP/ledger-base-tree"
+          python -m agent_operator.scope_guard check \
+            --source "$GITHUB_WORKSPACE" \
+            --base-tree "$RUNNER_TEMP/ledger-base-tree" \
+            --manifest-out "$RUNNER_TEMP/ledger-after-security.json"
+          cmp -s "$RUNNER_TEMP/ledger-publish-manifest.json" "$RUNNER_TEMP/ledger-after-security.json"
 
       - name: Post Security review evidence
-        if: steps.pr.outputs.url != '' && steps.claim.outputs.security_review == 'true'
+        if: needs.claim-task.outputs.security_review == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ steps.pr.outputs.url }}
         run: gh pr comment "$PR_URL" --body-file "$SECURITY_REVIEW_PATH"
 
-      - name: Evaluate independent review gate from trusted control plane
-        if: steps.pr.outputs.url != ''
+      - name: Evaluate independent review gate from trusted base
         id: review_gate
         continue-on-error: true
         env:
-          SECURITY_REQUIRED: ${{ steps.claim.outputs.security_review }}
+          SECURITY_REQUIRED: ${{ needs.claim-task.outputs.security_review }}
         run: |
-          cd "$RUNNER_TEMP/ledger-trusted-control"
+          cd "$RUNNER_TEMP/ledger-base-tree"
           if [ "$SECURITY_REQUIRED" = "true" ]; then
             python -m agent_operator.review_gate "$QA_REVIEW_PATH" "$SECURITY_REVIEW_PATH"
           else
@@ -318,40 +507,60 @@ jobs:
           fi
 
       - name: Mark reviewed work awaiting human merge review
-        if: steps.pr.outputs.url != '' && steps.review_gate.outcome == 'success'
+        if: steps.review_gate.outcome == 'success'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
+          ISSUE_NUMBER: ${{ needs.claim-task.outputs.issue_number }}
           PR_URL: ${{ steps.pr.outputs.url }}
         run: >-
-          cd "$RUNNER_TEMP/ledger-trusted-control" &&
+          cd "$RUNNER_TEMP/ledger-base-tree" &&
           python -m agent_operator.transition
           --issue "$ISSUE_NUMBER"
           --state agent:awaiting-review
-          --comment "Automated implementation, tests, trusted scope guard, and required reviewer gates passed. Draft PR: $PR_URL. Human merge review is still required during the initial rollout."
+          --comment "Implementation, isolated tests, clean-room publication, and required reviewer gates passed. Draft PR: $PR_URL. Human merge review is still required."
 
       - name: Stop on reviewer rejection
-        if: steps.pr.outputs.url != '' && steps.review_gate.outcome != 'success'
+        if: steps.review_gate.outcome != 'success'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
+          ISSUE_NUMBER: ${{ needs.claim-task.outputs.issue_number }}
           PR_URL: ${{ steps.pr.outputs.url }}
         run: |
-          cd "$RUNNER_TEMP/ledger-trusted-control"
+          cd "$RUNNER_TEMP/ledger-base-tree"
           python -m agent_operator.transition \
             --issue "$ISSUE_NUMBER" \
             --state agent:blocked \
-            --comment "Automated reviewer gate rejected or escalated the change. Draft PR preserved for diagnosis: $PR_URL."
+            --comment "Automated reviewer gate rejected or escalated the clean-room change. Draft PR preserved for diagnosis: $PR_URL."
           exit 1
 
-      - name: Fail-safe lifecycle cleanup
-        if: failure() && steps.claim.outputs.execute == 'true'
+  fail-safe-cleanup:
+    needs: [claim-task, implement-task, verify-task, publish-review]
+    if: >-
+      always() &&
+      needs.claim-task.outputs.execute == 'true' &&
+      needs.publish-review.result != 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Recover lifecycle without executing repository code
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ steps.claim.outputs.issue_number }}
-        run: >-
-          cd "$RUNNER_TEMP/ledger-trusted-control" &&
-          python -m agent_operator.transition
-          --issue "$ISSUE_NUMBER"
-          --state agent:blocked
-          --comment "The autonomous executor stopped on a failed safety, test, publication, or review step. Inspect the workflow run before retrying."
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.claim-task.outputs.issue_number }}
+        run: |
+          if [ -z "$ISSUE_NUMBER" ]; then
+            echo "No claimed issue number available; nothing to recover."
+            exit 0
+          fi
+          CURRENT="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$CURRENT" | grep -qx 'agent:blocked'; then
+            echo "Issue #$ISSUE_NUMBER is already blocked."
+            exit 0
+          fi
+          for LABEL in agent:ready agent:claimed agent:working agent:awaiting-review needs:human; do
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL" >/dev/null 2>&1 || true
+          done
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label 'agent:blocked'
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Agent execution stopped before a clean reviewed publication completed. Lifecycle was recovered by the separate fail-safe job. Inspect the failed workflow stage before any retry."
