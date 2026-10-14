@@ -58,6 +58,23 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertIn("persist-credentials: false", text)
         self.assertIn("permission-profile: ':workspace'", text)
 
+    def test_executor_uses_immutable_trusted_control_plane_after_model(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        self.assertIn("Prepare immutable trusted control plane", text)
+        self.assertIn("git archive \"$BASE_SHA\" | tar -x -C \"$TRUSTED\"", text)
+        self.assertIn("AGENT_BASE_SHA=$BASE_SHA", text)
+        self.assertIn('cd "$RUNNER_TEMP/ledger-trusted-control"', text)
+        self.assertIn('--base-sha "$AGENT_BASE_SHA"', text)
+        self.assertIn("PYTHONDONTWRITEBYTECODE: '1'", text)
+
+        model_index = text.index("Run primary Codex implementation agent")
+        guard_index = text.index("Enforce autonomous scope boundary from trusted control plane")
+        publish_index = text.index("Commit and push verified implementation branch")
+        review_index = text.index("Evaluate independent review gate from trusted control plane")
+        self.assertLess(model_index, guard_index)
+        self.assertLess(guard_index, publish_index)
+        self.assertLess(publish_index, review_index)
+
     def test_executor_requires_scope_tests_and_independent_review_gate(self):
         text = EXECUTOR.read_text(encoding="utf-8")
         self.assertIn("python -m agent_operator.scope_guard", text)
