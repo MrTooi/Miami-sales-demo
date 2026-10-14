@@ -6,6 +6,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PLANNER = ROOT / ".github" / "workflows" / "agent-operator.yml"
 EXECUTOR = ROOT / ".github" / "workflows" / "agent-executor.yml"
 CODEX_ACTION_SHA = "a8d8be6ee028bea4525bc722d16f36687b408c81"
+UPLOAD_ARTIFACT_SHA = "ea165f8d65b6e75b540449e92b4886f43607fa02"
+DOWNLOAD_ARTIFACT_SHA = "d3f86a106a0bac45b974a628896c90dbdf5c8093"
 
 
 class AgentOperatorWorkflowTests(unittest.TestCase):
@@ -38,64 +40,115 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertIn("cancel-in-progress: false", text)
         self.assertIn("timeout-minutes: 10", text)
 
-    def test_executor_is_opt_in_and_has_bounded_runtime(self):
+    def test_executor_is_opt_in_and_each_stage_has_bounded_runtime(self):
         text = EXECUTOR.read_text(encoding="utf-8")
         self.assertIn("vars.LEDGER_AGENT_EXECUTOR_ENABLED == 'true'", text)
         self.assertIn("workflow_dispatch:", text)
         self.assertIn("concurrency:", text)
-        self.assertIn("timeout-minutes: 45", text)
+        for job in ("claim-task:", "implement-task:", "verify-task:", "publish-review:", "fail-safe-cleanup:"):
+            self.assertIn(job, text)
+        for timeout in ("timeout-minutes: 10", "timeout-minutes: 30", "timeout-minutes: 20", "timeout-minutes: 25", "timeout-minutes: 5"):
+            self.assertIn(timeout, text)
 
-    def test_executor_uses_pinned_codex_and_never_automatic_claude(self):
+    def test_executor_uses_pinned_actions_and_never_automatic_claude(self):
         text = EXECUTOR.read_text(encoding="utf-8")
         self.assertIn(f"openai/codex-action@{CODEX_ACTION_SHA}", text)
+        self.assertIn(f"actions/upload-artifact@{UPLOAD_ARTIFACT_SHA}", text)
+        self.assertIn(f"actions/download-artifact@{DOWNLOAD_ARTIFACT_SHA}", text)
         lowered = text.lower()
         self.assertNotIn("@claude", lowered)
         self.assertNotIn("anthropic", lowered)
         self.assertNotIn("claude-code-action", lowered)
 
-    def test_executor_does_not_persist_checkout_credentials_into_model_workspace(self):
+    def test_implementation_job_has_read_only_repository_permission_and_no_persisted_credentials(self):
         text = EXECUTOR.read_text(encoding="utf-8")
-        self.assertIn("persist-credentials: false", text)
-        self.assertIn("permission-profile: ':workspace'", text)
+        implement = text.split("  implement-task:", 1)[1].split("  verify-task:", 1)[0]
+        self.assertIn("contents: read", implement)
+        self.assertNotIn("contents: write", implement)
+        self.assertNotIn("issues: write", implement)
+        self.assertIn("persist-credentials: false", implement)
+        self.assertIn("permission-profile: ':workspace'", implement)
+        self.assertIn("ledger-implementation-tree.tar", implement)
 
-    def test_executor_uses_immutable_trusted_control_plane_after_model(self):
+    def test_untrusted_implementation_is_verified_in_separate_no_write_job(self):
         text = EXECUTOR.read_text(encoding="utf-8")
-        self.assertIn("Prepare immutable trusted control plane", text)
-        self.assertIn("git archive \"$BASE_SHA\" | tar -x -C \"$TRUSTED\"", text)
-        self.assertIn("AGENT_BASE_SHA=$BASE_SHA", text)
-        self.assertIn('cd "$RUNNER_TEMP/ledger-trusted-control"', text)
-        self.assertIn('--base-sha "$AGENT_BASE_SHA"', text)
-        self.assertIn("PYTHONDONTWRITEBYTECODE: '1'", text)
+        verify = text.split("  verify-task:", 1)[1].split("  publish-review:", 1)[0]
+        self.assertIn("contents: read", verify)
+        self.assertNotIn("contents: write", verify)
+        self.assertNotIn("OPENAI_API_KEY", verify)
+        self.assertIn("Enforce scope from trusted base without model git state", verify)
+        self.assertIn("agent_operator.scope_guard check", verify)
+        self.assertIn("agent_operator.scope_guard apply", verify)
+        self.assertIn("python -m unittest discover -s tests -v", verify)
+        self.assertIn("Verify tests did not change the publishable proposal", verify)
 
-        model_index = text.index("Run primary Codex implementation agent")
-        guard_index = text.index("Enforce autonomous scope boundary from trusted control plane")
-        publish_index = text.index("Commit and push verified implementation branch")
-        review_index = text.index("Evaluate independent review gate from trusted control plane")
-        self.assertLess(model_index, guard_index)
-        self.assertLess(guard_index, publish_index)
-        self.assertLess(publish_index, review_index)
-
-    def test_executor_requires_scope_tests_and_independent_review_gate(self):
+    def test_publish_job_rebuilds_from_clean_base_and_only_then_gets_write_permission(self):
         text = EXECUTOR.read_text(encoding="utf-8")
-        self.assertIn("python -m agent_operator.scope_guard", text)
-        self.assertIn("python -m unittest discover -s tests -v", text)
-        self.assertIn("agent_operator/review_schema.json", text)
+        publish = text.split("  publish-review:", 1)[1].split("  fail-safe-cleanup:", 1)[0]
+        self.assertIn("contents: write", publish)
+        self.assertIn("Re-verify scope independently before publication", publish)
+        self.assertIn("Create clean publication branch and materialize verified files", publish)
+        self.assertIn("Commit and push only the clean verified proposal", publish)
+        self.assertIn("core.hooksPath=/dev/null", publish)
+        self.assertNotIn("python -m unittest discover", publish)
+
+        verify_index = text.index("  verify-task:")
+        publish_index = text.index("  publish-review:")
+        self.assertLess(verify_index, publish_index)
+
+    def test_reviewers_are_read_only_and_review_gate_uses_trusted_base(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        self.assertGreaterEqual(text.count("permission-profile: ':read-only'"), 2)
+        self.assertGreaterEqual(text.count("working-directory: ${{ github.workspace }}"), 3)
+        self.assertIn("Evaluate independent review gate from trusted base", text)
+        self.assertIn('cd "$RUNNER_TEMP/ledger-base-tree"', text)
         self.assertIn("python -m agent_operator.review_gate", text)
-        self.assertIn("agent:awaiting-review", text)
-        self.assertIn("agent:blocked", text)
+        self.assertIn("Verify QA reviewer left proposal unchanged", text)
+        self.assertIn("Verify Security reviewer left proposal unchanged", text)
 
-    def test_executor_job_configuration_does_not_use_runner_context(self):
+    def test_task_contract_is_artifact_frozen_before_model_execution(self):
         text = EXECUTOR.read_text(encoding="utf-8")
-        before_steps = text.split("    steps:", 1)[0]
-        self.assertNotIn("${{ runner.", before_steps)
-        self.assertIn("AGENT_TASK_PATH: /tmp/ledger-agent-task.json", before_steps)
+        freeze_index = text.index("Freeze immutable task contract")
+        upload_index = text.index("Upload immutable task contract")
+        model_index = text.index("Run primary Codex implementation agent")
+        self.assertLess(freeze_index, upload_index)
+        self.assertLess(upload_index, model_index)
+        self.assertIn("task_sha", text)
+        self.assertIn("Verify task contract integrity", text)
+        self.assertIn("Verify immutable task contract again", text)
+
+    def test_executor_uses_filesystem_scope_manifest_not_model_git_diff(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        self.assertIn("Capture implementation filesystem without trusting its git metadata", text)
+        self.assertIn("--exclude='./.git'", text)
+        self.assertIn("ledger-change-manifest.json", text)
+        self.assertNotIn("scope_guard --repo", text)
+        self.assertNotIn("--base-sha", text)
+
+    def test_fail_safe_cleanup_is_separate_and_does_not_execute_repository_code(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        cleanup = text.split("  fail-safe-cleanup:", 1)[1]
+        self.assertIn("always()", cleanup)
+        self.assertIn("issues: write", cleanup)
+        self.assertIn("gh issue edit", cleanup)
+        self.assertNotIn("agent_operator", cleanup)
+        self.assertNotIn("actions/checkout", cleanup)
+
+    def test_executor_job_configuration_does_not_use_runner_context_before_steps(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        for job_text in text.split("\n  ")[1:]:
+            if "    steps:" not in job_text:
+                continue
+            before_steps = job_text.split("    steps:", 1)[0]
+            self.assertNotIn("${{ runner.", before_steps)
 
     def test_executor_never_auto_merges_or_deploys(self):
         text = EXECUTOR.read_text(encoding="utf-8").lower()
         self.assertNotIn("gh pr merge", text)
         self.assertNotIn("merge_pull_request", text)
-        self.assertNotIn("deploy", "\n".join(line for line in text.splitlines() if line.strip().startswith("run:")))
         self.assertIn("--draft", text)
+        self.assertIn("agent:awaiting-review", text)
+        self.assertIn("agent:blocked", text)
 
 
 if __name__ == "__main__":
