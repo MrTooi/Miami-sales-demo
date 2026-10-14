@@ -148,7 +148,9 @@ def _infer_risk(labels: set[str]) -> str:
         return explicit[0]
     if labels.intersection(SECURITY_REVIEW_LABELS):
         return "medium"
-    return "low"
+    # Unknown/unclassified work must not fail open to low risk. A human can
+    # explicitly apply risk:low after considering the task contract.
+    return "medium"
 
 
 def _reviewers(owner: str, labels: set[str], risk: str) -> tuple[str, ...]:
