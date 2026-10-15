@@ -73,6 +73,14 @@ class AgentSecurityReviewRecoveryWorkflowTests(unittest.TestCase):
         self.assertIn("agent:blocked", text)
         self.assertIn("needs:human|agent:paused", text)
 
+    def test_private_repo_ref_checks_use_authenticated_github_api(self):
+        text = self.text()
+        self.assertNotIn("git fetch origin", text)
+        self.assertNotIn("git ls-remote origin", text)
+        self.assertGreaterEqual(text.count('/git/ref/heads/$BRANCH'), 3)
+        self.assertGreaterEqual(text.count("--jq '.object.sha'"), 3)
+        self.assertIn('git rev-parse "origin/$BRANCH"', text)
+
     def test_unvalidated_proposal_dependencies_are_not_installed(self):
         text = self.text()
         contract_index = text.index("Revalidate frozen contract, exact proposal, scope, QA verdict, and human authority")
