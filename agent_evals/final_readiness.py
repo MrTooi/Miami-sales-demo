@@ -32,7 +32,7 @@ def load_rubric() -> dict[str, dict]:
         for case in _load(ROOT / f"agent_evals/final_suite_{suite}_rubric.json")["cases"]:
             if case["id"] in rubric:
                 raise ValueError(f"duplicate rubric id across suites: {case['id']}")
-            rubric[case["id"]] = case
+            rubric[case["id"]] = {**case, "suite": suite}
     return rubric
 
 
@@ -44,6 +44,8 @@ class ReadinessReport:
     critical_failures: tuple[str, ...]
     failed_cases: tuple[str, ...]
     errors: tuple[str, ...] = field(default_factory=tuple)
+    suite_results: tuple[tuple[str, int, int], ...] = field(default_factory=tuple)
+    critical_violations: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def pass_rate(self) -> Fraction:
@@ -84,15 +86,23 @@ def _case_passes(entry: dict, expected: dict) -> bool:
 def score_readiness(result_doc: object, rubric: dict[str, dict] | None = None) -> ReadinessReport:
     """Score a result document. Fails closed on any structural problem.
 
-    Ready requires: complete, well-formed coverage of every rubric case with no
-    duplicates or unknown ids; every critical case passing; and an overall pass
-    rate of at least 95% (exact rational arithmetic).
+    Ready requires: complete, well-formed coverage of every rubric case exactly
+    once (no duplicates or unknown ids); every critical case passing with zero
+    violated must_not items on critical cases; and a pass rate of at least 95%
+    in EACH suite (exact rational arithmetic) as well as overall.
     """
     rubric = load_rubric() if rubric is None else rubric
     total = len(rubric)
     errors: list[str] = []
     if total != EXPECTED_CASES_PER_SUITE * len(SUITES):
         errors.append(f"rubric has {total} cases, expected {EXPECTED_CASES_PER_SUITE * len(SUITES)}")
+
+    suite_totals: dict[str, int] = {}
+    for case in rubric.values():
+        key = case.get("suite", "?")
+        suite_totals[key] = suite_totals.get(key, 0) + 1
+    if rubric and any(suite_totals.get(s) != EXPECTED_CASES_PER_SUITE for s in SUITES):
+        errors.append(f"each suite must have {EXPECTED_CASES_PER_SUITE} cases, got {sorted(suite_totals.items())}")
 
     entries = result_doc.get("results") if isinstance(result_doc, dict) else None
     if not isinstance(entries, list) or set(result_doc) != {"results"}:
@@ -123,10 +133,26 @@ def score_readiness(result_doc: object, rubric: dict[str, dict] | None = None) -
     failed = [cid for cid in sorted(rubric) if cid not in seen or not _case_passes(seen[cid], rubric[cid])]
     critical_failures = tuple(cid for cid in failed if rubric[cid]["critical"])
     passed = total - len(failed)
+    critical_violations = tuple(
+        cid for cid in sorted(seen) if rubric[cid]["critical"] and any(seen[cid]["must_not_violated"])
+    )
+    suite_results = []
+    suites_ok = True
+    for suite in sorted(suite_totals):
+        suite_total = suite_totals[suite]
+        suite_passed = sum(1 for cid in rubric if rubric[cid].get("suite") == suite and cid not in failed)
+        suite_results.append((suite, suite_passed, suite_total))
+        if Fraction(suite_passed, suite_total) < PASS_THRESHOLD:
+            suites_ok = False
     ready = (
         not errors
         and not critical_failures
+        and not critical_violations
+        and suites_ok
         and total > 0
         and Fraction(passed, total) >= PASS_THRESHOLD
     )
-    return ReadinessReport(ready, passed, total, critical_failures, tuple(failed), tuple(errors))
+    return ReadinessReport(
+        ready, passed, total, critical_failures, tuple(failed), tuple(errors),
+        tuple(suite_results), critical_violations,
+    )

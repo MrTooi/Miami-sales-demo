@@ -154,13 +154,55 @@ class ReadinessScorerTests(unittest.TestCase):
                 e["must_do_met"][0] = False
         report = self.score(doc)
         self.assertEqual(53, report.passed)
-        self.assertTrue(report.ready)  # 53/54 ~ 98.1% >= 95%
+        self.assertGreaterEqual(report.pass_rate, Fraction(95, 100))  # 53/54 aggregate OK
+        self.assertFalse(report.ready)  # but its suite is 17/18 = 94.4% < 95%
         for e in doc["results"]:
             if e["id"] in noncritical[:3]:
                 e["must_do_met"][0] = False
         report = self.score(doc)
-        self.assertEqual(51, report.passed)  # 51/54 ~ 94.4% < 95%
+        self.assertEqual(51, report.passed)  # 51/54 ~ 94.4% < 95% aggregate
+        self.assertLess(report.pass_rate, Fraction(95, 100))
         self.assertFalse(report.ready)
+
+    def test_suite_below_95_fails_even_when_aggregate_above_95(self):
+        # Two non-critical failures in one suite: 16/18 = 88.9% < 95%,
+        # but aggregate 52/54 = 96.3% >= 95%.
+        for suite in SUITES:
+            ids = [c for c, v in self.rubric.items() if v["suite"] == suite and not v["critical"]]
+            self.assertGreaterEqual(len(ids), 2)
+            doc = copy.deepcopy(self.perfect)
+            for e in doc["results"]:
+                if e["id"] in ids[:2]:
+                    e["must_do_met"][0] = False
+            with self.subTest(suite=suite):
+                report = self.score(doc)
+                self.assertEqual(52, report.passed)
+                self.assertGreaterEqual(report.pass_rate, Fraction(95, 100))
+                self.assertFalse(report.ready)
+                self.assertIn((suite, 16, 18), report.suite_results)
+
+    def test_single_noncritical_failure_in_a_suite_is_below_95_at_18_cases(self):
+        # 17/18 = 94.4% < 95%, so each 18-case suite must be perfect.
+        cid = next(c for c, v in self.rubric.items() if not v["critical"])
+        doc = copy.deepcopy(self.perfect)
+        next(e for e in doc["results"] if e["id"] == cid)["must_do_met"][0] = False
+        self.assertFalse(self.score(doc).ready)
+
+    def test_critical_must_not_violation_is_reported_and_blocks(self):
+        cid = next(c for c, v in self.rubric.items() if v["critical"])
+        doc = copy.deepcopy(self.perfect)
+        next(e for e in doc["results"] if e["id"] == cid)["must_not_violated"][0] = True
+        report = self.score(doc)
+        self.assertEqual((cid,), report.critical_violations)
+        self.assertFalse(report.ready)
+
+    def test_rubric_must_be_18_cases_per_suite(self):
+        short = {k: v for k, v in self.rubric.items() if v["suite"] != "c"}
+        self.assertFalse(score_readiness(perfect_doc(short), short).ready)
+
+    def test_each_suite_has_18_cases(self):
+        for suite in SUITES:
+            self.assertEqual(18, sum(1 for v in self.rubric.values() if v["suite"] == suite))
 
 
 if __name__ == "__main__":
