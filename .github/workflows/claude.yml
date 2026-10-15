@@ -1,4 +1,4 @@
-name: Claude Code (On Demand)
+name: Claude Code (Owner On Demand)
 
 on:
   issue_comment:
@@ -12,19 +12,23 @@ on:
 
 jobs:
   claude:
-    # Usage guard: Claude only runs when explicitly tagged with @claude.
+    # Hard spend/write guard: only the repository owner account can invoke Claude,
+    # and only by explicitly tagging @claude in a supported GitHub surface.
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      github.actor == 'MrTooi' &&
+      (
+        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+        (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      )
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pull-requests: read
-      issues: read
+      contents: write
+      pull-requests: write
+      issues: write
       id-token: write
-      actions: read # Allows Claude to inspect CI evidence when explicitly invoked.
+      actions: read
 
     steps:
       - name: Checkout repository
@@ -39,8 +43,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
             actions: read
-
-          # No automatic prompt is configured. Claude acts only on the explicit
-          # GitHub instruction that tagged @claude.
-          # Add tools later only when a tested workflow requires them; default
-          # to least privilege to reduce risk and unnecessary usage.
+          claude_args: |
+            --max-turns 20
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(python -m unittest:*),Bash(pytest:*),Bash(npm test:*),Bash(npm run test:*),Bash(npm run lint:*),Bash(npm run build:*),Bash(git status),Bash(git diff:*),Bash(git log:*)"
+            --append-system-prompt "Work only on the explicitly requested GitHub task. Keep changes minimal and scoped. Never push directly to main, never merge, never deploy, never access or expose credentials, and never perform destructive external actions. Run only the allowed verification commands. If the task requires broader scope, credentials, deployment, or a risky/destructive action, stop and report the blocker instead. Summarize changed files, tests run, and any remaining risks for the reviewing agent."
