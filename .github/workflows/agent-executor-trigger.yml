@@ -18,7 +18,20 @@ jobs:
     timeout-minutes: 5
     permissions:
       actions: write
+      issues: read
     steps:
+      - name: Require commented issue is the only ready task
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          READY_NUMBERS="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label 'agent:ready' --limit 100 --json number --jq '.[].number')"
+          READY_COUNT="$(printf '%s\n' "$READY_NUMBERS" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [ "$READY_COUNT" != "1" ] || [ "$READY_NUMBERS" != "$ISSUE_NUMBER" ]; then
+            echo "Refusing dispatch: commented issue must be the only open agent:ready task." >&2
+            exit 1
+          fi
+
       - name: Dispatch canonical executor
         env:
           GH_TOKEN: ${{ github.token }}
