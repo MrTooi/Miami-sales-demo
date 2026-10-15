@@ -343,6 +343,9 @@ def apply_manifest(source: Path, destination: Path, manifest: dict) -> None:
         expected = change.get("after") or {}
         if expected.get("kind") != "file" or not src.is_file() or src.is_symlink():
             raise ValueError(f"verified source is not a regular file: {rel}")
+        expected_mode = expected.get("mode")
+        if expected_mode not in {0o644, 0o755}:
+            raise ValueError(f"verified source has unsupported normalized file mode: {rel}")
         if _sha256(src) != expected.get("sha256"):
             raise ValueError(f"source changed after verification: {rel}")
 
@@ -359,7 +362,7 @@ def apply_manifest(source: Path, destination: Path, manifest: dict) -> None:
 
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dst)
-        os.chmod(dst, int(expected["mode"]))
+        os.chmod(dst, expected_mode)
 
 
 def _check_command(args: argparse.Namespace) -> int:
