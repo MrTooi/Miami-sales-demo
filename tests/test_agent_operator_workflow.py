@@ -46,9 +46,24 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertIn("vars.LEDGER_AGENT_EXECUTOR_ENABLED == 'true'", text)
         self.assertIn("workflow_dispatch:", text)
         self.assertIn("concurrency:", text)
-        for job in ("claim-task:", "implement-task:", "verify-task:", "publish-review:", "fail-safe-cleanup:"):
+        for job in (
+            "claim-task:",
+            "implement-task:",
+            "verify-task:",
+            "publish-task:",
+            "qa-review:",
+            "security-review:",
+            "review-gate:",
+            "fail-safe-cleanup:",
+        ):
             self.assertIn(job, text)
-        for timeout in ("timeout-minutes: 10", "timeout-minutes: 30", "timeout-minutes: 20", "timeout-minutes: 25", "timeout-minutes: 5"):
+        for timeout in (
+            "timeout-minutes: 10",
+            "timeout-minutes: 30",
+            "timeout-minutes: 20",
+            "timeout-minutes: 15",
+            "timeout-minutes: 5",
+        ):
             self.assertIn(timeout, text)
 
     def test_executor_owner_trigger_is_exact_owner_only_and_minimal(self):
@@ -94,7 +109,7 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
 
     def test_executor_uses_pinned_actions_and_never_automatic_claude(self):
         text = EXECUTOR.read_text(encoding="utf-8")
-        self.assertIn(f"openai/codex-action@{CODEX_ACTION_SHA}", text)
+        self.assertEqual(text.count(f"openai/codex-action@{CODEX_ACTION_SHA}"), 3)
         self.assertIn(f"actions/upload-artifact@{UPLOAD_ARTIFACT_SHA}", text)
         self.assertIn(f"actions/download-artifact@{DOWNLOAD_ARTIFACT_SHA}", text)
         lowered = text.lower()
@@ -122,7 +137,7 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
 
     def test_untrusted_implementation_is_verified_in_separate_no_write_job(self):
         text = EXECUTOR.read_text(encoding="utf-8")
-        verify = text.split("  verify-task:", 1)[1].split("  publish-review:", 1)[0]
+        verify = text.split("  verify-task:", 1)[1].split("  publish-task:", 1)[0]
         self.assertIn("contents: read", verify)
         self.assertNotIn("contents: write", verify)
         self.assertNotIn("OPENAI_API_KEY", verify)
@@ -137,21 +152,21 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertIn("python -m unittest discover -s tests -v", verify)
         self.assertIn("Verify tests did not change the publishable proposal using locked trusted guard", verify)
 
-    def test_publish_job_rechecks_human_stop_and_verifies_commit_tree_before_push(self):
+    def test_publication_job_is_non_model_and_verifies_commit_before_push(self):
         text = EXECUTOR.read_text(encoding="utf-8")
-        publish = text.split("  publish-review:", 1)[1].split("  fail-safe-cleanup:", 1)[0]
+        publish = text.split("  publish-task:", 1)[1].split("  qa-review:", 1)[0]
         self.assertIn("contents: write", publish)
         self.assertIn("Re-verify frozen task scope independently before publication", publish)
-        self.assertIn("--allowed-paths-file", publish)
         self.assertIn("Respect human stop before publication", publish)
-        self.assertIn("needs:human|agent:paused", publish)
         self.assertIn("Create clean publication branch and materialize verified files", publish)
         self.assertIn("Commit clean verified proposal locally", publish)
         self.assertIn("Verify committed tree exactly matches verified manifest", publish)
         self.assertIn("git archive HEAD", publish)
-        self.assertIn("ledger-commit-manifest.json", publish)
         self.assertIn("Push only the manifest-matched proposal branch", publish)
-        self.assertIn("core.hooksPath=/dev/null", publish)
+        self.assertIn("Freeze exact publication review context", publish)
+        self.assertIn("ledger-review-context", publish)
+        self.assertNotIn("openai/codex-action", publish)
+        self.assertNotIn("OPENAI_API_KEY", publish)
         self.assertNotIn("python -m unittest discover", publish)
 
         stop_index = text.index("Respect human stop before publication")
@@ -163,19 +178,106 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertLess(commit_index, commit_verify_index)
         self.assertLess(commit_verify_index, push_index)
 
-        verify_index = text.index("  verify-task:")
-        publish_index = text.index("  publish-review:")
-        self.assertLess(verify_index, publish_index)
-
-    def test_reviewers_are_read_only_and_review_gate_uses_trusted_base(self):
+    def test_qa_and_security_run_in_distinct_fresh_jobs(self):
         text = EXECUTOR.read_text(encoding="utf-8")
-        self.assertGreaterEqual(text.count("permission-profile: ':read-only'"), 2)
-        self.assertGreaterEqual(text.count("working-directory: ${{ github.workspace }}"), 3)
-        self.assertIn("Evaluate independent review gate from trusted base", text)
-        self.assertIn('cd "$RUNNER_TEMP/ledger-base-tree"', text)
-        self.assertIn("python -m agent_operator.review_gate", text)
-        self.assertIn("Verify QA reviewer left proposal unchanged", text)
-        self.assertIn("Verify Security reviewer left proposal unchanged", text)
+        qa = text.split("  qa-review:", 1)[1].split("  security-review:", 1)[0]
+        security = text.split("  security-review:", 1)[1].split("  review-gate:", 1)[0]
+        self.assertEqual(qa.count(f"openai/codex-action@{CODEX_ACTION_SHA}"), 1)
+        self.assertEqual(security.count(f"openai/codex-action@{CODEX_ACTION_SHA}"), 1)
+        self.assertIn("Run read-only independent QA / Critic agent on fresh runner", qa)
+        self.assertIn("Run read-only Security and Data Integrity reviewer on separate fresh runner", security)
+        self.assertIn("permission-profile: ':read-only'", qa)
+        self.assertIn("permission-profile: ':read-only'", security)
+        self.assertIn("allow-bots: true", qa)
+        self.assertIn("allow-bots: true", security)
+        self.assertNotIn("safety-strategy: read-only", qa)
+        self.assertNotIn("safety-strategy: read-only", security)
+        self.assertNotIn("safety-strategy: unsafe", qa)
+        self.assertNotIn("safety-strategy: unsafe", security)
+        self.assertIn("needs: [claim-task, publish-task]", qa)
+        self.assertIn("needs: [claim-task, publish-task, qa-review]", security)
+        self.assertIn("needs.qa-review.outputs.qa_passed == 'true'", security)
+
+    def test_reviewer_jobs_have_no_repository_write_permissions(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        qa = text.split("  qa-review:", 1)[1].split("  security-review:", 1)[0]
+        security = text.split("  security-review:", 1)[1].split("  review-gate:", 1)[0]
+        for review in (qa, security):
+            self.assertIn("contents: read", review)
+            self.assertIn("issues: read", review)
+            self.assertIn("pull-requests: read", review)
+            self.assertNotIn("contents: write", review)
+            self.assertNotIn("issues: write", review)
+            self.assertNotIn("pull-requests: write", review)
+            self.assertIn("persist-credentials: false", review)
+            self.assertIn("needs:human|agent:paused", review)
+            self.assertIn("agent:working", review)
+
+    def test_reviewer_inputs_and_proposal_are_revalidated_before_and_after_each_model(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        qa = text.split("  qa-review:", 1)[1].split("  security-review:", 1)[0]
+        security = text.split("  security-review:", 1)[1].split("  review-gate:", 1)[0]
+        self.assertIn("Validate exact QA review context before model execution", qa)
+        self.assertIn("Revalidate QA inputs and exact proposal after reviewer", qa)
+        self.assertIn("ledger-qa-inputs.sha256", qa)
+        self.assertIn("ledger-qa-pre-manifest.json", qa)
+        self.assertIn("ledger-qa-post-manifest.json", qa)
+        self.assertIn("Validate exact Security review context before model execution", security)
+        self.assertIn("Revalidate Security inputs and exact proposal after reviewer", security)
+        self.assertIn("ledger-security-inputs.sha256", security)
+        self.assertIn("ledger-security-pre-manifest.json", security)
+        self.assertIn("ledger-security-post-manifest.json", security)
+        for review in (qa, security):
+            self.assertIn('/git/ref/heads/$BRANCH', review)
+            self.assertIn("scope_guard.py", review)
+            self.assertIn("publish-manifest.json", review)
+            self.assertIn("sudo chown -R root:root", review)
+            self.assertIn("sudo chmod -R a-w", review)
+            self.assertIn("ledger-frozen-base...HEAD", review)
+
+    def test_reviewer_outputs_are_schema_backed_artifacts_and_locally_gated(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        qa = text.split("  qa-review:", 1)[1].split("  security-review:", 1)[0]
+        security = text.split("  security-review:", 1)[1].split("  review-gate:", 1)[0]
+        self.assertIn("output-schema-file:", qa)
+        self.assertIn("output-schema-file:", security)
+        self.assertIn("ledger-qa-review", qa)
+        self.assertIn("ledger-security-review", security)
+        self.assertIn("Evaluate QA verdict locally with trusted gate", qa)
+        self.assertIn("Evaluate Security verdict locally with trusted gate", security)
+        self.assertIn("agent_operator/review_gate.py", qa)
+        self.assertIn("agent_operator/review_gate.py", security)
+
+    def test_final_review_gate_is_non_model_and_only_trusted_job_changes_lifecycle(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        gate = text.split("  review-gate:", 1)[1].split("  fail-safe-cleanup:", 1)[0]
+        qa = text.split("  qa-review:", 1)[1].split("  security-review:", 1)[0]
+        security = text.split("  security-review:", 1)[1].split("  review-gate:", 1)[0]
+        self.assertNotIn("openai/codex-action", gate)
+        self.assertNotIn("OPENAI_API_KEY", gate)
+        self.assertIn("contents: read", gate)
+        self.assertIn("issues: write", gate)
+        self.assertIn("pull-requests: write", gate)
+        self.assertIn("Validate final review evidence against exact proposal and human authority", gate)
+        self.assertIn("Evaluate exact reviewer artifacts with trusted final gate", gate)
+        self.assertIn("ledger-qa-review", gate)
+        self.assertIn("ledger-security-review", gate)
+        self.assertIn("python -I -S", gate)
+        self.assertIn("agent_operator/review_gate.py", gate)
+        self.assertIn("agent:awaiting-review", gate)
+        self.assertIn("agent:blocked", gate)
+        self.assertNotIn("agent:awaiting-review", qa)
+        self.assertNotIn("agent:awaiting-review", security)
+        self.assertNotIn("issues: write", qa)
+        self.assertNotIn("issues: write", security)
+
+    def test_security_is_skipped_after_qa_rejection_to_avoid_duplicate_spend(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        security = text.split("  security-review:", 1)[1].split("  review-gate:", 1)[0]
+        gate = text.split("  review-gate:", 1)[1].split("  fail-safe-cleanup:", 1)[0]
+        self.assertIn("needs.qa-review.outputs.qa_passed == 'true'", security)
+        self.assertIn("needs.qa-review.outputs.qa_passed != 'true'", gate)
+        self.assertIn("QA_PASSED", gate)
 
     def test_task_and_prompt_are_artifact_frozen_before_model_execution(self):
         text = EXECUTOR.read_text(encoding="utf-8")
@@ -190,8 +292,8 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(text.count("ACTUAL_PROMPT_SHA"), 3)
         self.assertIn("Verify task contract integrity before verification", text)
         self.assertIn("Verify immutable task contract again", text)
-        self.assertGreaterEqual(text.count("ledger-task-contract/task.json"), 8)
-        self.assertGreaterEqual(text.count("ledger-task-contract/prompt.md"), 4)
+        self.assertGreaterEqual(text.count("ledger-task-contract/task.json"), 10)
+        self.assertGreaterEqual(text.count("ledger-task-contract/prompt.md"), 6)
 
     def test_executor_uses_filesystem_scope_manifest_not_model_git_diff(self):
         text = EXECUTOR.read_text(encoding="utf-8")
@@ -202,9 +304,11 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertNotIn("scope_guard --repo", text)
         self.assertNotIn("--base-sha", text)
 
-    def test_fail_safe_cleanup_is_separate_and_preserves_human_intervention_state(self):
+    def test_fail_safe_cleanup_is_separate_and_depends_on_final_gate(self):
         text = EXECUTOR.read_text(encoding="utf-8")
         cleanup = text.split("  fail-safe-cleanup:", 1)[1]
+        self.assertIn("review-gate", cleanup)
+        self.assertIn("needs.review-gate.result != 'success'", cleanup)
         self.assertIn("always()", cleanup)
         self.assertIn("issues: write", cleanup)
         self.assertIn("gh issue edit", cleanup)
