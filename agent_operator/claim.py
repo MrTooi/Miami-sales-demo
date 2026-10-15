@@ -9,7 +9,8 @@ from pathlib import Path, PurePosixPath
 from .cli import fetch_ready_issues
 from .core import build_dispatch_plan, is_candidate, select_next_issue
 from .github_client import GitHubClient
-from .lifecycle import make_branch_name
+from .lifecycle import LIFECYCLE_LABELS, make_branch_name
+from .scope_guard import validate_changed_paths
 
 
 ROLE_FILES = {
@@ -48,10 +49,11 @@ def _safe_contract_path(raw: str) -> str:
 
 
 def extract_allowed_paths(body: str) -> tuple[str, ...]:
-    """Extract exact paths from a task's `## Allowed files` section.
+    """Extract exact bullet-listed paths from `## Allowed files`.
 
-    Initial autonomous rollout intentionally requires explicit backtick paths.
-    Globs and implicit repository-wide scopes are rejected rather than guessed.
+    Only bullet items containing exactly one backtick-delimited path are treated
+    as permissions. Prose such as "do not touch `app.py`" cannot accidentally
+    expand the machine-enforced scope.
     """
 
     if not isinstance(body, str):
@@ -68,19 +70,37 @@ def extract_allowed_paths(body: str) -> tuple[str, ...]:
                 continue
             if in_section:
                 break
-        if not in_section:
+        if not in_section or not re.match(r"^\s*[-*+]\s+", line):
             continue
-        for raw in re.findall(r"`([^`]+)`", line):
-            found.append(_safe_contract_path(raw))
+        spans = re.findall(r"`([^`]+)`", line)
+        if not spans:
+            continue
+        if len(spans) != 1:
+            raise ValueError("each Allowed files bullet must contain exactly one backtick path")
+        found.append(_safe_contract_path(spans[0]))
 
     return tuple(dict.fromkeys(found))
 
 
+def _stable_contract_labels(issue: dict) -> list[str]:
+    labels: set[str] = set()
+    for raw in issue.get("labels", []) or []:
+        if isinstance(raw, str):
+            labels.add(raw)
+        elif isinstance(raw, dict) and isinstance(raw.get("name"), str):
+            labels.add(raw["name"])
+    return sorted(label for label in labels if label not in LIFECYCLE_LABELS)
+
+
 def _contract_fingerprint(issue: dict) -> str:
+    # Non-lifecycle labels are part of the safety contract because they drive
+    # risk, routing, reviewers, and human gates. Claiming the issue is allowed
+    # to change lifecycle labels only.
     payload = json.dumps(
         {
             "title": str(issue.get("title") or ""),
             "body": str(issue.get("body") or ""),
+            "labels": _stable_contract_labels(issue),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -234,7 +254,18 @@ def main() -> int:
         return _human_gate(
             client,
             issue_number,
-            "Agent OS refused autonomous execution because the issue has no machine-readable `## Allowed files` section containing exact backtick paths. Add the smallest exact allowlist and explicitly re-queue the task.",
+            "Agent OS refused autonomous execution because the issue has no machine-readable `## Allowed files` section containing one exact backtick path per bullet. Add the smallest exact allowlist and explicitly re-queue the task.",
+            plan,
+        )
+
+    protected_errors = validate_changed_paths(allowed_paths)
+    if protected_errors:
+        detail = "; ".join(protected_errors)
+        return _human_gate(
+            client,
+            issue_number,
+            "Agent OS refused autonomous execution because the task allowlist includes a protected/high-trust path: "
+            f"`{detail}`. Protected-file work requires a human-supervised branch and PR.",
             plan,
         )
 
@@ -244,13 +275,15 @@ def main() -> int:
     if "agent:claimed" not in claimed_labels or "agent:ready" in claimed_labels:
         raise RuntimeError("claim verification failed")
 
-    # Label changes are expected during claim; title/body changes are not.
+    # Claiming changes lifecycle state only. Any title, body, routing, risk,
+    # data-boundary, or other non-lifecycle label change invalidates the frozen
+    # plan and forces fresh human review.
     post_claim = client.get_issue(issue_number)
     if _contract_fingerprint(post_claim) != before_claim_fingerprint:
         return _human_gate(
             client,
             issue_number,
-            "The task title/body changed during claim. Agent OS stopped before model execution; review the edited contract and explicitly re-queue it.",
+            "The task contract or non-lifecycle labels changed during claim. Agent OS stopped before model execution; review the edited contract and explicitly re-queue it.",
             plan,
         )
 
@@ -274,7 +307,7 @@ def main() -> int:
 
     client.comment(
         issue_number,
-        f"AI operator claimed this task for `{plan.owner}` on reserved branch `{branch}` with exact allowed paths frozen in the task artifact. The proposal still requires isolated verification, independent review, and human merge approval.",
+        f"AI operator claimed this task for `{plan.owner}` on reserved branch `{branch}` with exact allowed paths and safety labels frozen in the task artifact. The proposal still requires isolated verification, independent review, and human merge approval.",
     )
     _set_output("execute", "true")
     _set_output("human_gate", "false")
