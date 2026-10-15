@@ -6,6 +6,8 @@ from pathlib import Path
 
 
 ALLOWED_VERDICTS = {"pass", "fail", "needs-human"}
+ALLOWED_SEVERITIES = {"blocking", "important", "minor"}
+SERIOUS_SEVERITIES = {"blocking", "important"}
 
 
 def load_review(path: Path) -> dict:
@@ -20,12 +22,30 @@ def load_review(path: Path) -> dict:
     findings = payload.get("findings")
     if not isinstance(findings, list):
         raise ValueError(f"{path} is missing findings list")
+    for finding in findings:
+        if not isinstance(finding, dict):
+            raise ValueError(f"{path} contains a non-object finding")
+        severity = finding.get("severity")
+        if severity not in ALLOWED_SEVERITIES:
+            raise ValueError(f"{path} has unsupported finding severity: {severity!r}")
+        if not isinstance(finding.get("title"), str) or not isinstance(finding.get("evidence"), str):
+            raise ValueError(f"{path} contains a malformed finding")
     return payload
+
+
+def _review_passes(review: dict) -> bool:
+    if review["verdict"] != "pass":
+        return False
+    return not any(
+        finding.get("severity") in SERIOUS_SEVERITIES
+        for finding in review.get("findings", [])
+        if isinstance(finding, dict)
+    )
 
 
 def evaluate(paths: list[Path]) -> tuple[bool, list[dict]]:
     reviews = [load_review(path) for path in paths]
-    return all(review["verdict"] == "pass" for review in reviews), reviews
+    return all(_review_passes(review) for review in reviews), reviews
 
 
 def main() -> int:

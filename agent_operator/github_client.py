@@ -5,7 +5,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from .lifecycle import MANAGED_LABELS, transition_labels
+from .lifecycle import HUMAN_STOP_LABELS, LIFECYCLE_LABELS, MANAGED_LABELS, transition_labels
 
 
 API_ROOT = "https://api.github.com"
@@ -68,17 +68,75 @@ class GitHubClient:
                 result.add(raw["name"])
         return result
 
+    def _delete_label(self, issue_number: int, label: str) -> None:
+        encoded = quote(label, safe="")
+        try:
+            self._request(
+                "DELETE",
+                f"/repos/{self.repository}/issues/{issue_number}/labels/{encoded}",
+            )
+        except HTTPError as exc:
+            if exc.code != 404:
+                raise
+
     def set_lifecycle(self, issue_number: int, target: str) -> dict:
         issue = self.get_issue(issue_number)
-        transition = transition_labels(self.label_names(issue), target)
-        payload = self._request(
-            "PATCH",
-            f"/repos/{self.repository}/issues/{issue_number}",
-            {"labels": sorted(transition.current)},
+        current = self.label_names(issue)
+
+        # Human stop labels always outrank automation. This validation also
+        # catches a stop that landed after an earlier queue read.
+        transition_labels(current, target)
+        if target == "agent:claimed" and "agent:ready" not in current:
+            raise RuntimeError(
+                f"issue #{issue_number} is no longer agent:ready; refusing autonomous claim"
+            )
+
+        # Add the target before removing the previous lifecycle label. For a
+        # claim this gives us a second observation point where agent:ready must
+        # still exist; a human removing it before claim completion fails closed.
+        self._request(
+            "POST",
+            f"/repos/{self.repository}/issues/{issue_number}/labels",
+            {"labels": [target]},
         )
-        if not isinstance(payload, dict):
-            raise RuntimeError("GitHub update response was not an object")
-        return payload
+        after_add = self.get_issue(issue_number)
+        after_add_labels = self.label_names(after_add)
+        active_stops = after_add_labels.intersection(HUMAN_STOP_LABELS)
+        if target != "needs:human" and active_stops:
+            if target not in current:
+                self._delete_label(issue_number, target)
+            raise RuntimeError(
+                f"human stop arrived during lifecycle transition for issue #{issue_number}: "
+                f"{sorted(active_stops)}"
+            )
+        if target == "agent:claimed" and "agent:ready" not in after_add_labels:
+            if target not in current:
+                self._delete_label(issue_number, target)
+            raise RuntimeError(
+                f"agent:ready was removed while claiming issue #{issue_number}; claim aborted"
+            )
+
+        # Remove only lifecycle labels that were present in our initial read.
+        # A human stop label added after that read is never deleted here.
+        for label in sorted((current & LIFECYCLE_LABELS) - {target}):
+            self._delete_label(issue_number, label)
+
+        updated = self.get_issue(issue_number)
+        updated_labels = self.label_names(updated)
+        final_stops = updated_labels.intersection(HUMAN_STOP_LABELS)
+        if target != "needs:human" and final_stops:
+            if target not in current:
+                self._delete_label(issue_number, target)
+            raise RuntimeError(
+                f"human stop won lifecycle race for issue #{issue_number}: {sorted(final_stops)}"
+            )
+
+        lifecycle = updated_labels.intersection(LIFECYCLE_LABELS)
+        if lifecycle != {target}:
+            raise RuntimeError(
+                f"lifecycle transition race detected for issue #{issue_number}: {sorted(lifecycle)}"
+            )
+        return updated
 
     def comment(self, issue_number: int, body: str) -> None:
         if not body.strip():

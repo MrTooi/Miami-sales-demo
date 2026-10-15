@@ -13,6 +13,11 @@ LIFECYCLE_LABELS = {
     "needs:human",
 }
 
+HUMAN_STOP_LABELS = {
+    "needs:human",
+    "agent:paused",
+}
+
 # Labels the operator may rely on for queueing, routing, risk classification,
 # and human gates. The executor bootstraps these before it reads the queue so a
 # fresh repository cannot silently fall back to Generalist because a routing
@@ -86,6 +91,12 @@ def transition_labels(labels: Iterable[str], target: str) -> Transition:
     if target not in LIFECYCLE_LABELS:
         raise ValueError(f"unsupported lifecycle target: {target}")
     previous = frozenset(labels)
+    active_stops = previous.intersection(HUMAN_STOP_LABELS)
+    if active_stops and target != "needs:human":
+        raise ValueError(
+            "human stop label prevents autonomous lifecycle transition: "
+            + ", ".join(sorted(active_stops))
+        )
     current = frozenset((previous - LIFECYCLE_LABELS) | {target})
     return Transition(previous=previous, current=current, target=target)
 

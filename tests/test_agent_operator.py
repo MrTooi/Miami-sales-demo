@@ -1,5 +1,6 @@
 import unittest
 
+from agent_operator.claim import extract_allowed_paths
 from agent_operator.core import build_dispatch_plan, is_candidate, select_next_issue
 
 
@@ -78,12 +79,65 @@ class AgentOperatorTests(unittest.TestCase):
         self.assertEqual("generalist", plan.owner)
         self.assertIn("conflicting", plan.reason)
 
-    def test_unclassified_task_uses_generalist_without_inventing_specialism(self):
+    def test_unclassified_task_fails_closed_to_medium_risk(self):
         plan = build_dispatch_plan(issue(14, ["agent:ready"], "Unknown task"))
         self.assertEqual("generalist", plan.owner)
+        self.assertEqual("medium", plan.risk)
+        self.assertEqual(("qa-critic", "security-integrity"), plan.reviewers)
+        self.assertFalse(plan.requires_human_approval)
+
+    def test_explicit_low_risk_remains_available_for_deliberately_classified_work(self):
+        plan = build_dispatch_plan(issue(16, ["agent:ready", "risk:low"], "Known low risk task"))
         self.assertEqual("low", plan.risk)
         self.assertEqual(("qa-critic",), plan.reviewers)
-        self.assertFalse(plan.requires_human_approval)
+
+    def test_allowed_files_section_becomes_exact_machine_scope(self):
+        body = """## Outcome
+Create a feature.
+
+## Allowed files
+
+Create only:
+- `agent_workbench/trial.py`
+- `tests/test_agent_workbench_trial.py`
+
+Do not change anything else.
+
+## Required behavior
+Do the thing.
+"""
+        self.assertEqual(
+            ("agent_workbench/trial.py", "tests/test_agent_workbench_trial.py"),
+            extract_allowed_paths(body),
+        )
+
+    def test_allowed_files_parser_ignores_backticks_in_prose(self):
+        body = """## Allowed files
+Do not touch `app_ledger.py`.
+- `agent_workbench/trial.py`
+
+## Required behavior
+"""
+        self.assertEqual(("agent_workbench/trial.py",), extract_allowed_paths(body))
+
+    def test_allowed_files_parser_rejects_multiple_paths_in_one_bullet(self):
+        body = """## Allowed files
+- `a.py` or `b.py`
+
+## Required behavior
+"""
+        with self.assertRaises(ValueError):
+            extract_allowed_paths(body)
+
+    def test_allowed_files_parser_rejects_globs_and_parent_escape(self):
+        for unsafe in ("`tests/*.py`", "`../outside.py`"):
+            with self.subTest(path=unsafe):
+                body = f"## Allowed files\n- {unsafe}\n\n## Next\n"
+                with self.assertRaises(ValueError):
+                    extract_allowed_paths(body)
+
+    def test_missing_allowed_files_section_fails_closed_to_empty_scope(self):
+        self.assertEqual((), extract_allowed_paths("## Outcome\nNo explicit file boundary."))
 
 
 if __name__ == "__main__":
