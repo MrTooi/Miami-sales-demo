@@ -26,6 +26,7 @@ jobs:
       pull-requests: write
     env:
       PYTHONDONTWRITEBYTECODE: '1'
+      QA_REVIEW_PATH: /tmp/ledger-source-qa-review.json
       SECURITY_REVIEW_PATH: /tmp/ledger-security-recovery-review.json
     steps:
       - name: Parse exact owner recovery command
@@ -35,13 +36,12 @@ jobs:
           EVENT_ISSUE: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
-          if ! printf '%s' "$COMMENT_BODY" | grep -Eq '^/agent-security-recover [0-9]+ [0-9]+$'; then
+          if ! [[ "$COMMENT_BODY" =~ ^/agent-security-recover\ [0-9]+\ [0-9]+$ ]]; then
             echo 'Recovery command must be exactly: /agent-security-recover <source_run_id> <pr_number>' >&2
             exit 1
           fi
-          read -r COMMAND SOURCE_RUN_ID PR_NUMBER EXTRA <<< "$COMMENT_BODY"
+          read -r COMMAND SOURCE_RUN_ID PR_NUMBER <<< "$COMMENT_BODY"
           test "$COMMAND" = '/agent-security-recover'
-          test -z "${EXTRA:-}"
           printf '%s' "$SOURCE_RUN_ID" | grep -Eq '^[0-9]+$'
           printf '%s' "$PR_NUMBER" | grep -Eq '^[0-9]+$'
           printf '%s' "$EVENT_ISSUE" | grep -Eq '^[0-9]+$'
@@ -50,6 +50,7 @@ jobs:
           echo "issue_number=$EVENT_ISSUE" >> "$GITHUB_OUTPUT"
 
       - name: Freeze trusted review controls from protected main
+        id: controls
         env:
           GH_TOKEN: ${{ github.token }}
           CONTROL_SHA: ${{ github.sha }}
@@ -90,18 +91,24 @@ jobs:
           test "$(jq -r '.head_branch // empty' "$RUNNER_TEMP/source-run.json")" = 'main'
           test "$(jq -r '.event // empty' "$RUNNER_TEMP/source-run.json")" = 'workflow_dispatch'
           test "$(jq -r '.status // empty' "$RUNNER_TEMP/source-run.json")" = 'completed'
+          test "$(jq -r '.conclusion // empty' "$RUNNER_TEMP/source-run.json")" = 'failure'
           SOURCE_HEAD="$(jq -r '.head_sha // empty' "$RUNNER_TEMP/source-run.json")"
+          RUN_STARTED="$(jq -r '.run_started_at // .created_at // empty' "$RUNNER_TEMP/source-run.json")"
+          RUN_UPDATED="$(jq -r '.updated_at // empty' "$RUNNER_TEMP/source-run.json")"
           printf '%s' "$SOURCE_HEAD" | grep -Eq '^[0-9a-f]{40}$'
+          test -n "$RUN_STARTED" && test -n "$RUN_UPDATED"
 
-          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?filter=all&per_page=100" > "$RUNNER_TEMP/source-jobs.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/source-jobs.json"
           jq -e '
-            any(.jobs[]?; .name == "implement-task" and .conclusion == "success") and
-            any(.jobs[]?; .name == "verify-task" and .conclusion == "success") and
-            any(.jobs[]?.steps[]?; .name == "Run repository test command in no-write-token verification job" and .conclusion == "success") and
-            any(.jobs[]?.steps[]?; .name == "Run read-only independent QA / Critic agent" and .conclusion == "success") and
-            any(.jobs[]?.steps[]?; .name == "Verify QA reviewer left proposal unchanged" and .conclusion == "success") and
-            any(.jobs[]?.steps[]?; .name == "Post QA review evidence" and .conclusion == "success") and
-            any(.jobs[]?.steps[]?; .name == "Run read-only Security & Data Integrity reviewer" and .conclusion == "failure")
+            ([.jobs[]? | select(.name == "implement-task" and .conclusion == "success")] | length) == 1 and
+            ([.jobs[]? | select(.name == "verify-task" and .conclusion == "success")] | length) == 1 and
+            ([.jobs[]? | select(.name == "publish-review" and .conclusion == "failure")] | length) == 1 and
+            ([.jobs[]? | select(.name == "publish-review" and .conclusion == "failure")][0].steps) as $steps |
+            any($steps[]?; .name == "Run read-only independent QA / Critic agent" and .conclusion == "success") and
+            any($steps[]?; .name == "Verify QA reviewer left proposal unchanged" and .conclusion == "success") and
+            any($steps[]?; .name == "Post QA review evidence" and .conclusion == "success") and
+            any($steps[]?; .name == "Run read-only Security & Data Integrity reviewer" and .conclusion == "failure") and
+            any(.jobs[]?.steps[]?; .name == "Run repository test command in no-write-token verification job" and .conclusion == "success")
           ' "$RUNNER_TEMP/source-jobs.json" >/dev/null
 
           gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/source-artifacts.json"
@@ -116,6 +123,25 @@ jobs:
           test "$(jq -r '.isDraft' "$RUNNER_TEMP/pr.json")" = 'true'
           test "$(jq -r '.state' "$RUNNER_TEMP/pr.json")" = 'OPEN'
           printf '%s' "$REVIEWED_SHA" | grep -Eq '^[0-9a-f]{40}$'
+
+          gh api --paginate "/repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" > "$RUNNER_TEMP/pr-comments-pages.json"
+          jq -s 'add' "$RUNNER_TEMP/pr-comments-pages.json" > "$RUNNER_TEMP/pr-comments.json"
+          jq --arg started "$RUN_STARTED" --arg updated "$RUN_UPDATED" '
+            [ .[]
+              | select(.user.login == "github-actions[bot]")
+              | select(.created_at >= $started and .created_at <= $updated)
+              | .body as $body
+              | ($body | fromjson?) as $json
+              | select($json != null)
+              | select(($json | type) == "object")
+              | select(($json | keys | sort) == (["findings","summary","tests","verdict"] | sort))
+              | $body
+            ]
+          ' "$RUNNER_TEMP/pr-comments.json" > "$RUNNER_TEMP/qa-candidates.json"
+          test "$(jq 'length' "$RUNNER_TEMP/qa-candidates.json")" = '1'
+          jq -r '.[0]' "$RUNNER_TEMP/qa-candidates.json" > "$QA_REVIEW_PATH"
+          test -s "$QA_REVIEW_PATH"
+
           echo "source_head=$SOURCE_HEAD" >> "$GITHUB_OUTPUT"
           echo "reviewed_sha=$REVIEWED_SHA" >> "$GITHUB_OUTPUT"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
@@ -132,9 +158,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install trusted repository dependencies before review
-        run: python -m pip install -r requirements.txt
-
       - name: Download exact frozen task contract from source run
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -144,7 +167,8 @@ jobs:
           run-id: ${{ steps.command.outputs.source_run_id }}
           github-token: ${{ github.token }}
 
-      - name: Revalidate frozen contract, exact proposal, scope, and human authority
+      - name: Revalidate frozen contract, exact proposal, scope, QA verdict, and human authority
+        id: contract
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ steps.command.outputs.issue_number }}
@@ -186,6 +210,33 @@ jobs:
           CHANGE_COUNT="$(python -I -S -c 'import json,sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))["changes"]))' "$RUNNER_TEMP/ledger-preserved-manifest.json")"
           test "$CHANGE_COUNT" -gt 0
 
+          python -I -S "$RUNNER_TEMP/ledger-review-gate.py" "$QA_REVIEW_PATH"
+
+          sha256sum \
+            "$TASK" "$PROMPT" "$QA_REVIEW_PATH" "$RUNNER_TEMP/ledger-preserved-manifest.json" \
+            > "$RUNNER_TEMP/ledger-recovery-evidence.sha256"
+          sudo chown -R root:root "$RUNNER_TEMP/ledger-base-tree" "$RUNNER_TEMP/ledger-task-contract"
+          sudo chown root:root \
+            "$QA_REVIEW_PATH" \
+            "$RUNNER_TEMP/ledger-preserved-manifest.json" \
+            "$RUNNER_TEMP/ledger-recovery-evidence.sha256" \
+            "$RUNNER_TEMP/ledger-scope-guard.py" \
+            "$RUNNER_TEMP/ledger-review-gate.py" \
+            "$RUNNER_TEMP/ledger-review-schema.json" \
+            "$RUNNER_TEMP/ledger-security-recovery-controls.sha256"
+          sudo chmod -R a-w "$RUNNER_TEMP/ledger-base-tree" "$RUNNER_TEMP/ledger-task-contract"
+          sudo chmod a-w \
+            "$QA_REVIEW_PATH" \
+            "$RUNNER_TEMP/ledger-preserved-manifest.json" \
+            "$RUNNER_TEMP/ledger-recovery-evidence.sha256" \
+            "$RUNNER_TEMP/ledger-scope-guard.py" \
+            "$RUNNER_TEMP/ledger-review-gate.py" \
+            "$RUNNER_TEMP/ledger-review-schema.json" \
+            "$RUNNER_TEMP/ledger-security-recovery-controls.sha256"
+
+      - name: Install dependencies from validated source base
+        run: python -m pip install -r "$RUNNER_TEMP/ledger-base-tree/requirements.txt"
+
       - name: Prepare strict Security and Data Integrity prompt
         run: |
           cat > "$RUNNER_TEMP/security-prompt.md" <<'EOF'
@@ -223,8 +274,12 @@ jobs:
           effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
           model: ${{ vars.LEDGER_CODEX_REVIEW_MODEL }}
 
-      - name: Revalidate exact proposal and trusted controls after Security attempt
-        if: always()
+      - name: Revalidate exact proposal and trusted evidence after Security attempt
+        id: integrity
+        if: >-
+          always() &&
+          steps.source.outcome == 'success' &&
+          steps.contract.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.command.outputs.pr_number }}
@@ -236,6 +291,7 @@ jobs:
           test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$REVIEWED_SHA"
           test "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')" = "$REVIEWED_SHA"
           (cd "$RUNNER_TEMP" && sha256sum -c ledger-security-recovery-controls.sha256)
+          sha256sum -c "$RUNNER_TEMP/ledger-recovery-evidence.sha256"
           python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" check \
             --source "$GITHUB_WORKSPACE" \
             --base-tree "$RUNNER_TEMP/ledger-base-tree" \
@@ -243,17 +299,26 @@ jobs:
             --manifest-out "$RUNNER_TEMP/ledger-after-security.json"
           cmp -s "$RUNNER_TEMP/ledger-preserved-manifest.json" "$RUNNER_TEMP/ledger-after-security.json"
 
-      - name: Evaluate Security evidence with strict protected-main gate
+      - name: Evaluate combined QA and Security evidence with strict protected-main gate
         id: gate
-        if: always()
+        if: >-
+          always() &&
+          steps.source.outcome == 'success' &&
+          steps.contract.outcome == 'success' &&
+          steps.integrity.outcome == 'success'
         continue-on-error: true
         run: |
           set -euo pipefail
+          test -s "$QA_REVIEW_PATH"
           test -s "$SECURITY_REVIEW_PATH"
-          python -I -S "$RUNNER_TEMP/ledger-review-gate.py" "$SECURITY_REVIEW_PATH"
+          python -I -S "$RUNNER_TEMP/ledger-review-gate.py" "$QA_REVIEW_PATH" "$SECURITY_REVIEW_PATH"
 
-      - name: Post Security recovery evidence to preserved draft PR
-        if: always()
+      - name: Post validated Security recovery evidence to preserved draft PR
+        if: >-
+          always() &&
+          steps.source.outcome == 'success' &&
+          steps.contract.outcome == 'success' &&
+          steps.integrity.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.command.outputs.pr_number }}
@@ -262,15 +327,17 @@ jobs:
         run: |
           {
             printf 'Security-only recovery for exact preserved commit `%s`.\n\n' "$REVIEWED_SHA"
-            printf 'Source executor run `%s`: implementation, isolated full-suite verification, QA review, and post-QA proposal-integrity checks were reverified successful. The original Security step failed before review execution.\n\n' "$SOURCE_RUN_ID"
+            printf 'Source executor run `%s`: implementation, isolated full-suite verification, QA action, QA proposal-integrity check, and the actual QA verdict were revalidated successfully before this Security retry.\n\n' "$SOURCE_RUN_ID"
             printf 'Security action outcome: `%s`\n\n### Security & Data Integrity\n' '${{ steps.security.outcome }}'
             cat "$SECURITY_REVIEW_PATH" 2>/dev/null || printf '{"verdict":"needs-human","summary":"Security output missing","findings":[],"tests":[]}'
-            printf '\n\nStrict Security gate outcome: `%s`\n' '${{ steps.gate.outcome }}'
+            printf '\n\nCombined strict QA + Security gate outcome: `%s`\n' '${{ steps.gate.outcome }}'
           } > "$RUNNER_TEMP/security-recovery-evidence.md"
           gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/security-recovery-evidence.md"
 
       - name: Promote preserved proposal to awaiting human review
-        if: steps.gate.outcome == 'success'
+        if: >-
+          steps.integrity.outcome == 'success' &&
+          steps.gate.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ steps.command.outputs.issue_number }}
@@ -288,10 +355,14 @@ jobs:
           done
           gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label 'agent:awaiting-review'
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
-            "Security recovery completed on exact preserved commit \`$REVIEWED_SHA\`. The source run's implementation, isolated repository tests, independent QA, and proposal-integrity checks were reverified, and the fresh Security/Data Integrity review passed the strict gate. Draft PR #$PR_NUMBER remains unmerged for human review."
+            "Security recovery completed on exact preserved commit \`$REVIEWED_SHA\`. The source run's implementation, isolated repository tests, independent QA verdict, and proposal-integrity checks were revalidated, and the fresh Security/Data Integrity review passed the combined strict gate. Draft PR #$PR_NUMBER remains unmerged for human review."
 
-      - name: Preserve blocked state on missing, malformed, escalated, or rejected Security evidence
-        if: steps.gate.outcome != 'success'
+      - name: Preserve blocked state on failed validated recovery evidence
+        if: >-
+          always() &&
+          steps.source.outcome == 'success' &&
+          steps.contract.outcome == 'success' &&
+          (steps.integrity.outcome != 'success' || steps.gate.outcome != 'success')
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ steps.command.outputs.issue_number }}
@@ -304,5 +375,5 @@ jobs:
           done
           gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label 'agent:blocked'
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
-            "Security recovery did not produce evidence accepted by the strict gate for exact commit \`$REVIEWED_SHA\`. Draft PR #$PR_NUMBER is preserved; implementation, repository tests, and QA were not rerun."
+            "Security recovery did not produce evidence accepted by the combined strict QA + Security gate for exact commit \`$REVIEWED_SHA\`. Draft PR #$PR_NUMBER is preserved; implementation, repository tests, and QA were not rerun."
           exit 1
