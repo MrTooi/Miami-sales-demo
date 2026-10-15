@@ -174,6 +174,29 @@ Execution requirements:
     prompt_path.write_text(prompt, encoding="utf-8")
 
 
+def _write_contract_metadata(
+    *,
+    task_path: Path,
+    prompt_path: Path,
+    base_sha: str,
+    run_id: str,
+    run_attempt: str,
+) -> None:
+    """Persist recovery evidence in the directory the workflow uploads as the contract artifact."""
+
+    runner_temp = Path(os.environ.get("RUNNER_TEMP", "/tmp"))
+    metadata_path = runner_temp / "ledger-task-contract" / "contract-metadata.json"
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "base_sha": base_sha,
+        "run_id": run_id,
+        "run_attempt": run_attempt,
+        "task_sha": hashlib.sha256(task_path.read_bytes()).hexdigest(),
+        "prompt_sha": hashlib.sha256(prompt_path.read_bytes()).hexdigest(),
+    }
+    metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _human_gate(
     client: GitHubClient,
     issue_number: int,
@@ -300,6 +323,7 @@ def main() -> int:
         )
 
     branch = make_branch_name(issue_number, run_id)
+    base_sha = _current_git_head()
     task_payload = {
         "issue": {
             "number": issue_number,
@@ -313,7 +337,7 @@ def main() -> int:
         "allowed_paths": list(allowed_paths),
         "contract_sha256": before_claim_fingerprint,
         "execution": {
-            "base_sha": _current_git_head(),
+            "base_sha": base_sha,
             "run_id": run_id,
             "run_attempt": run_attempt,
         },
@@ -321,6 +345,13 @@ def main() -> int:
     task_path.parent.mkdir(parents=True, exist_ok=True)
     task_path.write_text(json.dumps(task_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _write_prompt(post_claim, serialized, allowed_paths, prompt_path)
+    _write_contract_metadata(
+        task_path=task_path,
+        prompt_path=prompt_path,
+        base_sha=base_sha,
+        run_id=run_id,
+        run_attempt=run_attempt,
+    )
 
     client.comment(
         issue_number,
