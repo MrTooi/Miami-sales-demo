@@ -1,0 +1,21 @@
+# Security-sensitive ownership map.
+# Branch protection must require Code Owner review before this becomes an enforcement gate.
+
+# Agent/control-plane configuration
+/.github/workflows/ @MrTooi
+/.github/agents/ @MrTooi
+/.github/skills/ @MrTooi
+/.github/instructions/ @MrTooi
+/AGENTS.md @MrTooi
+/agent_operator/ @MrTooi
+
+# Financial truth, persistence, ingestion, and customer-facing calculations
+/finance_engine.py @MrTooi
+/ledger_store.py @MrTooi
+/data_pipeline.py @MrTooi
+/opportunity_radar/ @MrTooi
+/app.py @MrTooi
+/app_ledger.py @MrTooi
+
+# Dependency changes can alter execution and supply-chain risk
+/requirements.txt @MrTooi
