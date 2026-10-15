@@ -111,6 +111,24 @@ Do the thing.
             extract_allowed_paths(body),
         )
 
+    def test_allowed_files_parser_ignores_backticks_in_prose(self):
+        body = """## Allowed files
+Do not touch `app_ledger.py`.
+- `agent_workbench/trial.py`
+
+## Required behavior
+"""
+        self.assertEqual(("agent_workbench/trial.py",), extract_allowed_paths(body))
+
+    def test_allowed_files_parser_rejects_multiple_paths_in_one_bullet(self):
+        body = """## Allowed files
+- `a.py` or `b.py`
+
+## Required behavior
+"""
+        with self.assertRaises(ValueError):
+            extract_allowed_paths(body)
+
     def test_allowed_files_parser_rejects_globs_and_parent_escape(self):
         for unsafe in ("`tests/*.py`", "`../outside.py`"):
             with self.subTest(path=unsafe):
