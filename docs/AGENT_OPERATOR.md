@@ -2,100 +2,179 @@
 
 ## Goal
 
-Create a provider-neutral operating layer that can keep making safe progress on queued repository tasks when Alex is not in ChatGPT.
+Create a provider-neutral operating layer that can make safe progress on explicitly approved repository tasks without requiring an open ChatGPT conversation.
 
-The operator is not a single model. It is the control plane around the models: task queue, routing, risk classification, execution boundaries, review requirements, evidence, and human approval gates.
+The operator is the control plane around the models: task queue, routing, risk classification, immutable task contracts, execution boundaries, isolated verification, review evidence, lifecycle recovery, and human approval gates.
 
-## Why this is separate from Claude or OpenAI
+GitHub is the durable source of truth. OpenAI, Claude, or another model may act as an executor or reviewer, but no individual model is the authority for its own high-risk work.
 
-LEDGER must not stop because one model hits a usage limit. GitHub is the durable source of truth. Model providers are executors that can be plugged into the same task contract.
+## Current rollout status
 
-The intended path is:
+Unattended execution is **disabled**.
 
-`GitHub task queue -> deterministic operator -> selected executor -> isolated branch -> tests -> independent review -> human gate when required -> draft PR`
+Do not set either of these repository variables to true until the readiness gate in Issue #35 is complete and a human explicitly authorizes unattended scheduling:
 
-Claude remains on-demand. Connecting Claude Code does not make Claude the permanent executor.
+- `LEDGER_AGENT_OPERATOR_ENABLED`
+- `LEDGER_AGENT_EXECUTOR_ENABLED`
 
-## Phase 1: read-only planner
+Manual workflow dispatch remains available for controlled synthetic trials.
+
+Claude remains on-demand only and is never automatically invoked by Agent OS.
+
+## Read-only planner
 
 `.github/workflows/agent-operator.yml` is a read-only scheduled/manual planner.
 
 It can:
 
-- find open GitHub issues labeled `agent:ready`,
-- ignore pull requests, paused tasks, claimed tasks, and tasks waiting on a human,
-- select the next task deterministically by priority and issue number,
-- route the task to the strongest configured specialist,
+- find eligible `agent:ready` issues,
+- ignore paused, claimed, blocked, review-waiting, or human-gated work,
+- select deterministically by priority and issue number,
+- route to the configured specialist,
 - classify risk,
-- assign QA review to every queued task,
-- add Security & Data Integrity review when the task touches integrations, financial data, auth/security, or higher risk,
-- mark high-impact external actions as human-gated in its plan,
-- emit a structured dispatch plan.
+- identify required reviewers,
+- describe human gates.
 
-It cannot mutate issues, invoke a model, edit code, create a branch, open a PR, merge, deploy, or perform an external action.
+It cannot mutate issues, invoke a model, edit code, open a PR, merge, deploy, or perform external actions.
 
-The planner is scheduled twice per hour but remains disabled unless:
+The planner is scheduled twice per hour but only runs scheduled work when `LEDGER_AGENT_OPERATOR_ENABLED=true`.
 
-`LEDGER_AGENT_OPERATOR_ENABLED=true`
+## Controlled executor
 
-Manual dispatch is available for read-only testing.
+`.github/workflows/agent-executor.yml` is the execution pipeline. It is scheduled once per hour but only runs scheduled work when `LEDGER_AGENT_EXECUTOR_ENABLED=true`. Manual dispatch is allowed for controlled tests.
 
-## Phase 2: autonomous executor
+It refuses to claim work unless the GitHub Actions secret `OPENAI_API_KEY` exists.
 
-`.github/workflows/agent-executor.yml` is the controlled execution worker.
+The executor uses the official OpenAI Codex GitHub Action pinned to a specific commit. Implementation and review are deliberately separated from publication authority.
 
-It is scheduled once per hour but remains disabled unless:
+## Trust-separated execution pipeline
 
-`LEDGER_AGENT_EXECUTOR_ENABLED=true`
+One executor run handles at most one queued task.
 
-It also refuses to claim a task unless the repository has a protected GitHub Actions secret named:
+### Job 1 — claim and freeze the task
 
-`OPENAI_API_KEY`
+The claim job has repository read permission and issue-write permission, but no repository contents-write permission.
 
-The executor uses the official OpenAI Codex GitHub Action pinned to a specific commit. The action runs with the workspace permission profile. Repository dependencies are installed before the model step so the model does not need general network access for normal implementation work.
+It:
 
-### Executor lifecycle
+1. checks that the OpenAI credential is configured before taking ownership,
+2. runs Agent OS safety tests,
+3. checks out `main` explicitly and records the exact 40-character base commit SHA,
+4. finds and re-fetches the next eligible `agent:ready` issue,
+5. refuses autonomous pickup for an untrusted issue author,
+6. applies human gates before any model call,
+7. requires a machine-readable `## Allowed files` section with exact backtick repository paths,
+8. rejects globs, parent-directory escapes, `.git` paths, and missing file boundaries,
+9. claims the issue,
+10. re-fetches the issue and stops if its title/body changed during claim,
+11. freezes the issue contract, routing plan, exact allowed paths, and contract fingerprint into an immutable workflow artifact,
+12. marks the issue `agent:working` only after that artifact exists.
 
-For one queued task per run:
+For the initial rollout, autonomous tasks without an exact file allowlist fail closed to `needs:human`.
 
-1. Verify the OpenAI secret exists before touching the queue.
-2. Run the operator safety tests.
-3. Find the highest-priority eligible `agent:ready` issue.
-4. Re-fetch it immediately before claim.
-5. Divert human-gated work to `needs:human` before any model call.
-6. Move safe work to `agent:claimed`.
-7. Create a unique `agent/issue-<number>-<run>` branch.
-8. Move the issue to `agent:working`.
-9. Run the specialist implementation agent.
-10. Enforce the autonomous scope guard.
-11. Run the full repository test suite.
-12. If no repository change exists, stop at `agent:blocked` without a PR.
-13. Commit and push only the verified branch.
-14. Open a **draft** pull request.
-15. Run a separate QA / Critic model pass over the actual diff.
-16. Run a separate Security & Data Integrity model pass when routing requires it.
-17. Require structured reviewer verdicts.
-18. If every required reviewer passes, move the issue to `agent:awaiting-review`.
-19. If a safety check, test, publication step, or reviewer fails, stop at `agent:blocked` and preserve any already-published draft PR for diagnosis.
+## Job 2 — implementation without publication authority
 
-The executor does not auto-merge during the initial rollout.
+The implementation job has `contents: read` repository permission. It does **not** have repository contents-write or issue-write permission.
+
+It:
+
+1. checks out the exact claimed base SHA without persisted Git credentials,
+2. downloads and verifies the frozen task artifact,
+3. runs the implementation model with the workspace permission profile,
+4. gives the model the exact allowed-path list in its prompt,
+5. captures the resulting repository filesystem into an artifact while excluding `.git` metadata.
+
+The implementation job cannot publish a branch or PR.
+
+Its `.git` index, config, hooks, rename detection, ignore rules, or commits are never trusted as evidence of what changed.
+
+## Job 3 — isolated verification with no write token or API secret
+
+A fresh runner verifies the raw implementation artifact.
+
+The verification job has repository read permission only and receives no OpenAI API secret.
+
+It:
+
+1. checks out the exact claimed base SHA,
+2. reconstructs a trusted base tree,
+3. extracts the implementation artifact into a separate model tree,
+4. compares raw filesystem state rather than model-controlled git metadata,
+5. enforces the frozen per-task file allowlist,
+6. rejects protected control-plane/high-trust files,
+7. rejects autonomous deletions,
+8. rejects edits to existing tests,
+9. permits new tests only when they are explicitly allowlisted `tests/test_*.py` files,
+10. rejects symlinks, special files, and newly-added executable bits,
+11. ignores only newly-created generated Python cache artifacts because those artifacts are never materialized into the proposal,
+12. produces a deterministic change manifest,
+13. materializes only verified regular files into a clean base checkout,
+14. confirms the reconstruction exactly matches the manifest,
+15. runs the full repository test suite,
+16. re-checks the filesystem afterward and fails if tests changed the publishable proposal.
+
+A proposal with no verified repository change fails instead of opening an empty PR.
+
+## Job 4 — clean publication and read-only reviews
+
+Only after isolated verification succeeds does a fresh publication job receive repository contents-write permission.
+
+It independently repeats the scope check from the raw implementation artifact and frozen task contract, then:
+
+1. creates the reserved task branch from the exact base SHA,
+2. materializes only the verified manifest files into that clean checkout,
+3. re-confirms the proposal matches the verified manifest,
+4. commits and pushes from the clean checkout with git hooks disabled,
+5. opens a **draft** pull request,
+6. runs QA / Critic in `:read-only` mode,
+7. runs Security & Data Integrity in `:read-only` mode when required,
+8. verifies the repository proposal remained unchanged after each reviewer,
+9. evaluates structured reviewer output using trusted base code,
+10. moves the issue to `agent:awaiting-review` only if every required review gate passes.
+
+The workflow contains no automatic merge or deployment path.
+
+## Separate fail-safe recovery job
+
+If implementation, verification, publication, or review fails, a separate fresh runner attempts to recover the lifecycle to `agent:blocked` without checking out or executing repository code.
+
+It uses GitHub issue commands directly and does not trust model-modifiable Python for recovery.
+
+A stale-claim reaper for hard workflow cancellation/runner loss remains part of the readiness gate before unattended scheduling is enabled.
 
 ## Queue contract
 
-A task enters the queue only when an open issue has:
+A task enters the queue only when an open issue has `agent:ready` and is otherwise eligible.
 
-- `agent:ready`
+During the initial rollout, the issue must also:
 
-Only a repository collaborator with issue-write access should apply this label. The label is the human authorization boundary for an issue to enter unattended execution.
+- be authored by a trusted repository association (`OWNER`, `MEMBER`, or `COLLABORATOR`),
+- contain `## Allowed files`,
+- list the exact repository files the agent may change using backticks,
+- avoid globs or implicit repository-wide scopes.
 
-Optional priority:
+Example:
+
+```markdown
+## Allowed files
+
+Create only:
+- `agent_workbench/example.py`
+- `tests/test_agent_workbench_example.py`
+```
+
+The frozen task artifact is the contract used by downstream verification and reviewers. Editing the GitHub issue after claim does not silently change the active run.
+
+## Priority and routing
+
+Optional priority labels:
 
 - `priority:p0`
 - `priority:p1`
 - `priority:p2`
 - `priority:p3`
 
-Optional explicit owner:
+Optional explicit owners:
 
 - `owner:backend`
 - `owner:integrations`
@@ -104,43 +183,17 @@ Optional explicit owner:
 - `owner:generalist`
 - `owner:security`
 
-Or area labels for deterministic routing, including:
+Area labels can also route work deterministically.
 
-- `area:backend`
-- `area:persistence`
-- `area:api`
-- `area:integrations`
-- `area:payments`
-- `area:settlement`
-- `area:reconciliation`
-- `area:research`
-- `area:product`
-- `area:frontend`
-- `area:ux`
-- `area:security`
+Conflicting ownership routes to Generalist for triage rather than guessing.
 
-The operator will not dispatch issues carrying `agent:paused`, `agent:claimed`, `agent:working`, `agent:awaiting-review`, `agent:blocked`, or `needs:human` because those lifecycle states replace `agent:ready`.
-
-Unknown or conflicting ownership routes to the Generalist Operator for triage instead of guessing.
-
-## Lifecycle states
-
-The operator owns these mutually exclusive lifecycle labels:
-
-- `agent:ready` — human-authorized queue entry.
-- `agent:claimed` — one executor run took ownership.
-- `agent:working` — model execution is underway.
-- `agent:awaiting-review` — implementation, tests, scope guard, and required automated reviewer gates passed; draft PR exists.
-- `agent:blocked` — execution stopped on a concrete failure or unresolved reviewer finding.
-- `needs:human` — policy requires a human decision before model execution or continuation.
-
-The executor workflow uses a repository-wide concurrency group so two scheduled runs cannot work the queue simultaneously. A claimed issue is also re-checked before mutation so stale queue reads fail closed.
-
-## Risk and human gates
+## Risk policy
 
 Explicit `risk:low`, `risk:medium`, or `risk:high` labels are supported.
 
-The following high-impact labels are always treated as high risk and cannot be downgraded by `risk:low`:
+Unclassified work defaults to **medium**, not low. `risk:low` must therefore be an explicit classification during the initial rollout.
+
+The following labels are always high-risk human gates and cannot be downgraded by `risk:low`:
 
 - `action:deploy`
 - `action:delete`
@@ -150,98 +203,147 @@ The following high-impact labels are always treated as high risk and cannot be d
 - `data:live-financial`
 - `permission:expand`
 
-These tasks are transitioned to `needs:human` before any model is invoked.
+These tasks move to `needs:human` before model execution.
+
+## Lifecycle labels
+
+Agent OS lifecycle labels are mutually exclusive:
+
+- `agent:ready`
+- `agent:claimed`
+- `agent:working`
+- `agent:awaiting-review`
+- `agent:blocked`
+- `needs:human`
+
+Lifecycle transitions add/remove only lifecycle labels. They do not replace the issue's complete label set, so human-added priority, routing, risk, and data-boundary labels are preserved.
+
+The executor uses a repository-wide concurrency group to prevent overlapping queue workers.
 
 ## Autonomous self-modification boundary
 
-Unattended product agents may not modify the AI operating system that governs them.
+Unattended product agents may not modify the control plane that governs them.
 
-The scope guard blocks changes to the agent operator package, agent profiles, reusable agent skills, agent evaluation assets, core agent governance/tests, operator/executor workflows, and durable operating instructions such as `AGENTS.md`, `PROJECT_BRIEF.md`, and the operator/pipeline documentation.
+Protected areas include:
 
-Those files can still be changed through deliberate human-supervised branches and PRs such as this one.
+- `agent_operator/`
+- `agent_evals/`
+- `.github/`
+- `AGENTS.md`
+- Agent OS/pipeline documentation and governance tests
+- repository/dependency configuration files
+- high-trust financial, integrity, persistence, and Opportunity Radar scoring modules during the initial rollout.
 
-The guard also rejects autonomous changes touching more than 30 files in one task. Large refactors must be decomposed or handled interactively.
+Existing tests cannot be modified or deleted autonomously. New tests are permitted only when the frozen task contract explicitly lists them and their names match `tests/test_*.py`.
+
+Large autonomous changes remain capped at 30 publishable files and should normally be much smaller because the exact task allowlist is authoritative.
+
+Human-supervised branches and PRs may deliberately change these controls, as with Agent OS hardening work itself.
 
 ## Review policy
 
-Every autonomous implementation gets an independent QA / Critic pass after the implementation has passed tests and been committed to its isolated branch.
+Every publishable autonomous implementation receives QA / Critic review after isolated verification.
 
-Tasks that touch integrations, payment settlement/reconciliation, financial data, auth/security, credentials, permissions, or medium/high risk also receive a Security & Data Integrity pass.
+Medium/high-risk work and work involving financial data, integrations, payments, reconciliation, auth/security, credentials, or permission boundaries also receives Security & Data Integrity review.
 
-Reviewers return a structured verdict:
+Reviewers operate read-only against the clean published proposal.
+
+Allowed structured verdicts are:
 
 - `pass`
 - `fail`
 - `needs-human`
 
-Every required reviewer must return `pass` for the issue to reach `agent:awaiting-review`. Malformed output, `fail`, or `needs-human` fails closed.
+A `pass` is rejected if the same review contains a `blocking` or `important` finding. Malformed output and unknown finding severities also fail closed.
 
-Claude is not used automatically. Claude Code remains available for deliberate high-value second-model review when usage is available.
+Claude is not used automatically. Deliberate cross-model Claude review is reserved for high-value checkpoints and important control-plane/product decisions.
 
-## No automatic merge in initial rollout
+## Branch protection is still required
 
-The executor opens draft PRs only. It contains no automatic merge or deployment step.
+The workflow's internal controls do **not** replace GitHub repository protection.
 
-This is intentional. The first rollout goal is autonomous **progress**, not irreversible autonomous authority. Once several real tasks have demonstrated correct claiming, execution, testing, review, and recovery behavior, low-risk auto-merge can be evaluated separately as a new permission increase.
+Before unattended execution is enabled, `main` must be protected with at least:
 
-## OpenAI credential and cost boundary
+- PR required before merge,
+- at least one human approval,
+- required unit-test/status checks,
+- force-push and deletion protection,
+- no Actions/app bypass of the protected branch,
+- code-owner/review rules for Agent OS and other high-trust files where supported.
 
-The official Codex GitHub Action requires an API credential supplied as a GitHub Actions secret. The secret must never be committed to the repository, issue text, comments, fixtures, screenshots, or logs.
+Until that human repository configuration is complete, unattended scheduling remains disabled.
 
-Use a dedicated OpenAI project/key for the Ledger agent executor when possible so usage can be monitored and limited separately from other work.
+## Credential and cost boundary
 
-Cost/rate controls in the first rollout are intentionally simple and auditable:
+`OPENAI_API_KEY` is stored only as a GitHub Actions secret and must never appear in repository files, issue text, screenshots, fixtures, or logs.
+
+The initial rollout stays cost-aware:
 
 - executor disabled by default,
-- only human-labeled `agent:ready` work is eligible,
-- one task maximum per scheduled executor run,
-- executor scheduled once per hour,
-- 45-minute hard workflow timeout,
-- implementation reasoning effort defaults to `medium`,
-- review reasoning effort defaults to `medium`,
-- Claude is never automatically triggered.
+- one task per run,
+- deterministic checks before expensive model calls where possible,
+- implementation reasoning defaults to `medium`,
+- reviews default to `medium`,
+- no automatic Claude calls,
+- failures are diagnosed before paid retries.
 
-Optional repository variables:
+Optional variables:
 
 - `LEDGER_CODEX_EFFORT`
 - `LEDGER_CODEX_REVIEW_EFFORT`
+- `LEDGER_CODEX_MODEL`
+- `LEDGER_CODEX_REVIEW_MODEL`
 
-If omitted, both default to `medium`.
+## Failure learning
+
+A later successful retry does not erase a meaningful failure.
+
+Relevant failures should become durable repository knowledge through the smallest useful combination of:
+
+- a regression test/eval,
+- a deterministic guard,
+- a documented lesson,
+- routing/prompt improvements,
+- an added human gate,
+- a cost/retry rule.
+
+Blind retries are not the learning mechanism.
 
 ## Activation checklist
 
-Do not enable unattended execution until the branch containing this operator has been reviewed and merged.
+Do not enable unattended scheduling until all of these are true:
 
-Then:
+1. Agent OS hardening changes are reviewed and merged.
+2. `main` branch protection is enabled by a human.
+3. `LEDGER_AGENT_EXECUTOR_ENABLED` remains false/unset during trials.
+4. Trial #25 passes end-to-end through clean-room verification and required reviews.
+5. Trial #26 proves tenant isolation.
+6. Trial #27 proves integration idempotency/conflict handling.
+7. Trial #28 proves unfamiliar generalist transformation behavior.
+8. The #29 human-gate behavior is re-confirmed if control-plane changes could affect it.
+9. Scope-bypass, prompt-injection, review-gate, and failure-recovery evals pass.
+10. Stale claim/cancellation recovery is demonstrated.
+11. A final readiness review finds no Critical/High unattended-execution blocker.
+12. A human explicitly authorizes enabling unattended scheduling.
 
-1. Create a dedicated OpenAI API key/project for Ledger automation if desired.
-2. Add the key to GitHub repository Actions secrets as `OPENAI_API_KEY`.
-3. Keep `LEDGER_AGENT_EXECUTOR_ENABLED` unset/false.
-4. Create a harmless synthetic issue and label it `agent:ready`.
-5. Manually run **LEDGER AI Task Executor** once.
-6. Verify claim, branch isolation, tests, draft PR creation, QA review, lifecycle state, and failure behavior.
-7. Run a second synthetic test for a human-gated task and verify no model call occurs.
-8. Only after both tests pass, set repository variable `LEDGER_AGENT_EXECUTOR_ENABLED=true`.
-9. Queue real Opportunity Radar tasks deliberately with `agent:ready`.
+Opportunity Radar and other product work can continue manually under normal branch/PR review, but unattended agents must not work on sensitive product logic until this readiness gate is complete.
 
-## Claude usage policy
+## Definition of done
 
-The existing Claude GitHub workflow remains on-demand only. The operator never automatically triggers Claude merely because a queued task exists. This lets Claude usage remain available for other work while Ledger continues through the OpenAI lane.
+The system is not considered autonomous merely because a schedule exists.
 
-## Definition of done for the always-on system
+It is ready only when controlled trials prove that it can:
 
-The system is not considered autonomous merely because a scheduled workflow exists.
-
-The milestone is complete only when controlled end-to-end trials prove that, while Alex is away, the system can:
-
-1. discover an approved queued task,
-2. claim it exactly once,
-3. route it correctly,
-4. execute only within allowed boundaries,
-5. create isolated work,
-6. run and report tests truthfully,
-7. obtain the required independent review,
-8. stop for a human gate when required,
-9. preserve enough GitHub history to reconstruct what happened,
-10. recover safely from failures,
-11. move to the next safe queued task on a later run without needing an open chat session.
+1. discover only explicitly approved work,
+2. freeze the exact task contract,
+3. claim exactly once,
+4. route and classify risk correctly,
+5. execute without publication authority,
+6. enforce exact file scope outside model-controlled git state,
+7. run tests in a separate no-write-token environment,
+8. publish only a clean reconstructed proposal,
+9. obtain read-only independent review,
+10. stop for human gates,
+11. preserve enough evidence to reconstruct failures and decisions,
+12. recover lifecycle state safely,
+13. leave merge/deploy authority with humans until separately approved.
