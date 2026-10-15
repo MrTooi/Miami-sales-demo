@@ -574,7 +574,7 @@ jobs:
           quality, and whether the change is actually supported by repository evidence. Return the
           required structured JSON. A pass means there is no concrete blocking correctness or trust
           defect in the scoped change.
-          Top-level keys must be exactly verdict, summary, findings, and optionally tests; do not add any other top-level keys.
+          Top-level keys must be exactly verdict, summary, findings, and tests; all four are required. Use an empty tests array when there is no test evidence; do not add any other top-level keys.
           --- FROZEN TASK CONTRACT JSON ---
           EOF
           cat "$RUNNER_TEMP/ledger-task-contract/task.json" >> "$RUNNER_TEMP/ledger-recovery-qa-prompt.md"
@@ -627,7 +627,7 @@ jobs:
           permissions, tenant/data boundaries, financial semantics, transaction provenance,
           double-counting risk, destructive behavior, third-party integration trust boundaries,
           auditability, and whether any claim exceeds the evidence. Return the required structured JSON.
-          Top-level keys must be exactly verdict, summary, findings, and optionally tests; do not add any other top-level keys.
+          Top-level keys must be exactly verdict, summary, findings, and tests; all four are required. Use an empty tests array when there is no test evidence; do not add any other top-level keys.
           --- FROZEN TASK CONTRACT JSON ---
           EOF
           cat "$RUNNER_TEMP/ledger-task-contract/task.json" >> "$RUNNER_TEMP/ledger-recovery-security-prompt.md"
