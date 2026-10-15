@@ -37,5 +37,5 @@
       }
     }
   },
-  "required": ["verdict", "summary", "findings"]
+  "required": ["verdict", "summary", "findings", "tests"]
 }
