@@ -80,19 +80,33 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertIn("agent_operator.scope_guard check", verify)
         self.assertIn("agent_operator.scope_guard apply", verify)
         self.assertIn("--allowed-paths-file", verify)
+        self.assertIn("Lock trusted verification inputs before proposed code executes", verify)
+        self.assertIn("sudo chown -R root:root", verify)
+        self.assertIn("sudo chmod -R a-w", verify)
+        self.assertIn("Run repository test command in no-write-token verification job", verify)
         self.assertIn("python -m unittest discover -s tests -v", verify)
-        self.assertIn("Verify tests did not change the publishable proposal", verify)
+        self.assertIn("Verify tests did not change the publishable proposal using locked trusted guard", verify)
 
-    def test_publish_job_rebuilds_from_clean_base_and_only_then_gets_write_permission(self):
+    def test_publish_job_rebuilds_commit_and_verifies_commit_tree_before_push(self):
         text = EXECUTOR.read_text(encoding="utf-8")
         publish = text.split("  publish-review:", 1)[1].split("  fail-safe-cleanup:", 1)[0]
         self.assertIn("contents: write", publish)
         self.assertIn("Re-verify frozen task scope independently before publication", publish)
         self.assertIn("--allowed-paths-file", publish)
         self.assertIn("Create clean publication branch and materialize verified files", publish)
-        self.assertIn("Commit and push only the clean verified proposal", publish)
+        self.assertIn("Commit clean verified proposal locally", publish)
+        self.assertIn("Verify committed tree exactly matches verified manifest", publish)
+        self.assertIn("git archive HEAD", publish)
+        self.assertIn("ledger-commit-manifest.json", publish)
+        self.assertIn("Push only the manifest-matched proposal branch", publish)
         self.assertIn("core.hooksPath=/dev/null", publish)
         self.assertNotIn("python -m unittest discover", publish)
+
+        commit_index = text.index("Commit clean verified proposal locally")
+        commit_verify_index = text.index("Verify committed tree exactly matches verified manifest")
+        push_index = text.index("Push only the manifest-matched proposal branch")
+        self.assertLess(commit_index, commit_verify_index)
+        self.assertLess(commit_verify_index, push_index)
 
         verify_index = text.index("  verify-task:")
         publish_index = text.index("  publish-review:")
@@ -108,7 +122,7 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertIn("Verify QA reviewer left proposal unchanged", text)
         self.assertIn("Verify Security reviewer left proposal unchanged", text)
 
-    def test_task_contract_is_artifact_frozen_before_model_execution(self):
+    def test_task_and_prompt_are_artifact_frozen_before_model_execution(self):
         text = EXECUTOR.read_text(encoding="utf-8")
         freeze_index = text.index("Freeze immutable task contract")
         upload_index = text.index("Upload immutable task contract")
@@ -116,9 +130,13 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertLess(freeze_index, upload_index)
         self.assertLess(upload_index, model_index)
         self.assertIn("task_sha", text)
-        self.assertIn("Verify task contract integrity", text)
+        self.assertIn("prompt_sha", text)
+        self.assertGreaterEqual(text.count("ACTUAL_TASK_SHA"), 3)
+        self.assertGreaterEqual(text.count("ACTUAL_PROMPT_SHA"), 3)
+        self.assertIn("Verify task contract integrity before verification", text)
         self.assertIn("Verify immutable task contract again", text)
-        self.assertGreaterEqual(text.count("ledger-task-contract/task.json"), 6)
+        self.assertGreaterEqual(text.count("ledger-task-contract/task.json"), 8)
+        self.assertGreaterEqual(text.count("ledger-task-contract/prompt.md"), 4)
 
     def test_executor_uses_filesystem_scope_manifest_not_model_git_diff(self):
         text = EXECUTOR.read_text(encoding="utf-8")
@@ -129,14 +147,22 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertNotIn("scope_guard --repo", text)
         self.assertNotIn("--base-sha", text)
 
-    def test_fail_safe_cleanup_is_separate_and_does_not_execute_repository_code(self):
+    def test_fail_safe_cleanup_is_separate_and_preserves_human_intervention_state(self):
         text = EXECUTOR.read_text(encoding="utf-8")
         cleanup = text.split("  fail-safe-cleanup:", 1)[1]
         self.assertIn("always()", cleanup)
         self.assertIn("issues: write", cleanup)
         self.assertIn("gh issue edit", cleanup)
+        self.assertIn("grep -qx 'needs:human'", cleanup)
+        self.assertIn("preserving that state", cleanup)
+        self.assertNotIn("for LABEL in agent:ready agent:claimed agent:working agent:awaiting-review needs:human", cleanup)
         self.assertNotIn("agent_operator", cleanup)
         self.assertNotIn("actions/checkout", cleanup)
+
+    def test_executor_does_not_overclaim_model_influenced_test_evidence(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        self.assertNotIn("Full tests passed", text)
+        self.assertIn("protected-branch CI and human review are still required before merge", text)
 
     def test_executor_job_configuration_does_not_use_runner_context_before_steps(self):
         text = EXECUTOR.read_text(encoding="utf-8")
