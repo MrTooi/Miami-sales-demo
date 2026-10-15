@@ -185,6 +185,7 @@ jobs:
         id: implement
         uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
         with:
+          allow-bots: true
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           permission-profile: ':workspace'
           working-directory: ${{ github.workspace }}
@@ -510,6 +511,7 @@ jobs:
         id: qa
         uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
         with:
+          allow-bots: true
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           permission-profile: ':read-only'
           working-directory: ${{ github.workspace }}
@@ -560,6 +562,7 @@ jobs:
         id: security
         uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
         with:
+          allow-bots: true
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           permission-profile: ':read-only'
           working-directory: ${{ github.workspace }}
