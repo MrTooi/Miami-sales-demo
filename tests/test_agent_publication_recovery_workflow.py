@@ -55,7 +55,8 @@ class AgentPublicationRecoveryWorkflowTests(unittest.TestCase):
             "agent_operator/review_gate.py",
             "agent_operator/review_schema.json",
         ):
-            self.assertIn(f"{path}?ref=$WORKFLOW_SHA", text)
+            self.assertGreaterEqual(text.count(path), 2)
+        self.assertGreaterEqual(text.count('contents/$SOURCE?ref=$WORKFLOW_SHA'), 2)
         self.assertGreaterEqual(text.count("ledger-recovery-controls.sha256"), 4)
         self.assertGreaterEqual(text.count("sha256sum -c ledger-recovery-controls.sha256"), 3)
 
