@@ -1,0 +1,755 @@
+name: LEDGER Agent Publication Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Original LEDGER AI Task Executor run ID with frozen artifacts'
+        required: true
+        type: string
+      issue_number:
+        description: 'Claimed issue number to recover'
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ledger-agent-publication-recovery-${{ inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  verify-recovery-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    outputs:
+      contract_valid: ${{ steps.contract.outputs.contract_valid }}
+      issue_number: ${{ steps.contract.outputs.issue_number }}
+      branch: ${{ steps.contract.outputs.branch }}
+      base_sha: ${{ steps.contract.outputs.base_sha }}
+      expected_tree: ${{ steps.verify.outputs.expected_tree }}
+      task_sha: ${{ steps.contract.outputs.task_sha }}
+      prompt_sha: ${{ steps.contract.outputs.prompt_sha }}
+      owner: ${{ steps.contract.outputs.owner }}
+      risk: ${{ steps.contract.outputs.risk }}
+    steps:
+      - name: Require protected main dispatch and freeze current trusted controls
+        id: controls
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          if [ "$GITHUB_REF" != 'refs/heads/main' ]; then
+            echo "Publication recovery must be dispatched from protected main." >&2
+            exit 1
+          fi
+          if ! printf '%s' "$WORKFLOW_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Recovery workflow has no immutable workflow SHA." >&2
+            exit 1
+          fi
+          for SPEC in \
+            'agent_operator/recovery.py:ledger-recovery.py' \
+            'agent_operator/scope_guard.py:ledger-scope-guard.py' \
+            'agent_operator/review_gate.py:ledger-review-gate.py' \
+            'agent_operator/review_schema.json:ledger-review-schema.json'; do
+            SOURCE="${SPEC%%:*}"
+            DEST="${SPEC##*:}"
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "/repos/$GITHUB_REPOSITORY/contents/$SOURCE?ref=$WORKFLOW_SHA" > "$RUNNER_TEMP/$DEST"
+          done
+          (cd "$RUNNER_TEMP" && sha256sum \
+            ledger-recovery.py ledger-scope-guard.py ledger-review-gate.py ledger-review-schema.json \
+            > ledger-recovery-controls.sha256)
+          chmod a-w \
+            "$RUNNER_TEMP/ledger-recovery.py" \
+            "$RUNNER_TEMP/ledger-scope-guard.py" \
+            "$RUNNER_TEMP/ledger-review-gate.py" \
+            "$RUNNER_TEMP/ledger-review-schema.json" \
+            "$RUNNER_TEMP/ledger-recovery-controls.sha256"
+
+      - name: Validate source executor run and unique artifacts
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          REQUESTED_ISSUE: ${{ inputs.issue_number }}
+        run: |
+          if ! printf '%s' "$SOURCE_RUN_ID" | grep -Eq '^[0-9]+$'; then
+            echo "source_run_id must be numeric" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$REQUESTED_ISSUE" | grep -Eq '^[0-9]+$'; then
+            echo "issue_number must be numeric" >&2
+            exit 1
+          fi
+
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > "$RUNNER_TEMP/source-run.json"
+          SOURCE_REPO="$(jq -r '.repository.full_name // empty' "$RUNNER_TEMP/source-run.json")"
+          SOURCE_PATH="$(jq -r '.path // empty' "$RUNNER_TEMP/source-run.json")"
+          SOURCE_BRANCH="$(jq -r '.head_branch // empty' "$RUNNER_TEMP/source-run.json")"
+          SOURCE_HEAD="$(jq -r '.head_sha // empty' "$RUNNER_TEMP/source-run.json")"
+          SOURCE_EVENT="$(jq -r '.event // empty' "$RUNNER_TEMP/source-run.json")"
+          SOURCE_STATUS="$(jq -r '.status // empty' "$RUNNER_TEMP/source-run.json")"
+          if [ "$SOURCE_REPO" != "$GITHUB_REPOSITORY" ] || \
+             [ "$SOURCE_PATH" != '.github/workflows/agent-executor.yml' ] || \
+             [ "$SOURCE_BRANCH" != 'main' ] || \
+             [ "$SOURCE_STATUS" != 'completed' ]; then
+            echo "source run is not a completed main-branch Agent Executor run from this repository" >&2
+            exit 1
+          fi
+          if [ "$SOURCE_EVENT" != 'workflow_dispatch' ] && [ "$SOURCE_EVENT" != 'schedule' ]; then
+            echo "source run has an unsupported trigger" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$SOURCE_HEAD" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "source run has no valid head SHA" >&2
+            exit 1
+          fi
+
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?filter=all&per_page=100" > "$RUNNER_TEMP/source-jobs.json"
+          IMPLEMENT_OK="$(jq '[.jobs[] | select(.name == "implement-task" and .conclusion == "success")] | length' "$RUNNER_TEMP/source-jobs.json")"
+          if [ "$IMPLEMENT_OK" -lt 1 ]; then
+            echo "source run never completed an implementation job successfully" >&2
+            exit 1
+          fi
+
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/source-artifacts.json"
+          TASK_COUNT="$(jq '[.artifacts[] | select(.name == "ledger-task-contract" and .expired == false)] | length' "$RUNNER_TEMP/source-artifacts.json")"
+          IMPLEMENTATION_COUNT="$(jq '[.artifacts[] | select(.name == "ledger-implementation-tree" and .expired == false)] | length' "$RUNNER_TEMP/source-artifacts.json")"
+          if [ "$TASK_COUNT" != '1' ] || [ "$IMPLEMENTATION_COUNT" != '1' ]; then
+            echo "source run must expose exactly one unexpired task artifact and one implementation artifact" >&2
+            exit 1
+          fi
+          TASK_ARTIFACT_ID="$(jq -r '.artifacts[] | select(.name == "ledger-task-contract" and .expired == false) | .id' "$RUNNER_TEMP/source-artifacts.json")"
+          IMPLEMENTATION_ARTIFACT_ID="$(jq -r '.artifacts[] | select(.name == "ledger-implementation-tree" and .expired == false) | .id' "$RUNNER_TEMP/source-artifacts.json")"
+          TASK_ARTIFACT_DIGEST="$(jq -r '.artifacts[] | select(.name == "ledger-task-contract" and .expired == false) | .digest // empty' "$RUNNER_TEMP/source-artifacts.json")"
+          IMPLEMENTATION_ARTIFACT_DIGEST="$(jq -r '.artifacts[] | select(.name == "ledger-implementation-tree" and .expired == false) | .digest // empty' "$RUNNER_TEMP/source-artifacts.json")"
+          echo "source_head=$SOURCE_HEAD" >> "$GITHUB_OUTPUT"
+          echo "task_artifact_id=$TASK_ARTIFACT_ID" >> "$GITHUB_OUTPUT"
+          echo "implementation_artifact_id=$IMPLEMENTATION_ARTIFACT_ID" >> "$GITHUB_OUTPUT"
+          echo "task_artifact_digest=$TASK_ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "implementation_artifact_digest=$IMPLEMENTATION_ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout source head without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.source.outputs.source_head }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Install trusted base dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Download frozen task contract from source run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ledger-task-contract
+          path: ${{ runner.temp }}/ledger-task-contract
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download implementation tree from source run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ledger-implementation-tree
+          path: ${{ runner.temp }}/ledger-implementation-artifact
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate frozen contract and derive exact base
+        id: contract
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          REQUESTED_ISSUE: ${{ inputs.issue_number }}
+          SOURCE_HEAD: ${{ steps.source.outputs.source_head }}
+        run: |
+          TASK="$RUNNER_TEMP/ledger-task-contract/task.json"
+          PROMPT="$RUNNER_TEMP/ledger-task-contract/prompt.md"
+          test -f "$TASK" && test -f "$PROMPT"
+          TASK_ISSUE="$(python -I -S -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["issue"]["number"])' "$TASK")"
+          BRANCH="$(python -I -S -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["branch"])' "$TASK")"
+          OWNER="$(python -I -S -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["plan"]["owner"])' "$TASK")"
+          RISK="$(python -I -S -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["plan"]["risk"])' "$TASK")"
+          EXPECTED_BRANCH="agent/issue-$REQUESTED_ISSUE-$SOURCE_RUN_ID"
+          if [ "$TASK_ISSUE" != "$REQUESTED_ISSUE" ] || [ "$BRANCH" != "$EXPECTED_BRANCH" ]; then
+            echo "frozen task does not match requested issue/run branch identity" >&2
+            exit 1
+          fi
+          case "$OWNER" in backend|integrations|research-product|frontend-ux|generalist|security-integrity) ;; *) echo "invalid frozen owner" >&2; exit 1;; esac
+          case "$RISK" in low|medium|high) ;; *) echo "invalid frozen risk" >&2; exit 1;; esac
+          TASK_SHA="$(sha256sum "$TASK" | cut -d' ' -f1)"
+          PROMPT_SHA="$(sha256sum "$PROMPT" | cut -d' ' -f1)"
+
+          BASE_SHA=''
+          META="$RUNNER_TEMP/ledger-task-contract/contract-metadata.json"
+          if [ -f "$META" ]; then
+            META_RUN="$(jq -r '.run_id // empty' "$META")"
+            META_BASE="$(jq -r '.base_sha // empty' "$META")"
+            META_TASK="$(jq -r '.task_sha // empty' "$META")"
+            META_PROMPT="$(jq -r '.prompt_sha // empty' "$META")"
+            if [ "$META_RUN" != "$SOURCE_RUN_ID" ] || [ "$META_TASK" != "$TASK_SHA" ] || [ "$META_PROMPT" != "$PROMPT_SHA" ]; then
+              echo "contract metadata does not bind to the downloaded frozen task/prompt" >&2
+              exit 1
+            fi
+            BASE_SHA="$META_BASE"
+          else
+            if ! git ls-remote --exit-code --heads origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
+              echo "legacy source run has no base metadata and no existing verified proposal branch; refusing recovery" >&2
+              exit 1
+            fi
+            git fetch origin "$BRANCH:refs/remotes/origin/$BRANCH"
+            COMMIT_COUNT="$(git rev-list --count "$SOURCE_HEAD..origin/$BRANCH")"
+            PARENT_SHA="$(git rev-parse "origin/$BRANCH^")"
+            if [ "$COMMIT_COUNT" != '1' ] || [ "$PARENT_SHA" != "$SOURCE_HEAD" ]; then
+              echo "legacy source proposal is not a single commit directly above source head" >&2
+              exit 1
+            fi
+            BASE_SHA="$PARENT_SHA"
+          fi
+          if ! printf '%s' "$BASE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "invalid recovered base SHA" >&2
+            exit 1
+          fi
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "$BASE_SHA" origin/main; then
+            echo "recovered base is not an ancestor of current main" >&2
+            exit 1
+          fi
+          echo "contract_valid=true" >> "$GITHUB_OUTPUT"
+          echo "issue_number=$TASK_ISSUE" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "task_sha=$TASK_SHA" >> "$GITHUB_OUTPUT"
+          echo "prompt_sha=$PROMPT_SHA" >> "$GITHUB_OUTPUT"
+          echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
+          echo "risk=$RISK" >> "$GITHUB_OUTPUT"
+
+      - name: Respect human stop before recovery verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.contract.outputs.issue_number }}
+        run: |
+          LABELS="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$LABELS" | grep -Eq '^(needs:human|agent:paused)$'; then
+            echo "Human stop is active; refusing recovery." >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$LABELS" | grep -qx 'agent:working'; then
+            echo "Issue must be explicitly restored to agent:working before publication recovery." >&2
+            exit 1
+          fi
+
+      - name: Reconstruct and independently verify source proposal
+        id: verify
+        env:
+          BASE_SHA: ${{ steps.contract.outputs.base_sha }}
+        run: |
+          (cd "$RUNNER_TEMP" && sha256sum -c ledger-recovery-controls.sha256)
+          mkdir -p "$RUNNER_TEMP/ledger-base-tree" "$RUNNER_TEMP/ledger-model-tree"
+          git archive "$BASE_SHA" | /usr/bin/tar -x -C "$RUNNER_TEMP/ledger-base-tree"
+          /usr/bin/tar -xf "$RUNNER_TEMP/ledger-implementation-artifact/ledger-implementation-tree.tar" \
+            -C "$RUNNER_TEMP/ledger-model-tree"
+          python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" check \
+            --source "$RUNNER_TEMP/ledger-model-tree" \
+            --base-tree "$RUNNER_TEMP/ledger-base-tree" \
+            --allowed-paths-file "$RUNNER_TEMP/ledger-task-contract/task.json" \
+            --manifest-out "$RUNNER_TEMP/ledger-expected-manifest.json"
+          git checkout --detach "$BASE_SHA"
+          git reset --hard "$BASE_SHA"
+          git clean -fdx
+          python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" apply \
+            --source "$RUNNER_TEMP/ledger-model-tree" \
+            --destination "$GITHUB_WORKSPACE" \
+            --manifest "$RUNNER_TEMP/ledger-expected-manifest.json"
+          python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" check \
+            --source "$GITHUB_WORKSPACE" \
+            --base-tree "$RUNNER_TEMP/ledger-base-tree" \
+            --allowed-paths-file "$RUNNER_TEMP/ledger-task-contract/task.json" \
+            --manifest-out "$RUNNER_TEMP/ledger-rebuilt-manifest.json"
+          python -I -S "$RUNNER_TEMP/ledger-recovery.py" compare-manifests \
+            --expected "$RUNNER_TEMP/ledger-expected-manifest.json" \
+            --observed "$RUNNER_TEMP/ledger-rebuilt-manifest.json"
+          git -c core.hooksPath=/dev/null add -A
+          EXPECTED_TREE="$(git write-tree)"
+          if ! printf '%s' "$EXPECTED_TREE" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "could not build exact expected Git tree" >&2
+            exit 1
+          fi
+          echo "expected_tree=$EXPECTED_TREE" >> "$GITHUB_OUTPUT"
+
+      - name: Run repository tests in read-only recovery verification job
+        run: python -m unittest discover -s tests -v
+
+      - name: Verify tests did not change publishable proposal
+        run: |
+          python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" check \
+            --source "$GITHUB_WORKSPACE" \
+            --base-tree "$RUNNER_TEMP/ledger-base-tree" \
+            --allowed-paths-file "$RUNNER_TEMP/ledger-task-contract/task.json" \
+            --manifest-out "$RUNNER_TEMP/ledger-posttest-manifest.json"
+          python -I -S "$RUNNER_TEMP/ledger-recovery.py" compare-manifests \
+            --expected "$RUNNER_TEMP/ledger-expected-manifest.json" \
+            --observed "$RUNNER_TEMP/ledger-posttest-manifest.json"
+
+      - name: Record recovery verification evidence
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          ISSUE_NUMBER: ${{ steps.contract.outputs.issue_number }}
+          BRANCH: ${{ steps.contract.outputs.branch }}
+          BASE_SHA: ${{ steps.contract.outputs.base_sha }}
+          EXPECTED_TREE: ${{ steps.verify.outputs.expected_tree }}
+          TASK_SHA: ${{ steps.contract.outputs.task_sha }}
+          PROMPT_SHA: ${{ steps.contract.outputs.prompt_sha }}
+          TASK_ARTIFACT_ID: ${{ steps.source.outputs.task_artifact_id }}
+          IMPLEMENTATION_ARTIFACT_ID: ${{ steps.source.outputs.implementation_artifact_id }}
+          TASK_ARTIFACT_DIGEST: ${{ steps.source.outputs.task_artifact_digest }}
+          IMPLEMENTATION_ARTIFACT_DIGEST: ${{ steps.source.outputs.implementation_artifact_digest }}
+        run: |
+          jq -n \
+            --arg source_run_id "$SOURCE_RUN_ID" \
+            --arg issue_number "$ISSUE_NUMBER" \
+            --arg branch "$BRANCH" \
+            --arg base_sha "$BASE_SHA" \
+            --arg expected_tree "$EXPECTED_TREE" \
+            --arg task_sha "$TASK_SHA" \
+            --arg prompt_sha "$PROMPT_SHA" \
+            --arg task_artifact_id "$TASK_ARTIFACT_ID" \
+            --arg implementation_artifact_id "$IMPLEMENTATION_ARTIFACT_ID" \
+            --arg task_artifact_digest "$TASK_ARTIFACT_DIGEST" \
+            --arg implementation_artifact_digest "$IMPLEMENTATION_ARTIFACT_DIGEST" \
+            '{source_run_id:$source_run_id,issue_number:$issue_number,branch:$branch,base_sha:$base_sha,expected_tree:$expected_tree,task_sha:$task_sha,prompt_sha:$prompt_sha,task_artifact_id:$task_artifact_id,implementation_artifact_id:$implementation_artifact_id,task_artifact_digest:$task_artifact_digest,implementation_artifact_digest:$implementation_artifact_digest}' \
+            > "$RUNNER_TEMP/ledger-recovery-evidence.json"
+
+      - name: Upload recovery verification evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ledger-recovery-verification-evidence
+          path: ${{ runner.temp }}/ledger-recovery-evidence.json
+          if-no-files-found: error
+          retention-days: 3
+
+  recover-publish-review:
+    needs: verify-recovery-source
+    if: needs.verify-recovery-source.result == 'success' && needs.verify-recovery-source.outputs.contract_valid == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      QA_REVIEW_PATH: /tmp/ledger-recovery-qa-review.json
+      SECURITY_REVIEW_PATH: /tmp/ledger-recovery-security-review.json
+    steps:
+      - name: Freeze current protected-main recovery controls
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          if [ "$GITHUB_REF" != 'refs/heads/main' ]; then
+            echo "Publication recovery must run from protected main." >&2
+            exit 1
+          fi
+          for SPEC in \
+            'agent_operator/recovery.py:ledger-recovery.py' \
+            'agent_operator/scope_guard.py:ledger-scope-guard.py' \
+            'agent_operator/review_gate.py:ledger-review-gate.py' \
+            'agent_operator/review_schema.json:ledger-review-schema.json'; do
+            SOURCE="${SPEC%%:*}"
+            DEST="${SPEC##*:}"
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "/repos/$GITHUB_REPOSITORY/contents/$SOURCE?ref=$WORKFLOW_SHA" > "$RUNNER_TEMP/$DEST"
+          done
+          (cd "$RUNNER_TEMP" && sha256sum \
+            ledger-recovery.py ledger-scope-guard.py ledger-review-gate.py ledger-review-schema.json \
+            > ledger-recovery-controls.sha256)
+          chmod a-w "$RUNNER_TEMP"/ledger-recovery.py "$RUNNER_TEMP"/ledger-scope-guard.py \
+            "$RUNNER_TEMP"/ledger-review-gate.py "$RUNNER_TEMP"/ledger-review-schema.json \
+            "$RUNNER_TEMP"/ledger-recovery-controls.sha256
+
+      - name: Checkout exact recovered base without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify-recovery-source.outputs.base_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Download frozen source artifacts again
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ledger-task-contract
+          path: ${{ runner.temp }}/ledger-task-contract
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download implementation tree again
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ledger-implementation-tree
+          path: ${{ runner.temp }}/ledger-implementation-artifact
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Reconstruct exact proposal and exact expected Git tree again
+        id: rebuild
+        env:
+          BASE_SHA: ${{ needs.verify-recovery-source.outputs.base_sha }}
+          EXPECTED_TASK_SHA: ${{ needs.verify-recovery-source.outputs.task_sha }}
+          EXPECTED_PROMPT_SHA: ${{ needs.verify-recovery-source.outputs.prompt_sha }}
+          EXPECTED_TREE_FROM_VERIFY: ${{ needs.verify-recovery-source.outputs.expected_tree }}
+        run: |
+          (cd "$RUNNER_TEMP" && sha256sum -c ledger-recovery-controls.sha256)
+          test "$(sha256sum "$RUNNER_TEMP/ledger-task-contract/task.json" | cut -d' ' -f1)" = "$EXPECTED_TASK_SHA"
+          test "$(sha256sum "$RUNNER_TEMP/ledger-task-contract/prompt.md" | cut -d' ' -f1)" = "$EXPECTED_PROMPT_SHA"
+          mkdir -p "$RUNNER_TEMP/ledger-base-tree" "$RUNNER_TEMP/ledger-model-tree"
+          git archive "$BASE_SHA" | /usr/bin/tar -x -C "$RUNNER_TEMP/ledger-base-tree"
+          /usr/bin/tar -xf "$RUNNER_TEMP/ledger-implementation-artifact/ledger-implementation-tree.tar" \
+            -C "$RUNNER_TEMP/ledger-model-tree"
+          python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" check \
+            --source "$RUNNER_TEMP/ledger-model-tree" \
+            --base-tree "$RUNNER_TEMP/ledger-base-tree" \
+            --allowed-paths-file "$RUNNER_TEMP/ledger-task-contract/task.json" \
+            --manifest-out "$RUNNER_TEMP/ledger-expected-manifest.json"
+          git checkout --detach "$BASE_SHA"
+          git reset --hard "$BASE_SHA"
+          git clean -fdx
+          python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" apply \
+            --source "$RUNNER_TEMP/ledger-model-tree" \
+            --destination "$GITHUB_WORKSPACE" \
+            --manifest "$RUNNER_TEMP/ledger-expected-manifest.json"
+          git -c core.hooksPath=/dev/null add -A
+          EXPECTED_TREE="$(git write-tree)"
+          test "$EXPECTED_TREE" = "$EXPECTED_TREE_FROM_VERIFY"
+          echo "expected_tree=$EXPECTED_TREE" >> "$GITHUB_OUTPUT"
+
+      - name: Respect human stop before branch publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.verify-recovery-source.outputs.issue_number }}
+        run: |
+          LABELS="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$LABELS" | grep -Eq '^(needs:human|agent:paused)$'; then
+            echo "Human stop is active; refusing publication." >&2
+            exit 1
+          fi
+          printf '%s\n' "$LABELS" | grep -qx 'agent:working'
+
+      - name: Reuse only exact proposal Git tree or push once when absent
+        id: branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ needs.verify-recovery-source.outputs.branch }}
+          BASE_SHA: ${{ needs.verify-recovery-source.outputs.base_sha }}
+          EXPECTED_TREE: ${{ steps.rebuild.outputs.expected_tree }}
+          ISSUE_NUMBER: ${{ needs.verify-recovery-source.outputs.issue_number }}
+        run: |
+          gh auth setup-git
+          if git ls-remote --exit-code --heads origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$BRANCH:refs/remotes/origin/$BRANCH"
+            REMOTE_TREE="$(git rev-parse "origin/$BRANCH^{tree}")"
+            PARENT_SHA="$(git rev-parse "origin/$BRANCH^")"
+            COMMIT_COUNT="$(git rev-list --count "$BASE_SHA..origin/$BRANCH")"
+            python -I -S "$RUNNER_TEMP/ledger-recovery.py" branch-action \
+              --expected-tree "$EXPECTED_TREE" --base-sha "$BASE_SHA" \
+              --remote-tree "$REMOTE_TREE" --parent-sha "$PARENT_SHA" --commit-count "$COMMIT_COUNT" \
+              | grep -qx 'reuse'
+            git switch --detach "origin/$BRANCH"
+          else
+            git checkout -B "$BRANCH" "$BASE_SHA"
+            git reset --hard "$BASE_SHA"
+            git clean -fdx
+            python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" apply \
+              --source "$RUNNER_TEMP/ledger-model-tree" \
+              --destination "$GITHUB_WORKSPACE" \
+              --manifest "$RUNNER_TEMP/ledger-expected-manifest.json"
+            git config user.name "ledger-agent[bot]"
+            git config user.email "ledger-agent[bot]@users.noreply.github.com"
+            git -c core.hooksPath=/dev/null add -A
+            git -c core.hooksPath=/dev/null commit -m "Agent implementation for issue #$ISSUE_NUMBER"
+            test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
+            git -c core.hooksPath=/dev/null push --set-upstream origin "$BRANCH"
+          fi
+          REVIEWED_SHA="$(git rev-parse HEAD)"
+          REMOTE_SHA="$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)"
+          test "$REMOTE_SHA" = "$REVIEWED_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
+          echo "reviewed_sha=$REVIEWED_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Reuse only exact same-repo draft PR or create once
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ needs.verify-recovery-source.outputs.branch }}
+          REVIEWED_SHA: ${{ steps.branch.outputs.reviewed_sha }}
+          ISSUE_NUMBER: ${{ needs.verify-recovery-source.outputs.issue_number }}
+          OWNER: ${{ needs.verify-recovery-source.outputs.owner }}
+          RISK: ${{ needs.verify-recovery-source.outputs.risk }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          REPO_OWNER="${GITHUB_REPOSITORY%%/*}"
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --head "$BRANCH" --base main \
+            --json url,isDraft,isCrossRepository,headRepositoryOwner,baseRefName,headRefOid \
+            > "$RUNNER_TEMP/ledger-open-prs.json"
+          DECISION="$(python -I -S "$RUNNER_TEMP/ledger-recovery.py" pr-action \
+            --prs-json "$RUNNER_TEMP/ledger-open-prs.json" \
+            --expected-head "$REVIEWED_SHA" --expected-owner "$REPO_OWNER" --expected-base main)"
+          ACTION="$(printf '%s' "$DECISION" | jq -r '.action')"
+          PR_URL="$(printf '%s' "$DECISION" | jq -r '.url // empty')"
+          if [ "$ACTION" = 'create' ]; then
+            CLOSED_COUNT="$(gh pr list --repo "$GITHUB_REPOSITORY" --state closed --head "$BRANCH" --base main --json number --jq 'length')"
+            if [ "$CLOSED_COUNT" != '0' ]; then
+              echo "a previous PR for this proposal branch was closed; human review is required before creating another" >&2
+              exit 1
+            fi
+            TITLE="$(python -I -S -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["issue"]["title"])' "$RUNNER_TEMP/ledger-task-contract/task.json")"
+            BODY_FILE="$RUNNER_TEMP/ledger-recovery-pr-body.md"
+            cat > "$BODY_FILE" <<EOF
+          ## Autonomous agent work — recovered publication
+
+          Relates to #$ISSUE_NUMBER. Source executor run: \`$SOURCE_RUN_ID\`.
+          Reviewed proposal commit: \`$REVIEWED_SHA\`.
+
+          - Primary owner: \`$OWNER\`
+          - Risk: \`$RISK\`
+          - Recovery independently re-ran scope verification and repository tests without an implementation model call.
+          - Existing proposal branches are reused only when their exact Git tree matches the verified proposal.
+          - QA and Security/Data Integrity reviewers are read-only.
+          - This PR is intentionally **draft** and still requires protected-branch CI and human merge review.
+          - No deployment, external action, or merge was performed.
+          EOF
+            PR_URL="$(gh pr create --draft --base main --head "$BRANCH" --title "Agent: $TITLE" --body-file "$BODY_FILE")"
+            gh pr view "$PR_URL" --json url,isDraft,isCrossRepository,headRepositoryOwner,baseRefName,headRefOid \
+              | jq '[.]' > "$RUNNER_TEMP/ledger-created-pr.json"
+            python -I -S "$RUNNER_TEMP/ledger-recovery.py" pr-action \
+              --prs-json "$RUNNER_TEMP/ledger-created-pr.json" \
+              --expected-head "$REVIEWED_SHA" --expected-owner "$REPO_OWNER" --expected-base main >/dev/null
+          fi
+          test -n "$PR_URL"
+          echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Recheck human stop and exact remote/PR commit before reviewers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.verify-recovery-source.outputs.issue_number }}
+          BRANCH: ${{ needs.verify-recovery-source.outputs.branch }}
+          REVIEWED_SHA: ${{ steps.branch.outputs.reviewed_sha }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          LABELS="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$LABELS" | grep -Eq '^(needs:human|agent:paused)$'; then exit 1; fi
+          test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$REVIEWED_SHA"
+          test "$(gh pr view "$PR_URL" --json headRefOid --jq '.headRefOid')" = "$REVIEWED_SHA"
+          (cd "$RUNNER_TEMP" && sha256sum -c ledger-recovery-controls.sha256)
+
+      - name: Prepare independent QA recovery review prompt
+        run: |
+          cat > "$RUNNER_TEMP/ledger-recovery-qa-prompt.md" <<'EOF'
+          Act as LEDGER's independent QA / Critic reviewer. Read AGENTS.md, PROJECT_BRIEF.md,
+          docs/AI_ENGINEERING_PIPELINE.md, and .github/agents/qa-critic.agent.md. Inspect ONLY the
+          changes in origin/main...HEAD. Do not modify any file. Try to disprove correctness. Check
+          acceptance intent, regressions, edge cases, misleading claims, skipped validation, test
+          quality, and whether the change is actually supported by repository evidence. Return the
+          required structured JSON. A pass means there is no concrete blocking correctness or trust
+          defect in the scoped change.
+          Top-level keys must be exactly verdict, summary, findings, and tests; all four are required. Use an empty tests array when there is no test evidence; do not add any other top-level keys.
+          --- FROZEN TASK CONTRACT JSON ---
+          EOF
+          cat "$RUNNER_TEMP/ledger-task-contract/task.json" >> "$RUNNER_TEMP/ledger-recovery-qa-prompt.md"
+
+      - name: Run read-only independent QA recovery reviewer
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':read-only'
+          working-directory: ${{ github.workspace }}
+          prompt-file: ${{ runner.temp }}/ledger-recovery-qa-prompt.md
+          output-schema-file: ${{ runner.temp }}/ledger-review-schema.json
+          output-file: ${{ env.QA_REVIEW_PATH }}
+          effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
+          model: ${{ vars.LEDGER_CODEX_REVIEW_MODEL }}
+
+      - name: Verify QA evidence is still pinned to exact proposal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ needs.verify-recovery-source.outputs.branch }}
+          REVIEWED_SHA: ${{ steps.branch.outputs.reviewed_sha }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          EXPECTED_TREE: ${{ steps.rebuild.outputs.expected_tree }}
+        run: |
+          test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$REVIEWED_SHA"
+          test "$(gh pr view "$PR_URL" --json headRefOid --jq '.headRefOid')" = "$REVIEWED_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
+          python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" check \
+            --source "$GITHUB_WORKSPACE" --base-tree "$RUNNER_TEMP/ledger-base-tree" \
+            --allowed-paths-file "$RUNNER_TEMP/ledger-task-contract/task.json" \
+            --manifest-out "$RUNNER_TEMP/ledger-after-qa.json"
+          python -I -S "$RUNNER_TEMP/ledger-recovery.py" compare-manifests \
+            --expected "$RUNNER_TEMP/ledger-expected-manifest.json" --observed "$RUNNER_TEMP/ledger-after-qa.json"
+
+      - name: Post QA recovery evidence for reviewed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          REVIEWED_SHA: ${{ steps.branch.outputs.reviewed_sha }}
+        run: |
+          { printf 'Reviewed commit: `%s`\n\n' "$REVIEWED_SHA"; cat "$QA_REVIEW_PATH"; } > "$RUNNER_TEMP/qa-comment.md"
+          gh pr comment "$PR_URL" --body-file "$RUNNER_TEMP/qa-comment.md"
+
+      - name: Prepare Security & Data Integrity recovery review prompt
+        run: |
+          cat > "$RUNNER_TEMP/ledger-recovery-security-prompt.md" <<'EOF'
+          Act as LEDGER's independent Security & Data Integrity reviewer. Read AGENTS.md,
+          PROJECT_BRIEF.md, and .github/agents/security-integrity.agent.md. Inspect ONLY the changes
+          in origin/main...HEAD. Do not modify any file. Focus on secrets, auth/authorization,
+          permissions, tenant/data boundaries, financial semantics, transaction provenance,
+          double-counting risk, destructive behavior, third-party integration trust boundaries,
+          auditability, and whether any claim exceeds the evidence. Return the required structured JSON.
+          Top-level keys must be exactly verdict, summary, findings, and tests; all four are required. Use an empty tests array when there is no test evidence; do not add any other top-level keys.
+          --- FROZEN TASK CONTRACT JSON ---
+          EOF
+          cat "$RUNNER_TEMP/ledger-task-contract/task.json" >> "$RUNNER_TEMP/ledger-recovery-security-prompt.md"
+
+      - name: Run read-only Security & Data Integrity recovery reviewer
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':read-only'
+          working-directory: ${{ github.workspace }}
+          prompt-file: ${{ runner.temp }}/ledger-recovery-security-prompt.md
+          output-schema-file: ${{ runner.temp }}/ledger-review-schema.json
+          output-file: ${{ env.SECURITY_REVIEW_PATH }}
+          effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
+          model: ${{ vars.LEDGER_CODEX_REVIEW_MODEL }}
+
+      - name: Verify Security evidence is still pinned to exact proposal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ needs.verify-recovery-source.outputs.branch }}
+          REVIEWED_SHA: ${{ steps.branch.outputs.reviewed_sha }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          EXPECTED_TREE: ${{ steps.rebuild.outputs.expected_tree }}
+        run: |
+          test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$REVIEWED_SHA"
+          test "$(gh pr view "$PR_URL" --json headRefOid --jq '.headRefOid')" = "$REVIEWED_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
+          python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" check \
+            --source "$GITHUB_WORKSPACE" --base-tree "$RUNNER_TEMP/ledger-base-tree" \
+            --allowed-paths-file "$RUNNER_TEMP/ledger-task-contract/task.json" \
+            --manifest-out "$RUNNER_TEMP/ledger-after-security.json"
+          python -I -S "$RUNNER_TEMP/ledger-recovery.py" compare-manifests \
+            --expected "$RUNNER_TEMP/ledger-expected-manifest.json" --observed "$RUNNER_TEMP/ledger-after-security.json"
+          (cd "$RUNNER_TEMP" && sha256sum -c ledger-recovery-controls.sha256)
+
+      - name: Post Security recovery evidence for reviewed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          REVIEWED_SHA: ${{ steps.branch.outputs.reviewed_sha }}
+        run: |
+          { printf 'Reviewed commit: `%s`\n\n' "$REVIEWED_SHA"; cat "$SECURITY_REVIEW_PATH"; } > "$RUNNER_TEMP/security-comment.md"
+          gh pr comment "$PR_URL" --body-file "$RUNNER_TEMP/security-comment.md"
+
+      - name: Evaluate independent recovery review gate using frozen protected-main code
+        id: review_gate
+        continue-on-error: true
+        run: |
+          (cd "$RUNNER_TEMP" && sha256sum -c ledger-recovery-controls.sha256)
+          python -I -S "$RUNNER_TEMP/ledger-review-gate.py" "$QA_REVIEW_PATH" "$SECURITY_REVIEW_PATH"
+
+      - name: Promote only unchanged reviewed commit to awaiting human review
+        if: steps.review_gate.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.verify-recovery-source.outputs.issue_number }}
+          BRANCH: ${{ needs.verify-recovery-source.outputs.branch }}
+          REVIEWED_SHA: ${{ steps.branch.outputs.reviewed_sha }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          LABELS="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$LABELS" | grep -Eq '^(needs:human|agent:paused)$'; then exit 1; fi
+          test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$REVIEWED_SHA"
+          test "$(gh pr view "$PR_URL" --json headRefOid --jq '.headRefOid')" = "$REVIEWED_SHA"
+          for LABEL in agent:ready agent:claimed agent:working agent:blocked; do
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL" >/dev/null 2>&1 || true
+          done
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label 'agent:awaiting-review'
+          FINAL="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$FINAL" | grep -Eq '^(needs:human|agent:paused)$'; then
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label 'agent:awaiting-review' >/dev/null 2>&1 || true
+            echo "Human stop raced lifecycle promotion; preserving human authority." >&2
+            exit 1
+          fi
+          printf '%s\n' "$FINAL" | grep -qx 'agent:awaiting-review'
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Publication recovery completed without another implementation model call. QA and Security/Data Integrity reviewed exact commit \`$REVIEWED_SHA\`. Draft PR: $PR_URL. Protected-branch CI and human merge review remain required."
+
+      - name: Stop on recovery reviewer rejection
+        if: steps.review_gate.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.verify-recovery-source.outputs.issue_number }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          REVIEWED_SHA: ${{ steps.branch.outputs.reviewed_sha }}
+        run: |
+          CURRENT="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$CURRENT" | grep -Eq '^(needs:human|agent:paused)$'; then exit 1; fi
+          for LABEL in agent:ready agent:claimed agent:working agent:awaiting-review; do
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL" >/dev/null 2>&1 || true
+          done
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label 'agent:blocked'
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Recovery reviewer gate rejected or escalated exact commit \`$REVIEWED_SHA\`. Draft PR preserved: $PR_URL."
+          exit 1
+
+  fail-safe-recovery:
+    needs: [verify-recovery-source, recover-publish-review]
+    if: >-
+      always() &&
+      needs.verify-recovery-source.outputs.contract_valid == 'true' &&
+      needs.recover-publish-review.result != 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Recover validated issue lifecycle without repository code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.verify-recovery-source.outputs.issue_number }}
+        run: |
+          CURRENT="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$CURRENT" | grep -Eq '^(needs:human|agent:paused)$'; then
+            gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+              "Publication recovery failed, but the existing human stop was preserved. Inspect the recovery workflow before any retry."
+            exit 0
+          fi
+          if printf '%s\n' "$CURRENT" | grep -qx 'agent:blocked'; then exit 0; fi
+          for LABEL in agent:ready agent:claimed agent:working agent:awaiting-review; do
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL" >/dev/null 2>&1 || true
+          done
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label 'agent:blocked'
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Publication recovery stopped before exact-commit review completed. Lifecycle was recovered by the fail-safe job."
