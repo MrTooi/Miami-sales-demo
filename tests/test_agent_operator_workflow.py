@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLANNER = ROOT / ".github" / "workflows" / "agent-operator.yml"
 EXECUTOR = ROOT / ".github" / "workflows" / "agent-executor.yml"
+EXECUTOR_TRIGGER = ROOT / ".github" / "workflows" / "agent-executor-trigger.yml"
 CODEX_ACTION_SHA = "a8d8be6ee028bea4525bc722d16f36687b408c81"
 UPLOAD_ARTIFACT_SHA = "ea165f8d65b6e75b540449e92b4886f43607fa02"
 DOWNLOAD_ARTIFACT_SHA = "d3f86a106a0bac45b974a628896c90dbdf5c8093"
@@ -49,6 +50,31 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
             self.assertIn(job, text)
         for timeout in ("timeout-minutes: 10", "timeout-minutes: 30", "timeout-minutes: 20", "timeout-minutes: 25", "timeout-minutes: 5"):
             self.assertIn(timeout, text)
+
+    def test_executor_owner_trigger_is_exact_owner_only_and_minimal(self):
+        text = EXECUTOR_TRIGGER.read_text(encoding="utf-8")
+        self.assertIn("issue_comment:", text)
+        self.assertIn("permissions: {}", text)
+        self.assertIn("github.event.issue.pull_request == null", text)
+        self.assertIn("github.actor == github.repository_owner", text)
+        self.assertIn("github.event.comment.user.login == github.repository_owner", text)
+        self.assertIn("github.event.comment.body == '/agent-run'", text)
+        self.assertNotIn("contains(github.event.comment.body", text)
+        self.assertIn("contains(github.event.issue.labels.*.name, 'agent:ready')", text)
+        dispatch = text.split("  dispatch:", 1)[1]
+        self.assertIn("actions: write", dispatch)
+        self.assertNotIn("contents: write", dispatch)
+        self.assertNotIn("issues: write", dispatch)
+        self.assertNotIn("pull-requests: write", dispatch)
+        self.assertNotIn("actions/checkout", text)
+        self.assertIn("gh workflow run agent-executor.yml", text)
+        self.assertIn("--ref main", text)
+
+    def test_executor_only_allows_trusted_github_actions_bot(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        self.assertEqual(text.count("allow-bots: true"), 3)
+        self.assertNotIn("allow-users:", text)
+        self.assertNotIn("allow-bot-users:", text)
 
     def test_executor_uses_pinned_actions_and_never_automatic_claude(self):
         text = EXECUTOR.read_text(encoding="utf-8")
