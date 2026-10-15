@@ -40,6 +40,18 @@ class AgentScopeGuardTests(unittest.TestCase):
         self.assertEqual(len(paths), len(errors))
         self.assertTrue(all("protected" in error for error in errors))
 
+    def test_protected_top_level_modules_cannot_be_shadowed_by_new_packages(self):
+        paths = [
+            "finance_engine/__init__.py",
+            "transaction_integrity/helpers.py",
+            "ledger_store/__init__.py",
+            "app_ledger/routes.py",
+            "opportunity_radar/scoring/__init__.py",
+        ]
+        errors = validate_changed_paths(paths)
+        self.assertEqual(len(paths), len(errors))
+        self.assertTrue(all("protected" in error for error in errors))
+
     def test_large_autonomous_change_is_rejected(self):
         paths = [f"safe/file_{index}.py" for index in range(MAX_CHANGED_FILES + 1)]
         errors = validate_changed_paths(paths)
@@ -163,6 +175,36 @@ class AgentScopeGuardTests(unittest.TestCase):
             _, errors = build_manifest(source, base)
             self.assertTrue(any("non-regular" in error and "link.txt" in error for error in errors))
             self.assertTrue(any("executable-bit" in error and "tool.py" in error for error in errors))
+
+    def test_replacing_base_symlink_with_regular_file_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base, source = self._trees(directory)
+            (base / "target.txt").write_text("target\n", encoding="utf-8")
+            os.symlink("target.txt", base / "link.txt")
+            (source / "target.txt").write_text("target\n", encoding="utf-8")
+            (source / "link.txt").write_text("replacement\n", encoding="utf-8")
+
+            _, errors = build_manifest(source, base)
+            self.assertTrue(any("non-regular base entry" in error and "link.txt" in error for error in errors))
+
+    def test_materialization_refuses_symlink_destination_even_for_verified_regular_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = root / "base"
+            source = root / "source"
+            destination = root / "destination"
+            for path in (base, source, destination):
+                path.mkdir()
+
+            (base / "safe.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (source / "safe.py").write_text("VALUE = 2\n", encoding="utf-8")
+            (destination / "target.py").write_text("TARGET = True\n", encoding="utf-8")
+            os.symlink("target.py", destination / "safe.py")
+
+            manifest, errors = build_manifest(source, base)
+            self.assertEqual([], errors)
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                apply_manifest(source, destination, manifest)
 
     def test_verified_manifest_materializes_into_clean_checkout(self):
         with tempfile.TemporaryDirectory() as directory:
