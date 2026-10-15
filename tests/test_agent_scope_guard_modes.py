@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_operator.scope_guard import build_manifest, snapshot_tree
+from agent_operator.scope_guard import apply_manifest, build_manifest, snapshot_tree
 
 
 class AgentScopeGuardModeRegressionTests(unittest.TestCase):
@@ -52,6 +52,36 @@ class AgentScopeGuardModeRegressionTests(unittest.TestCase):
             self.assertTrue(any("executable-bit addition" in error for error in errors))
             self.assertEqual(0o644, manifest["changes"][0]["before"]["mode"])
             self.assertEqual(0o755, manifest["changes"][0]["after"]["mode"])
+
+    def test_materialization_rejects_non_normalized_manifest_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            destination = root / "destination"
+            source.mkdir()
+            destination.mkdir()
+
+            source_file = source / "safe.py"
+            source_file.write_text("VALUE = 1\n", encoding="utf-8")
+            source_file.chmod(0o644)
+            after = snapshot_tree(source)["safe.py"]
+            after = dict(after)
+            after["mode"] = 0o4755
+            manifest = {
+                "version": 1,
+                "changes": [
+                    {
+                        "path": "safe.py",
+                        "operation": "add",
+                        "before": None,
+                        "after": after,
+                    }
+                ],
+            }
+
+            with self.assertRaisesRegex(ValueError, "unsupported normalized file mode"):
+                apply_manifest(source, destination, manifest)
+            self.assertFalse((destination / "safe.py").exists())
 
 
 if __name__ == "__main__":
