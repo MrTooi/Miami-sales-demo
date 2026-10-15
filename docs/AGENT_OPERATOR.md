@@ -63,11 +63,11 @@ It:
 4. finds and re-fetches the next eligible `agent:ready` issue,
 5. refuses autonomous pickup for an untrusted issue author,
 6. applies human gates before any model call,
-7. requires a machine-readable `## Allowed files` section with exact backtick repository paths,
-8. rejects globs, parent-directory escapes, `.git` paths, and missing file boundaries,
+7. requires a machine-readable `## Allowed files` section with one exact backtick repository path per bullet,
+8. rejects globs, parent-directory escapes, `.git` paths, protected/high-trust paths, missing file boundaries, and over-broad scopes,
 9. claims the issue,
-10. re-fetches the issue and stops if its title/body changed during claim,
-11. freezes the issue contract, routing plan, exact allowed paths, and contract fingerprint into an immutable workflow artifact,
+10. re-fetches the issue and stops if its title, body, or any non-lifecycle safety/routing label changed during claim,
+11. freezes the issue contract, routing plan, exact allowed paths, contract fingerprint, generated implementation prompt, and hashes for both task JSON and prompt into an immutable workflow artifact,
 12. marks the issue `agent:working` only after that artifact exists.
 
 For the initial rollout, autonomous tasks without an exact file allowlist fail closed to `needs:human`.
@@ -79,7 +79,7 @@ The implementation job has `contents: read` repository permission. It does **not
 It:
 
 1. checks out the exact claimed base SHA without persisted Git credentials,
-2. downloads and verifies the frozen task artifact,
+2. downloads and verifies both hashes in the frozen task artifact,
 3. runs the implementation model with the workspace permission profile,
 4. gives the model the exact allowed-path list in its prompt,
 5. captures the resulting repository filesystem into an artifact while excluding `.git` metadata.
@@ -97,48 +97,63 @@ The verification job has repository read permission only and receives no OpenAI 
 It:
 
 1. checks out the exact claimed base SHA,
-2. reconstructs a trusted base tree,
-3. extracts the implementation artifact into a separate model tree,
-4. compares raw filesystem state rather than model-controlled git metadata,
-5. enforces the frozen per-task file allowlist,
-6. rejects protected control-plane/high-trust files,
-7. rejects autonomous deletions,
-8. rejects edits to existing tests,
-9. permits new tests only when they are explicitly allowlisted `tests/test_*.py` files,
-10. rejects symlinks, special files, and newly-added executable bits,
-11. ignores only newly-created generated Python cache artifacts because those artifacts are never materialized into the proposal,
-12. produces a deterministic change manifest,
-13. materializes only verified regular files into a clean base checkout,
-14. confirms the reconstruction exactly matches the manifest,
-15. runs the full repository test suite,
-16. re-checks the filesystem afterward and fails if tests changed the publishable proposal.
+2. downloads and verifies both task-contract hashes again,
+3. reconstructs a trusted base tree,
+4. extracts the implementation artifact into a separate model tree,
+5. compares raw filesystem state rather than model-controlled git metadata,
+6. enforces the frozen per-task file allowlist,
+7. rejects protected control-plane/high-trust files and package/module shadow paths,
+8. rejects autonomous deletions,
+9. rejects edits to existing tests,
+10. permits new tests only when they are explicitly allowlisted `tests/test_*.py` files,
+11. rejects symlinks, special files, replacements of non-regular base entries, unsafe destination symlinks, and newly-added executable bits,
+12. ignores only newly-created generated Python cache artifacts because those artifacts are never materialized into the proposal,
+13. produces a deterministic change manifest,
+14. materializes only verified regular files into a clean base checkout,
+15. confirms the reconstruction exactly matches the manifest,
+16. makes the trusted base tree, task contract, and accepted manifest read-only before proposed code is executed,
+17. runs the repository test command in the no-write-token job,
+18. re-checks the filesystem afterward using the locked trusted guard and fails if tests changed the publishable proposal.
 
 A proposal with no verified repository change fails instead of opening an empty PR.
+
+### What the verification test result means
+
+The test command is useful correctness evidence, but model-authored product/test code can influence its own Python process. Therefore Agent OS does **not** treat that command alone as equivalent to independent protected-branch CI.
+
+The draft PR states only that the repository test command returned success in the isolated no-write-token job. A human-reviewed, branch-protected status check is still required before merge. This avoids overstating evidence while keeping the no-write verification stage useful.
 
 ## Job 4 — clean publication and read-only reviews
 
 Only after isolated verification succeeds does a fresh publication job receive repository contents-write permission.
 
-It independently repeats the scope check from the raw implementation artifact and frozen task contract, then:
+It independently repeats the frozen-contract hash check and scope check from the raw implementation artifact, then:
 
 1. creates the reserved task branch from the exact base SHA,
 2. materializes only the verified manifest files into that clean checkout,
 3. re-confirms the proposal matches the verified manifest,
-4. commits and pushes from the clean checkout with git hooks disabled,
-5. opens a **draft** pull request,
-6. runs QA / Critic in `:read-only` mode,
-7. runs Security & Data Integrity in `:read-only` mode when required,
-8. verifies the repository proposal remained unchanged after each reviewer,
-9. evaluates structured reviewer output using trusted base code,
-10. moves the issue to `agent:awaiting-review` only if every required review gate passes.
+4. commits locally with git hooks disabled,
+5. archives the committed Git tree and compares it back to the verified manifest before any push,
+6. pushes only after the committed tree matches exactly,
+7. opens a **draft** pull request using the frozen issue title from the task artifact rather than a live mutable issue read,
+8. states explicitly that protected-branch CI and human review remain required,
+9. runs QA / Critic in `:read-only` mode,
+10. runs Security & Data Integrity in `:read-only` mode when required,
+11. verifies the repository proposal remained unchanged after each reviewer,
+12. evaluates structured reviewer output using trusted base code,
+13. moves the issue to `agent:awaiting-review` only if every required review gate passes.
 
 The workflow contains no automatic merge or deployment path.
 
+Because a PR created by `GITHUB_TOKEN` may not trigger ordinary PR workflows, the first manual trials must confirm how required CI is started in this repository. Branch protection under Issue #35 remains the authoritative merge gate.
+
 ## Separate fail-safe recovery job
 
-If implementation, verification, publication, or review fails, a separate fresh runner attempts to recover the lifecycle to `agent:blocked` without checking out or executing repository code.
+If implementation, verification, publication, or review fails, a separate fresh runner attempts to recover lifecycle state without checking out or executing repository code.
 
 It uses GitHub issue commands directly and does not trust model-modifiable Python for recovery.
+
+If a human has already placed the issue in `needs:human`, fail-safe recovery preserves that human-intervention state rather than deleting it and replacing it with `agent:blocked`.
 
 A stale-claim reaper for hard workflow cancellation/runner loss remains part of the readiness gate before unattended scheduling is enabled.
 
@@ -150,8 +165,8 @@ During the initial rollout, the issue must also:
 
 - be authored by a trusted repository association (`OWNER`, `MEMBER`, or `COLLABORATOR`),
 - contain `## Allowed files`,
-- list the exact repository files the agent may change using backticks,
-- avoid globs or implicit repository-wide scopes.
+- list one exact repository file per bullet using one backtick-delimited path,
+- avoid globs, protected/high-trust paths, or implicit repository-wide scopes.
 
 Example:
 
@@ -162,6 +177,8 @@ Create only:
 - `agent_workbench/example.py`
 - `tests/test_agent_workbench_example.py`
 ```
+
+Backticks appearing in ordinary prose inside the section do not grant file access. A bullet containing multiple backtick paths is rejected instead of guessed.
 
 The frozen task artifact is the contract used by downstream verification and reviewers. Editing the GitHub issue after claim does not silently change the active run.
 
@@ -233,6 +250,8 @@ Protected areas include:
 - Agent OS/pipeline documentation and governance tests
 - repository/dependency configuration files
 - high-trust financial, integrity, persistence, and Opportunity Radar scoring modules during the initial rollout.
+
+Package directories that could shadow protected top-level Python modules are also blocked during autonomous work.
 
 Existing tests cannot be modified or deleted autonomously. New tests are permitted only when the frozen task contract explicitly lists them and their names match `tests/test_*.py`.
 
@@ -314,7 +333,7 @@ Blind retries are not the learning mechanism.
 Do not enable unattended scheduling until all of these are true:
 
 1. Agent OS hardening changes are reviewed and merged.
-2. `main` branch protection is enabled by a human.
+2. `main` branch protection is enabled by a human, including required independent CI/status checks.
 3. `LEDGER_AGENT_EXECUTOR_ENABLED` remains false/unset during trials.
 4. Trial #25 passes end-to-end through clean-room verification and required reviews.
 5. Trial #26 proves tenant isolation.
@@ -323,8 +342,9 @@ Do not enable unattended scheduling until all of these are true:
 8. The #29 human-gate behavior is re-confirmed if control-plane changes could affect it.
 9. Scope-bypass, prompt-injection, review-gate, and failure-recovery evals pass.
 10. Stale claim/cancellation recovery is demonstrated.
-11. A final readiness review finds no Critical/High unattended-execution blocker.
-12. A human explicitly authorizes enabling unattended scheduling.
+11. The first generated draft PR demonstrates how required protected-branch CI is triggered before merge.
+12. A final readiness review finds no Critical/High unattended-execution blocker.
+13. A human explicitly authorizes enabling unattended scheduling.
 
 Opportunity Radar and other product work can continue manually under normal branch/PR review, but unattended agents must not work on sensitive product logic until this readiness gate is complete.
 
@@ -335,15 +355,16 @@ The system is not considered autonomous merely because a schedule exists.
 It is ready only when controlled trials prove that it can:
 
 1. discover only explicitly approved work,
-2. freeze the exact task contract,
+2. freeze the exact task contract and implementation prompt,
 3. claim exactly once,
 4. route and classify risk correctly,
 5. execute without publication authority,
 6. enforce exact file scope outside model-controlled git state,
-7. run tests in a separate no-write-token environment,
-8. publish only a clean reconstructed proposal,
+7. run the repository test command in a separate no-write-token environment without overstating that evidence,
+8. publish only a clean reconstructed proposal whose committed tree matches the verified manifest,
 9. obtain read-only independent review,
 10. stop for human gates,
 11. preserve enough evidence to reconstruct failures and decisions,
-12. recover lifecycle state safely,
-13. leave merge/deploy authority with humans until separately approved.
+12. recover lifecycle state safely without overriding a human intervention state,
+13. require independent protected-branch CI and human merge review,
+14. leave merge/deploy authority with humans until separately approved.
