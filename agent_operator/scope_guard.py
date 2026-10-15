@@ -41,10 +41,17 @@ PROTECTED_EXACT = {
     "tests/test_agent_scope_guard.py",
 }
 
+# Prefixes are protected both for existing files and for new files that could
+# shadow a protected top-level module/package on Python's import path.
 PROTECTED_PREFIXES = (
     "agent_operator/",
     "agent_evals/",
     ".github/",
+    "finance_engine/",
+    "transaction_integrity/",
+    "ledger_store/",
+    "app_ledger/",
+    "opportunity_radar/scoring/",
 )
 
 BENIGN_GENERATED_PARTS = {"__pycache__", ".pytest_cache"}
@@ -73,6 +80,10 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _raise_walk_error(error: OSError) -> None:
+    raise error
+
+
 def load_allowed_paths(task_contract_path: Path) -> tuple[str, ...]:
     payload = json.loads(task_contract_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -95,7 +106,8 @@ def snapshot_tree(root: Path) -> dict[str, dict]:
 
     `.git/` is intentionally excluded. The implementation workspace's index,
     config, hooks, rename detection, and ignore rules are therefore not trusted
-    inputs to the autonomous scope decision.
+    inputs to the autonomous scope decision. Filesystem traversal fails closed
+    on unreadable entries rather than silently omitting them.
     """
 
     root = root.resolve()
@@ -103,7 +115,12 @@ def snapshot_tree(root: Path) -> dict[str, dict]:
         raise ValueError(f"repository tree does not exist: {root}")
 
     snapshot: dict[str, dict] = {}
-    for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(
+        root,
+        topdown=True,
+        followlinks=False,
+        onerror=_raise_walk_error,
+    ):
         directory = Path(dirpath)
 
         kept_dirs: list[str] = []
@@ -213,6 +230,9 @@ def validate_changes(
         if operation == "delete":
             errors.append(f"autonomous deletion requires human review: {path}")
 
+        if operation == "modify" and isinstance(before, dict) and before.get("kind") != "file":
+            errors.append(f"autonomous replacement of a non-regular base entry is not allowed: {path}")
+
         if path.startswith("tests/"):
             if path in base_snapshot:
                 errors.append(f"existing test changed or deleted autonomously: {path}")
@@ -270,8 +290,31 @@ def load_manifest(path: Path) -> dict:
     return payload
 
 
+def _assert_safe_destination(destination: Path, rel: str) -> Path:
+    destination = destination.resolve()
+    relative = PurePosixPath(_normalize(rel))
+    current = destination
+    for part in relative.parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"destination parent is a symlink: {rel}")
+    target = destination.joinpath(*relative.parts)
+    if target.is_symlink():
+        raise ValueError(f"destination path is a symlink: {rel}")
+    try:
+        target.resolve(strict=False).relative_to(destination)
+    except ValueError as exc:
+        raise ValueError(f"destination escapes clean checkout: {rel}") from exc
+    return target
+
+
 def apply_manifest(source: Path, destination: Path, manifest: dict) -> None:
-    """Materialize verified regular-file changes into a clean base checkout."""
+    """Materialize verified regular-file changes into a clean base checkout.
+
+    The destination must still match the manifest's recorded base entry for a
+    modification. This prevents future symlink/base-tree changes from turning a
+    verified file copy into a write outside the intended repository path.
+    """
 
     source = source.resolve()
     destination = destination.resolve()
@@ -279,7 +322,7 @@ def apply_manifest(source: Path, destination: Path, manifest: dict) -> None:
         rel = _normalize(change["path"])
         operation = change["operation"]
         src = source / rel
-        dst = destination / rel
+        dst = _assert_safe_destination(destination, rel)
 
         if operation == "delete":
             raise ValueError(f"refusing to materialize autonomous deletion: {rel}")
@@ -289,6 +332,17 @@ def apply_manifest(source: Path, destination: Path, manifest: dict) -> None:
             raise ValueError(f"verified source is not a regular file: {rel}")
         if _sha256(src) != expected.get("sha256"):
             raise ValueError(f"source changed after verification: {rel}")
+
+        before = change.get("before")
+        if operation == "modify":
+            if not isinstance(before, dict) or before.get("kind") != "file":
+                raise ValueError(f"refusing to replace non-regular base entry: {rel}")
+            if not dst.is_file() or dst.is_symlink():
+                raise ValueError(f"clean destination no longer matches regular base file: {rel}")
+            if _sha256(dst) != before.get("sha256"):
+                raise ValueError(f"clean destination changed before materialization: {rel}")
+        elif operation == "add" and (dst.exists() or dst.is_symlink()):
+            raise ValueError(f"clean destination unexpectedly already exists: {rel}")
 
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dst)
