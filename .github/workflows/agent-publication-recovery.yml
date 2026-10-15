@@ -35,6 +35,37 @@ jobs:
       issue_number: ${{ steps.contract.outputs.issue_number }}
       pr_url: ${{ steps.pr.outputs.url }}
     steps:
+      - name: Require protected main dispatch and capture trusted recovery controls
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          if [ "$GITHUB_REF" != 'refs/heads/main' ]; then
+            echo "Publication recovery must be dispatched from protected main." >&2
+            exit 1
+          fi
+          if ! printf '%s' "$WORKFLOW_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Recovery workflow has no immutable workflow SHA." >&2
+            exit 1
+          fi
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "/repos/$GITHUB_REPOSITORY/contents/agent_operator/recovery.py?ref=$WORKFLOW_SHA" \
+            > "$RUNNER_TEMP/ledger-recovery.py"
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "/repos/$GITHUB_REPOSITORY/contents/agent_operator/scope_guard.py?ref=$WORKFLOW_SHA" \
+            > "$RUNNER_TEMP/ledger-scope-guard.py"
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "/repos/$GITHUB_REPOSITORY/contents/agent_operator/review_gate.py?ref=$WORKFLOW_SHA" \
+            > "$RUNNER_TEMP/ledger-review-gate.py"
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "/repos/$GITHUB_REPOSITORY/contents/agent_operator/review_schema.json?ref=$WORKFLOW_SHA" \
+            > "$RUNNER_TEMP/ledger-review-schema.json"
+          chmod a-w \
+            "$RUNNER_TEMP/ledger-recovery.py" \
+            "$RUNNER_TEMP/ledger-scope-guard.py" \
+            "$RUNNER_TEMP/ledger-review-gate.py" \
+            "$RUNNER_TEMP/ledger-review-schema.json"
+
       - name: Validate recovery inputs and source executor run
         id: source
         env:
@@ -73,6 +104,14 @@ jobs:
           VERIFY_OK="$(jq '[.jobs[] | select(.name == "verify-task" and .conclusion == "success")] | length' "$RUNNER_TEMP/source-jobs.json")"
           if [ "$IMPLEMENT_OK" -lt 1 ] || [ "$VERIFY_OK" -lt 1 ]; then
             echo "source run lacks successful implementation and verification evidence" >&2
+            exit 1
+          fi
+
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/source-artifacts.json"
+          TASK_ARTIFACTS="$(jq '[.artifacts[] | select(.name == "ledger-task-contract" and .expired == false)] | length' "$RUNNER_TEMP/source-artifacts.json")"
+          IMPLEMENTATION_ARTIFACTS="$(jq '[.artifacts[] | select(.name == "ledger-implementation-tree" and .expired == false)] | length' "$RUNNER_TEMP/source-artifacts.json")"
+          if [ "$TASK_ARTIFACTS" != '1' ] || [ "$IMPLEMENTATION_ARTIFACTS" != '1' ]; then
+            echo "source run must expose exactly one unexpired task artifact and one implementation artifact" >&2
             exit 1
           fi
           echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
@@ -159,10 +198,9 @@ jobs:
           /usr/bin/tar -xf "$RUNNER_TEMP/ledger-implementation-artifact/ledger-implementation-tree.tar" \
             -C "$RUNNER_TEMP/ledger-model-tree"
 
-      - name: Independently reconstruct expected verified manifest
+      - name: Independently reconstruct expected verified manifest with current trusted guard
         run: >-
-          cd "$RUNNER_TEMP/ledger-base-tree" &&
-          python -m agent_operator.scope_guard check
+          python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" check
           --source "$RUNNER_TEMP/ledger-model-tree"
           --base-tree "$RUNNER_TEMP/ledger-base-tree"
           --allowed-paths-file "$RUNNER_TEMP/ledger-task-contract/task.json"
@@ -188,26 +226,22 @@ jobs:
             rm -rf "$RUNNER_TEMP/ledger-remote-tree"
             mkdir -p "$RUNNER_TEMP/ledger-remote-tree"
             git archive "origin/$BRANCH" | /usr/bin/tar -x -C "$RUNNER_TEMP/ledger-remote-tree"
-            cd "$RUNNER_TEMP/ledger-base-tree"
-            python -m agent_operator.scope_guard check \
+            python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" check \
               --source "$RUNNER_TEMP/ledger-remote-tree" \
               --base-tree "$RUNNER_TEMP/ledger-base-tree" \
               --allowed-paths-file "$RUNNER_TEMP/ledger-task-contract/task.json" \
               --manifest-out "$RUNNER_TEMP/ledger-remote-manifest.json"
-            python -m agent_operator.recovery compare-manifests \
+            python -I -S "$RUNNER_TEMP/ledger-recovery.py" compare-manifests \
               --expected "$RUNNER_TEMP/ledger-expected-manifest.json" \
               --observed "$RUNNER_TEMP/ledger-remote-manifest.json"
-            cd "$GITHUB_WORKSPACE"
             git switch --detach "origin/$BRANCH"
             echo "action=reuse" >> "$GITHUB_OUTPUT"
           else
             git switch -c "$BRANCH" "$BASE_SHA"
-            cd "$RUNNER_TEMP/ledger-base-tree"
-            python -m agent_operator.scope_guard apply \
+            python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" apply \
               --source "$RUNNER_TEMP/ledger-model-tree" \
               --destination "$GITHUB_WORKSPACE" \
               --manifest "$RUNNER_TEMP/ledger-expected-manifest.json"
-            cd "$GITHUB_WORKSPACE"
             git config user.name "ledger-agent[bot]"
             git config user.email "ledger-agent[bot]@users.noreply.github.com"
             git -c core.hooksPath=/dev/null add -A
@@ -215,16 +249,14 @@ jobs:
             rm -rf "$RUNNER_TEMP/ledger-commit-tree"
             mkdir -p "$RUNNER_TEMP/ledger-commit-tree"
             git archive HEAD | /usr/bin/tar -x -C "$RUNNER_TEMP/ledger-commit-tree"
-            cd "$RUNNER_TEMP/ledger-base-tree"
-            python -m agent_operator.scope_guard check \
+            python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" check \
               --source "$RUNNER_TEMP/ledger-commit-tree" \
               --base-tree "$RUNNER_TEMP/ledger-base-tree" \
               --allowed-paths-file "$RUNNER_TEMP/ledger-task-contract/task.json" \
               --manifest-out "$RUNNER_TEMP/ledger-commit-manifest.json"
-            python -m agent_operator.recovery compare-manifests \
+            python -I -S "$RUNNER_TEMP/ledger-recovery.py" compare-manifests \
               --expected "$RUNNER_TEMP/ledger-expected-manifest.json" \
               --observed "$RUNNER_TEMP/ledger-commit-manifest.json"
-            cd "$GITHUB_WORKSPACE"
             git -c core.hooksPath=/dev/null push --set-upstream origin "$BRANCH"
             echo "action=push" >> "$GITHUB_OUTPUT"
           fi
@@ -241,7 +273,7 @@ jobs:
         run: |
           gh pr list --repo "$GITHUB_REPOSITORY" --state open --head "$BRANCH" --base main \
             --json url,isDraft > "$RUNNER_TEMP/ledger-open-prs.json"
-          DECISION="$(python -m agent_operator.recovery pr-action --prs-json "$RUNNER_TEMP/ledger-open-prs.json")"
+          DECISION="$(python -I -S "$RUNNER_TEMP/ledger-recovery.py" pr-action --prs-json "$RUNNER_TEMP/ledger-open-prs.json")"
           ACTION="$(printf '%s' "$DECISION" | jq -r '.action')"
           PR_URL="$(printf '%s' "$DECISION" | jq -r '.url // empty')"
           if [ "$ACTION" = 'create' ]; then
@@ -255,6 +287,7 @@ jobs:
           - Primary owner: \`$OWNER\`
           - Risk: \`$RISK\`
           - The frozen source-run artifacts were independently reconstructed before recovery.
+          - Current protected-main safety code re-verified the proposal before reuse/publication.
           - An existing branch is reused only if its tree exactly matches the verified manifest.
           - No implementation model is invoked by the recovery workflow.
           - This PR is intentionally **draft**.
@@ -268,19 +301,16 @@ jobs:
           echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
 
       - name: Verify proposal tree again before reviewer model calls
-        env:
-          BASE_SHA: ${{ steps.source.outputs.base_sha }}
         run: |
           rm -rf "$RUNNER_TEMP/ledger-review-tree"
           mkdir -p "$RUNNER_TEMP/ledger-review-tree"
           git archive HEAD | /usr/bin/tar -x -C "$RUNNER_TEMP/ledger-review-tree"
-          cd "$RUNNER_TEMP/ledger-base-tree"
-          python -m agent_operator.scope_guard check \
+          python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" check \
             --source "$RUNNER_TEMP/ledger-review-tree" \
             --base-tree "$RUNNER_TEMP/ledger-base-tree" \
             --allowed-paths-file "$RUNNER_TEMP/ledger-task-contract/task.json" \
             --manifest-out "$RUNNER_TEMP/ledger-review-manifest.json"
-          python -m agent_operator.recovery compare-manifests \
+          python -I -S "$RUNNER_TEMP/ledger-recovery.py" compare-manifests \
             --expected "$RUNNER_TEMP/ledger-expected-manifest.json" \
             --observed "$RUNNER_TEMP/ledger-review-manifest.json"
 
@@ -324,7 +354,7 @@ jobs:
           permission-profile: ':read-only'
           working-directory: ${{ github.workspace }}
           prompt-file: ${{ runner.temp }}/ledger-recovery-qa-prompt.md
-          output-schema-file: ${{ runner.temp }}/ledger-base-tree/agent_operator/review_schema.json
+          output-schema-file: ${{ runner.temp }}/ledger-review-schema.json
           output-file: ${{ env.QA_REVIEW_PATH }}
           effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
           model: ${{ vars.LEDGER_CODEX_REVIEW_MODEL }}
@@ -334,13 +364,12 @@ jobs:
           rm -rf "$RUNNER_TEMP/ledger-after-qa-tree"
           mkdir -p "$RUNNER_TEMP/ledger-after-qa-tree"
           git archive HEAD | /usr/bin/tar -x -C "$RUNNER_TEMP/ledger-after-qa-tree"
-          cd "$RUNNER_TEMP/ledger-base-tree"
-          python -m agent_operator.scope_guard check \
+          python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" check \
             --source "$RUNNER_TEMP/ledger-after-qa-tree" \
             --base-tree "$RUNNER_TEMP/ledger-base-tree" \
             --allowed-paths-file "$RUNNER_TEMP/ledger-task-contract/task.json" \
             --manifest-out "$RUNNER_TEMP/ledger-after-qa.json"
-          python -m agent_operator.recovery compare-manifests \
+          python -I -S "$RUNNER_TEMP/ledger-recovery.py" compare-manifests \
             --expected "$RUNNER_TEMP/ledger-expected-manifest.json" \
             --observed "$RUNNER_TEMP/ledger-after-qa.json"
 
@@ -377,7 +406,7 @@ jobs:
           permission-profile: ':read-only'
           working-directory: ${{ github.workspace }}
           prompt-file: ${{ runner.temp }}/ledger-recovery-security-prompt.md
-          output-schema-file: ${{ runner.temp }}/ledger-base-tree/agent_operator/review_schema.json
+          output-schema-file: ${{ runner.temp }}/ledger-review-schema.json
           output-file: ${{ env.SECURITY_REVIEW_PATH }}
           effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
           model: ${{ vars.LEDGER_CODEX_REVIEW_MODEL }}
@@ -388,13 +417,12 @@ jobs:
           rm -rf "$RUNNER_TEMP/ledger-after-security-tree"
           mkdir -p "$RUNNER_TEMP/ledger-after-security-tree"
           git archive HEAD | /usr/bin/tar -x -C "$RUNNER_TEMP/ledger-after-security-tree"
-          cd "$RUNNER_TEMP/ledger-base-tree"
-          python -m agent_operator.scope_guard check \
+          python -I -S "$RUNNER_TEMP/ledger-scope-guard.py" check \
             --source "$RUNNER_TEMP/ledger-after-security-tree" \
             --base-tree "$RUNNER_TEMP/ledger-base-tree" \
             --allowed-paths-file "$RUNNER_TEMP/ledger-task-contract/task.json" \
             --manifest-out "$RUNNER_TEMP/ledger-after-security.json"
-          python -m agent_operator.recovery compare-manifests \
+          python -I -S "$RUNNER_TEMP/ledger-recovery.py" compare-manifests \
             --expected "$RUNNER_TEMP/ledger-expected-manifest.json" \
             --observed "$RUNNER_TEMP/ledger-after-security.json"
 
@@ -405,44 +433,56 @@ jobs:
           PR_URL: ${{ steps.pr.outputs.url }}
         run: gh pr comment "$PR_URL" --body-file "$SECURITY_REVIEW_PATH"
 
-      - name: Evaluate independent recovery review gate from trusted base
+      - name: Evaluate independent recovery review gate using current protected-main code
         id: review_gate
         continue-on-error: true
         env:
           SECURITY_REQUIRED: ${{ steps.contract.outputs.security_required }}
         run: |
-          cd "$RUNNER_TEMP/ledger-base-tree"
           if [ "$SECURITY_REQUIRED" = 'true' ]; then
-            python -m agent_operator.review_gate "$QA_REVIEW_PATH" "$SECURITY_REVIEW_PATH"
+            python -I -S "$RUNNER_TEMP/ledger-review-gate.py" "$QA_REVIEW_PATH" "$SECURITY_REVIEW_PATH"
           else
-            python -m agent_operator.review_gate "$QA_REVIEW_PATH"
+            python -I -S "$RUNNER_TEMP/ledger-review-gate.py" "$QA_REVIEW_PATH"
           fi
 
       - name: Mark recovered work awaiting human merge review
         if: steps.review_gate.outcome == 'success'
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ steps.contract.outputs.issue_number }}
           PR_URL: ${{ steps.pr.outputs.url }}
-        run: >-
-          cd "$RUNNER_TEMP/ledger-base-tree" &&
-          python -m agent_operator.transition
-          --issue "$ISSUE_NUMBER"
-          --state agent:awaiting-review
-          --comment "Publication recovery reused independently verified source-run evidence without a new implementation call. Required reviewer gates passed. Draft PR: $PR_URL. Protected-branch CI and human merge review are still required."
+        run: |
+          CURRENT="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$CURRENT" | grep -Eq '^(needs:human|agent:paused)$'; then
+            echo "Human stop became active; refusing lifecycle promotion." >&2
+            exit 1
+          fi
+          for LABEL in agent:ready agent:claimed agent:working agent:blocked; do
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL" >/dev/null 2>&1 || true
+          done
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label 'agent:awaiting-review'
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Publication recovery reused independently verified source-run evidence without a new implementation call. Required reviewer gates passed. Draft PR: $PR_URL. Protected-branch CI and human merge review are still required."
 
       - name: Stop on recovery reviewer rejection
         if: steps.review_gate.outcome != 'success'
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ steps.contract.outputs.issue_number }}
           PR_URL: ${{ steps.pr.outputs.url }}
         run: |
-          cd "$RUNNER_TEMP/ledger-base-tree"
-          python -m agent_operator.transition \
-            --issue "$ISSUE_NUMBER" \
-            --state agent:blocked \
-            --comment "Recovery reviewer gate rejected or escalated the verified proposal. Draft PR preserved for diagnosis: $PR_URL."
+          CURRENT="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$CURRENT" | grep -Eq '^(needs:human|agent:paused)$'; then
+            gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+              "Recovery reviewer gate did not pass, but an existing human stop was preserved. Draft PR: $PR_URL."
+            exit 1
+          fi
+          for LABEL in agent:ready agent:claimed agent:working agent:awaiting-review; do
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL" >/dev/null 2>&1 || true
+          done
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label 'agent:blocked'
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Recovery reviewer gate rejected or escalated the verified proposal. Draft PR preserved for diagnosis: $PR_URL."
           exit 1
 
   fail-safe-recovery:
