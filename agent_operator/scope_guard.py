@@ -72,6 +72,19 @@ def _is_benign_generated(path: str) -> bool:
     return bool(BENIGN_GENERATED_PARTS.intersection(parts)) or path.endswith((".pyc", ".pyo"))
 
 
+def _git_file_mode(mode: int) -> int:
+    """Normalize regular-file permissions to the mode Git actually preserves.
+
+    Git tracks whether a regular file is executable, but not ordinary read/write
+    permission differences. Verification deliberately makes trusted inputs
+    read-only before proposed tests execute, so comparing full POSIX modes would
+    turn that safety lock into a false repository-wide change. Preserve only the
+    executable distinction so executable-bit additions remain detectable.
+    """
+
+    return 0o755 if mode & 0o111 else 0o644
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -149,7 +162,7 @@ def snapshot_tree(root: Path) -> dict[str, dict]:
                 snapshot[rel] = {
                     "kind": "file",
                     "sha256": _sha256(path),
-                    "mode": stat.S_IMODE(info.st_mode),
+                    "mode": _git_file_mode(info.st_mode),
                     "size": info.st_size,
                 }
             else:
@@ -330,6 +343,9 @@ def apply_manifest(source: Path, destination: Path, manifest: dict) -> None:
         expected = change.get("after") or {}
         if expected.get("kind") != "file" or not src.is_file() or src.is_symlink():
             raise ValueError(f"verified source is not a regular file: {rel}")
+        expected_mode = expected.get("mode")
+        if expected_mode not in {0o644, 0o755}:
+            raise ValueError(f"verified source has unsupported normalized file mode: {rel}")
         if _sha256(src) != expected.get("sha256"):
             raise ValueError(f"source changed after verification: {rel}")
 
@@ -346,7 +362,7 @@ def apply_manifest(source: Path, destination: Path, manifest: dict) -> None:
 
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dst)
-        os.chmod(dst, int(expected["mode"]))
+        os.chmod(dst, expected_mode)
 
 
 def _check_command(args: argparse.Namespace) -> int:
