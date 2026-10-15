@@ -187,8 +187,8 @@ jobs:
           test "$BRANCH" = "agent/issue-$ISSUE_NUMBER-$SOURCE_RUN_ID"
           test "$(git rev-parse HEAD)" = "$REVIEWED_SHA"
           test "$(git rev-parse HEAD^)" = "$SOURCE_HEAD"
-          git fetch origin main "$BRANCH" --quiet
           test "$(git rev-parse "origin/$BRANCH")" = "$REVIEWED_SHA"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --jq '.object.sha')" = "$REVIEWED_SHA"
           test "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')" = "$REVIEWED_SHA"
 
           LABELS="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
@@ -288,7 +288,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$REVIEWED_SHA"
-          test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$REVIEWED_SHA"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --jq '.object.sha')" = "$REVIEWED_SHA"
           test "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')" = "$REVIEWED_SHA"
           (cd "$RUNNER_TEMP" && sha256sum -c ledger-security-recovery-controls.sha256)
           sha256sum -c "$RUNNER_TEMP/ledger-recovery-evidence.sha256"
@@ -346,7 +346,7 @@ jobs:
           BRANCH: ${{ steps.source.outputs.branch }}
         run: |
           set -euo pipefail
-          test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$REVIEWED_SHA"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --jq '.object.sha')" = "$REVIEWED_SHA"
           test "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')" = "$REVIEWED_SHA"
           LABELS="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
           if printf '%s\n' "$LABELS" | grep -Eq '^(needs:human|agent:paused)$'; then exit 1; fi
