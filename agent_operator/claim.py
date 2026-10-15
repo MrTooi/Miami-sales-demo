@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 from pathlib import Path, PurePosixPath
 
 from .cli import fetch_ready_issues
@@ -31,6 +32,24 @@ def _set_output(key: str, value: str) -> None:
         return
     with Path(output).open("a", encoding="utf-8") as handle:
         handle.write(f"{key}={value}\n")
+
+
+def _current_git_head() -> str:
+    """Return the exact checked-out commit that the claim contract is freezing."""
+
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError("could not determine the exact checked-out base commit") from exc
+    value = completed.stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", value):
+        raise RuntimeError("checked-out base commit is not a full Git object ID")
+    return value
 
 
 def _safe_contract_path(raw: str) -> str:
@@ -93,9 +112,6 @@ def _stable_contract_labels(issue: dict) -> list[str]:
 
 
 def _contract_fingerprint(issue: dict) -> str:
-    # Non-lifecycle labels are part of the safety contract because they drive
-    # risk, routing, reviewers, and human gates. Claiming the issue is allowed
-    # to change lifecycle labels only.
     payload = json.dumps(
         {
             "title": str(issue.get("title") or ""),
@@ -158,6 +174,29 @@ Execution requirements:
     prompt_path.write_text(prompt, encoding="utf-8")
 
 
+def _write_contract_metadata(
+    *,
+    task_path: Path,
+    prompt_path: Path,
+    base_sha: str,
+    run_id: str,
+    run_attempt: str,
+) -> None:
+    """Persist recovery evidence in the directory the workflow uploads as the contract artifact."""
+
+    runner_temp = Path(os.environ.get("RUNNER_TEMP", "/tmp"))
+    metadata_path = runner_temp / "ledger-task-contract" / "contract-metadata.json"
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "base_sha": base_sha,
+        "run_id": run_id,
+        "run_attempt": run_attempt,
+        "task_sha": hashlib.sha256(task_path.read_bytes()).hexdigest(),
+        "prompt_sha": hashlib.sha256(prompt_path.read_bytes()).hexdigest(),
+    }
+    metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _human_gate(
     client: GitHubClient,
     issue_number: int,
@@ -181,6 +220,7 @@ def main() -> int:
     repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     run_id = os.environ.get("GITHUB_RUN_ID", "manual").strip() or "manual"
+    run_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1").strip() or "1"
     prompt_path = Path(os.environ.get("AGENT_PROMPT_PATH", "agent_task_prompt.md"))
     task_path = Path(os.environ.get("AGENT_TASK_PATH", "agent_task.json"))
 
@@ -207,8 +247,6 @@ def main() -> int:
             "Agent OS refused autonomous pickup because the issue author is not a trusted repository collaborator. A human owner must restate or explicitly approve the task contract before re-queueing.",
         )
 
-    # Re-fetch immediately before taking ownership so a stale queue read cannot
-    # claim a task that a human or another run has already paused/claimed.
     fresh = client.get_issue(issue_number)
     if not is_candidate(fresh):
         _set_output("has_task", "false")
@@ -275,9 +313,6 @@ def main() -> int:
     if "agent:claimed" not in claimed_labels or "agent:ready" in claimed_labels:
         raise RuntimeError("claim verification failed")
 
-    # Claiming changes lifecycle state only. Any title, body, routing, risk,
-    # data-boundary, or other non-lifecycle label change invalidates the frozen
-    # plan and forces fresh human review.
     post_claim = client.get_issue(issue_number)
     if _contract_fingerprint(post_claim) != before_claim_fingerprint:
         return _human_gate(
@@ -288,6 +323,7 @@ def main() -> int:
         )
 
     branch = make_branch_name(issue_number, run_id)
+    base_sha = _current_git_head()
     task_payload = {
         "issue": {
             "number": issue_number,
@@ -300,10 +336,22 @@ def main() -> int:
         "branch": branch,
         "allowed_paths": list(allowed_paths),
         "contract_sha256": before_claim_fingerprint,
+        "execution": {
+            "base_sha": base_sha,
+            "run_id": run_id,
+            "run_attempt": run_attempt,
+        },
     }
     task_path.parent.mkdir(parents=True, exist_ok=True)
     task_path.write_text(json.dumps(task_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _write_prompt(post_claim, serialized, allowed_paths, prompt_path)
+    _write_contract_metadata(
+        task_path=task_path,
+        prompt_path=prompt_path,
+        base_sha=base_sha,
+        run_id=run_id,
+        run_attempt=run_attempt,
+    )
 
     client.comment(
         issue_number,
