@@ -5,7 +5,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from .lifecycle import MANAGED_LABELS, transition_labels
+from .lifecycle import LIFECYCLE_LABELS, MANAGED_LABELS, transition_labels
 
 
 API_ROOT = "https://api.github.com"
@@ -70,15 +70,36 @@ class GitHubClient:
 
     def set_lifecycle(self, issue_number: int, target: str) -> dict:
         issue = self.get_issue(issue_number)
-        transition = transition_labels(self.label_names(issue), target)
-        payload = self._request(
-            "PATCH",
-            f"/repos/{self.repository}/issues/{issue_number}",
-            {"labels": sorted(transition.current)},
+        current = self.label_names(issue)
+        # Validate the requested target using the same lifecycle contract as the
+        # pure transition helper, but mutate only lifecycle labels through the
+        # additive/removal endpoints. Never PATCH the issue's complete label set.
+        transition_labels(current, target)
+
+        for label in sorted((current & LIFECYCLE_LABELS) - {target}):
+            encoded = quote(label, safe="")
+            try:
+                self._request(
+                    "DELETE",
+                    f"/repos/{self.repository}/issues/{issue_number}/labels/{encoded}",
+                )
+            except HTTPError as exc:
+                if exc.code != 404:
+                    raise
+
+        self._request(
+            "POST",
+            f"/repos/{self.repository}/issues/{issue_number}/labels",
+            {"labels": [target]},
         )
-        if not isinstance(payload, dict):
-            raise RuntimeError("GitHub update response was not an object")
-        return payload
+
+        updated = self.get_issue(issue_number)
+        lifecycle = self.label_names(updated).intersection(LIFECYCLE_LABELS)
+        if lifecycle != {target}:
+            raise RuntimeError(
+                f"lifecycle transition race detected for issue #{issue_number}: {sorted(lifecycle)}"
+            )
+        return updated
 
     def comment(self, issue_number: int, body: str) -> None:
         if not body.strip():
