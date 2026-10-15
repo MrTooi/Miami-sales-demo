@@ -19,6 +19,26 @@ class AgentReviewOutputContractTests(unittest.TestCase):
     def setUp(self):
         self.schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
+    def _assert_all_object_schemas_are_strict(self, node, path="$"):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                properties = node.get("properties", {})
+                required = node.get("required")
+                self.assertIs(node.get("additionalProperties"), False, path)
+                self.assertIsInstance(required, list, path)
+                self.assertEqual(set(required), set(properties), path)
+            for key, value in node.items():
+                self._assert_all_object_schemas_are_strict(value, f"{path}.{key}")
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                self._assert_all_object_schemas_are_strict(value, f"{path}[{index}]")
+
+    def _assert_prompt_contract_matches_structured_reviewers(self, path):
+        text = path.read_text(encoding="utf-8")
+        schema_calls = text.count("output-schema-file:")
+        self.assertGreater(schema_calls, 0)
+        self.assertEqual(text.count(PROMPT_CONTRACT), schema_calls)
+
     def test_schema_accepts_string_test_evidence(self):
         jsonschema.validate(
             {
@@ -88,13 +108,14 @@ class AgentReviewOutputContractTests(unittest.TestCase):
         )
         self.assertEqual(set(self.schema["required"]), set(self.schema["properties"]))
 
-    def test_executor_reviewer_prompts_state_exact_required_keys(self):
-        text = EXECUTOR_PATH.read_text(encoding="utf-8")
-        self.assertGreaterEqual(text.count(PROMPT_CONTRACT), 2)
+    def test_every_object_schema_is_strict_output_compatible(self):
+        self._assert_all_object_schemas_are_strict(self.schema)
 
-    def test_recovery_reviewer_prompts_state_exact_required_keys(self):
-        text = RECOVERY_PATH.read_text(encoding="utf-8")
-        self.assertGreaterEqual(text.count(PROMPT_CONTRACT), 2)
+    def test_executor_reviewer_prompts_cover_every_structured_reviewer(self):
+        self._assert_prompt_contract_matches_structured_reviewers(EXECUTOR_PATH)
+
+    def test_recovery_reviewer_prompts_cover_every_structured_reviewer(self):
+        self._assert_prompt_contract_matches_structured_reviewers(RECOVERY_PATH)
 
 
 if __name__ == "__main__":
