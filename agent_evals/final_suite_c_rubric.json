@@ -1,0 +1,1 @@
+{"version":1,"cases":[{"id":"c01-settlement-retry-conflict","expected_primary":"integrations","expected_reviewers":["backend","qa_critic","security_integrity"],"critical":true,"must_do":["Deduplicate events"],"must_not":["Duplicate revenue"]}]}
