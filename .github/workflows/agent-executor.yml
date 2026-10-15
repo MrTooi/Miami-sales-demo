@@ -33,6 +33,7 @@ jobs:
       branch: ${{ steps.claim.outputs.branch }}
       base_sha: ${{ steps.base.outputs.sha }}
       task_sha: ${{ steps.freeze.outputs.task_sha }}
+      prompt_sha: ${{ steps.freeze.outputs.prompt_sha }}
     steps:
       - name: Checkout main without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,7 +97,9 @@ jobs:
           cp "$AGENT_TASK_PATH" "$RUNNER_TEMP/ledger-task-contract/task.json"
           cp "$AGENT_PROMPT_PATH" "$RUNNER_TEMP/ledger-task-contract/prompt.md"
           TASK_SHA="$(sha256sum "$RUNNER_TEMP/ledger-task-contract/task.json" | cut -d' ' -f1)"
+          PROMPT_SHA="$(sha256sum "$RUNNER_TEMP/ledger-task-contract/prompt.md" | cut -d' ' -f1)"
           echo "task_sha=$TASK_SHA" >> "$GITHUB_OUTPUT"
+          echo "prompt_sha=$PROMPT_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Upload immutable task contract
         if: steps.claim.outputs.execute == 'true'
@@ -153,10 +156,14 @@ jobs:
       - name: Verify task contract integrity
         env:
           EXPECTED_TASK_SHA: ${{ needs.claim-task.outputs.task_sha }}
+          EXPECTED_PROMPT_SHA: ${{ needs.claim-task.outputs.prompt_sha }}
         run: |
           ACTUAL_TASK_SHA="$(sha256sum "$RUNNER_TEMP/ledger-task-contract/task.json" | cut -d' ' -f1)"
+          ACTUAL_PROMPT_SHA="$(sha256sum "$RUNNER_TEMP/ledger-task-contract/prompt.md" | cut -d' ' -f1)"
           test -n "$EXPECTED_TASK_SHA"
+          test -n "$EXPECTED_PROMPT_SHA"
           test "$ACTUAL_TASK_SHA" = "$EXPECTED_TASK_SHA"
+          test "$ACTUAL_PROMPT_SHA" = "$EXPECTED_PROMPT_SHA"
 
       - name: Run primary Codex implementation agent
         id: implement
@@ -217,6 +224,16 @@ jobs:
           name: ledger-task-contract
           path: ${{ runner.temp }}/ledger-task-contract
 
+      - name: Verify task contract integrity before verification
+        env:
+          EXPECTED_TASK_SHA: ${{ needs.claim-task.outputs.task_sha }}
+          EXPECTED_PROMPT_SHA: ${{ needs.claim-task.outputs.prompt_sha }}
+        run: |
+          ACTUAL_TASK_SHA="$(sha256sum "$RUNNER_TEMP/ledger-task-contract/task.json" | cut -d' ' -f1)"
+          ACTUAL_PROMPT_SHA="$(sha256sum "$RUNNER_TEMP/ledger-task-contract/prompt.md" | cut -d' ' -f1)"
+          test "$ACTUAL_TASK_SHA" = "$EXPECTED_TASK_SHA"
+          test "$ACTUAL_PROMPT_SHA" = "$EXPECTED_PROMPT_SHA"
+
       - name: Download raw implementation tree
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -267,10 +284,17 @@ jobs:
             --manifest-out "$RUNNER_TEMP/ledger-rebuilt-manifest.json"
           cmp -s "$RUNNER_TEMP/ledger-change-manifest.json" "$RUNNER_TEMP/ledger-rebuilt-manifest.json"
 
-      - name: Run full repository test suite in no-write-token verification job
+      - name: Lock trusted verification inputs before proposed code executes
+        run: |
+          sudo chown -R root:root "$RUNNER_TEMP/ledger-base-tree" "$RUNNER_TEMP/ledger-task-contract"
+          sudo chmod -R a-w "$RUNNER_TEMP/ledger-base-tree" "$RUNNER_TEMP/ledger-task-contract"
+          sudo chown root:root "$RUNNER_TEMP/ledger-change-manifest.json"
+          sudo chmod a-w "$RUNNER_TEMP/ledger-change-manifest.json"
+
+      - name: Run repository test command in no-write-token verification job
         run: python -m unittest discover -s tests -v
 
-      - name: Verify tests did not change the publishable proposal
+      - name: Verify tests did not change the publishable proposal using locked trusted guard
         run: |
           cd "$RUNNER_TEMP/ledger-base-tree"
           python -m agent_operator.scope_guard check \
@@ -339,10 +363,14 @@ jobs:
       - name: Verify immutable task contract again
         env:
           EXPECTED_TASK_SHA: ${{ needs.claim-task.outputs.task_sha }}
+          EXPECTED_PROMPT_SHA: ${{ needs.claim-task.outputs.prompt_sha }}
         run: |
           ACTUAL_TASK_SHA="$(sha256sum "$RUNNER_TEMP/ledger-task-contract/task.json" | cut -d' ' -f1)"
+          ACTUAL_PROMPT_SHA="$(sha256sum "$RUNNER_TEMP/ledger-task-contract/prompt.md" | cut -d' ' -f1)"
           test -n "$EXPECTED_TASK_SHA"
+          test -n "$EXPECTED_PROMPT_SHA"
           test "$ACTUAL_TASK_SHA" = "$EXPECTED_TASK_SHA"
+          test "$ACTUAL_PROMPT_SHA" = "$EXPECTED_PROMPT_SHA"
 
       - name: Create clean publication branch and materialize verified files
         env:
@@ -366,16 +394,35 @@ jobs:
             --manifest-out "$RUNNER_TEMP/ledger-publication-recheck.json"
           cmp -s "$RUNNER_TEMP/ledger-publish-manifest.json" "$RUNNER_TEMP/ledger-publication-recheck.json"
 
-      - name: Commit and push only the clean verified proposal
+      - name: Commit clean verified proposal locally
         env:
-          GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ needs.claim-task.outputs.branch }}
           ISSUE_NUMBER: ${{ needs.claim-task.outputs.issue_number }}
         run: |
           git config user.name "ledger-agent[bot]"
           git config user.email "ledger-agent[bot]@users.noreply.github.com"
           git -c core.hooksPath=/dev/null add -A
           git -c core.hooksPath=/dev/null commit -m "Agent implementation for issue #$ISSUE_NUMBER"
+
+      - name: Verify committed tree exactly matches verified manifest
+        env:
+          BASE_SHA: ${{ needs.claim-task.outputs.base_sha }}
+        run: |
+          rm -rf "$RUNNER_TEMP/ledger-commit-tree"
+          mkdir -p "$RUNNER_TEMP/ledger-commit-tree"
+          git archive HEAD | /usr/bin/tar -x -C "$RUNNER_TEMP/ledger-commit-tree"
+          cd "$RUNNER_TEMP/ledger-base-tree"
+          python -m agent_operator.scope_guard check \
+            --source "$RUNNER_TEMP/ledger-commit-tree" \
+            --base-tree "$RUNNER_TEMP/ledger-base-tree" \
+            --allowed-paths-file "$RUNNER_TEMP/ledger-task-contract/task.json" \
+            --manifest-out "$RUNNER_TEMP/ledger-commit-manifest.json"
+          cmp -s "$RUNNER_TEMP/ledger-publish-manifest.json" "$RUNNER_TEMP/ledger-commit-manifest.json"
+
+      - name: Push only the manifest-matched proposal branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ needs.claim-task.outputs.branch }}
+        run: |
           gh auth setup-git
           git -c core.hooksPath=/dev/null push --set-upstream origin "$BRANCH"
 
@@ -388,7 +435,7 @@ jobs:
           OWNER: ${{ needs.claim-task.outputs.owner }}
           RISK: ${{ needs.claim-task.outputs.risk }}
         run: |
-          TITLE="$(gh issue view "$ISSUE_NUMBER" --json title --jq .title)"
+          TITLE="$(python -I -S -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["issue"]["title"])' "$RUNNER_TEMP/ledger-task-contract/task.json")"
           BODY_FILE="$RUNNER_TEMP/ledger-agent-pr-body.md"
           cat > "$BODY_FILE" <<EOF
           ## Autonomous agent work
@@ -399,8 +446,8 @@ jobs:
           - Risk: \`$RISK\`
           - Exact task paths were frozen before model execution and enforced independently afterward.
           - Implementation ran in a read-only-repository-permission job.
-          - Full tests passed in a separate verification job with no write token or API secret.
-          - Publication was rebuilt from a clean base checkout after independent scope verification.
+          - The repository test command returned success in a separate no-write-token verification job; protected-branch CI and human review are still required before merge.
+          - Publication was rebuilt from a clean base checkout and the committed tree was compared back to the verified manifest before push.
           - This PR is intentionally **draft**.
           - No deployment, external action, or merge was performed.
 
@@ -531,7 +578,7 @@ jobs:
           python -m agent_operator.transition
           --issue "$ISSUE_NUMBER"
           --state agent:awaiting-review
-          --comment "Implementation, frozen-scope verification, isolated tests, clean-room publication, and required reviewer gates passed. Draft PR: $PR_URL. Human merge review is still required."
+          --comment "Implementation, frozen-scope verification, clean-room publication, repository test command, and required reviewer gates completed successfully. Draft PR: $PR_URL. Protected-branch CI and human merge review are still required."
 
       - name: Stop on reviewer rejection
         if: steps.review_gate.outcome != 'success'
@@ -572,7 +619,13 @@ jobs:
             echo "Issue #$ISSUE_NUMBER is already blocked."
             exit 0
           fi
-          for LABEL in agent:ready agent:claimed agent:working agent:awaiting-review needs:human; do
+          if printf '%s\n' "$CURRENT" | grep -qx 'needs:human'; then
+            gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+              "Agent execution also failed, but an existing human-intervention state was preserved by the fail-safe job. Inspect the failed workflow before any retry."
+            echo "Issue #$ISSUE_NUMBER already needs human review; preserving that state."
+            exit 0
+          fi
+          for LABEL in agent:ready agent:claimed agent:working agent:awaiting-review; do
             gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL" >/dev/null 2>&1 || true
           done
           gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label 'agent:blocked'
