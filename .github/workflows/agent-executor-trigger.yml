@@ -1,0 +1,25 @@
+name: LEDGER AI Task Executor Trigger
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  dispatch:
+    if: >-
+      github.event.issue.pull_request == null &&
+      github.actor == github.repository_owner &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.body == '/agent-run' &&
+      contains(github.event.issue.labels.*.name, 'agent:ready')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch canonical executor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run agent-executor.yml --repo "$GITHUB_REPOSITORY" --ref main
