@@ -10,6 +10,12 @@
     "summary": {
       "type": "string"
     },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "findings": {
       "type": "array",
       "items": {
