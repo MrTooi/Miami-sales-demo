@@ -76,9 +76,10 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertIn("contents: read", verify)
         self.assertNotIn("contents: write", verify)
         self.assertNotIn("OPENAI_API_KEY", verify)
-        self.assertIn("Enforce scope from trusted base without model git state", verify)
+        self.assertIn("Enforce frozen task scope from trusted base without model git state", verify)
         self.assertIn("agent_operator.scope_guard check", verify)
         self.assertIn("agent_operator.scope_guard apply", verify)
+        self.assertIn("--allowed-paths-file", verify)
         self.assertIn("python -m unittest discover -s tests -v", verify)
         self.assertIn("Verify tests did not change the publishable proposal", verify)
 
@@ -86,7 +87,8 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         text = EXECUTOR.read_text(encoding="utf-8")
         publish = text.split("  publish-review:", 1)[1].split("  fail-safe-cleanup:", 1)[0]
         self.assertIn("contents: write", publish)
-        self.assertIn("Re-verify scope independently before publication", publish)
+        self.assertIn("Re-verify frozen task scope independently before publication", publish)
+        self.assertIn("--allowed-paths-file", publish)
         self.assertIn("Create clean publication branch and materialize verified files", publish)
         self.assertIn("Commit and push only the clean verified proposal", publish)
         self.assertIn("core.hooksPath=/dev/null", publish)
@@ -116,12 +118,14 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertIn("task_sha", text)
         self.assertIn("Verify task contract integrity", text)
         self.assertIn("Verify immutable task contract again", text)
+        self.assertGreaterEqual(text.count("ledger-task-contract/task.json"), 6)
 
     def test_executor_uses_filesystem_scope_manifest_not_model_git_diff(self):
         text = EXECUTOR.read_text(encoding="utf-8")
         self.assertIn("Capture implementation filesystem without trusting its git metadata", text)
         self.assertIn("--exclude='./.git'", text)
         self.assertIn("ledger-change-manifest.json", text)
+        self.assertIn("--allowed-paths-file", text)
         self.assertNotIn("scope_guard --repo", text)
         self.assertNotIn("--base-sha", text)
 
