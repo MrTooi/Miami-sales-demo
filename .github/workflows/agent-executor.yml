@@ -129,6 +129,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      issues: read
     env:
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
@@ -164,6 +165,21 @@ jobs:
           test -n "$EXPECTED_PROMPT_SHA"
           test "$ACTUAL_TASK_SHA" = "$EXPECTED_TASK_SHA"
           test "$ACTUAL_PROMPT_SHA" = "$EXPECTED_PROMPT_SHA"
+
+      - name: Respect human stop before model execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.claim-task.outputs.issue_number }}
+        run: |
+          LABELS="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$LABELS" | grep -Eq '^(needs:human|agent:paused)$'; then
+            echo "Human stop is active; refusing model execution." >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$LABELS" | grep -qx 'agent:working'; then
+            echo "Issue is no longer in agent:working; refusing model execution." >&2
+            exit 1
+          fi
 
       - name: Run primary Codex implementation agent
         id: implement
@@ -371,6 +387,21 @@ jobs:
           test -n "$EXPECTED_PROMPT_SHA"
           test "$ACTUAL_TASK_SHA" = "$EXPECTED_TASK_SHA"
           test "$ACTUAL_PROMPT_SHA" = "$EXPECTED_PROMPT_SHA"
+
+      - name: Respect human stop before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.claim-task.outputs.issue_number }}
+        run: |
+          LABELS="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$LABELS" | grep -Eq '^(needs:human|agent:paused)$'; then
+            echo "Human stop is active; refusing publication." >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$LABELS" | grep -qx 'agent:working'; then
+            echo "Issue is no longer in agent:working; refusing publication." >&2
+            exit 1
+          fi
 
       - name: Create clean publication branch and materialize verified files
         env:
