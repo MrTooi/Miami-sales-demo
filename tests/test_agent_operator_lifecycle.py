@@ -1,11 +1,41 @@
 import unittest
+from urllib.parse import unquote
 
+from agent_operator.github_client import GitHubClient
 from agent_operator.lifecycle import (
     LIFECYCLE_LABELS,
     MANAGED_LABELS,
     make_branch_name,
     transition_labels,
 )
+
+
+class FakeLifecycleClient(GitHubClient):
+    def __init__(self, labels):
+        self.repository = "owner/repo"
+        self.token = "test"
+        self.issue = {"number": 7, "labels": [{"name": label} for label in labels]}
+        self.calls = []
+
+    def _request(self, method, path, payload=None):
+        self.calls.append((method, path, payload))
+        if method == "GET" and path.endswith("/issues/7"):
+            return {
+                "number": 7,
+                "labels": [dict(label) for label in self.issue["labels"]],
+            }
+        if method == "DELETE" and "/issues/7/labels/" in path:
+            encoded = path.rsplit("/", 1)[-1]
+            label = unquote(encoded)
+            self.issue["labels"] = [item for item in self.issue["labels"] if item["name"] != label]
+            return None
+        if method == "POST" and path.endswith("/issues/7/labels"):
+            current = {item["name"] for item in self.issue["labels"]}
+            for label in payload["labels"]:
+                if label not in current:
+                    self.issue["labels"].append({"name": label})
+            return {"labels": self.issue["labels"]}
+        raise AssertionError(f"Unexpected request: {method} {path} {payload}")
 
 
 class AgentOperatorLifecycleTests(unittest.TestCase):
@@ -19,6 +49,19 @@ class AgentOperatorLifecycleTests(unittest.TestCase):
             transition.current,
         )
         self.assertEqual(1, len(transition.current.intersection(LIFECYCLE_LABELS)))
+
+    def test_github_transition_mutates_only_lifecycle_labels(self):
+        client = FakeLifecycleClient(
+            {"agent:ready", "agent:claimed", "priority:p1", "data:financial"}
+        )
+        updated = client.set_lifecycle(7, "agent:working")
+        labels = client.label_names(updated)
+        self.assertEqual(
+            {"agent:working", "priority:p1", "data:financial"},
+            labels,
+        )
+        self.assertFalse(any(method == "PATCH" for method, _, _ in client.calls))
+        self.assertEqual({"agent:working"}, labels & LIFECYCLE_LABELS)
 
     def test_unknown_lifecycle_target_is_rejected(self):
         with self.assertRaises(ValueError):
