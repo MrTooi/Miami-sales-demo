@@ -60,15 +60,23 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertNotIn("anthropic", lowered)
         self.assertNotIn("claude-code-action", lowered)
 
-    def test_implementation_job_has_read_only_repository_permission_and_no_persisted_credentials(self):
+    def test_implementation_job_has_read_only_permissions_and_human_stop_recheck(self):
         text = EXECUTOR.read_text(encoding="utf-8")
         implement = text.split("  implement-task:", 1)[1].split("  verify-task:", 1)[0]
         self.assertIn("contents: read", implement)
+        self.assertIn("issues: read", implement)
         self.assertNotIn("contents: write", implement)
         self.assertNotIn("issues: write", implement)
         self.assertIn("persist-credentials: false", implement)
         self.assertIn("permission-profile: ':workspace'", implement)
         self.assertIn("ledger-implementation-tree.tar", implement)
+        self.assertIn("Respect human stop before model execution", implement)
+        self.assertIn("needs:human|agent:paused", implement)
+        self.assertIn("agent:working", implement)
+        self.assertLess(
+            implement.index("Respect human stop before model execution"),
+            implement.index("Run primary Codex implementation agent"),
+        )
 
     def test_untrusted_implementation_is_verified_in_separate_no_write_job(self):
         text = EXECUTOR.read_text(encoding="utf-8")
@@ -87,12 +95,14 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertIn("python -m unittest discover -s tests -v", verify)
         self.assertIn("Verify tests did not change the publishable proposal using locked trusted guard", verify)
 
-    def test_publish_job_rebuilds_commit_and_verifies_commit_tree_before_push(self):
+    def test_publish_job_rechecks_human_stop_and_verifies_commit_tree_before_push(self):
         text = EXECUTOR.read_text(encoding="utf-8")
         publish = text.split("  publish-review:", 1)[1].split("  fail-safe-cleanup:", 1)[0]
         self.assertIn("contents: write", publish)
         self.assertIn("Re-verify frozen task scope independently before publication", publish)
         self.assertIn("--allowed-paths-file", publish)
+        self.assertIn("Respect human stop before publication", publish)
+        self.assertIn("needs:human|agent:paused", publish)
         self.assertIn("Create clean publication branch and materialize verified files", publish)
         self.assertIn("Commit clean verified proposal locally", publish)
         self.assertIn("Verify committed tree exactly matches verified manifest", publish)
@@ -102,9 +112,12 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertIn("core.hooksPath=/dev/null", publish)
         self.assertNotIn("python -m unittest discover", publish)
 
+        stop_index = text.index("Respect human stop before publication")
+        materialize_index = text.index("Create clean publication branch and materialize verified files")
         commit_index = text.index("Commit clean verified proposal locally")
         commit_verify_index = text.index("Verify committed tree exactly matches verified manifest")
         push_index = text.index("Push only the manifest-matched proposal branch")
+        self.assertLess(stop_index, materialize_index)
         self.assertLess(commit_index, commit_verify_index)
         self.assertLess(commit_verify_index, push_index)
 
