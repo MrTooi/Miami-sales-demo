@@ -1,0 +1,206 @@
+name: One-shot trial 25 reviewer bridge
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  review-trial-25:
+    if: >-
+      github.event.issue.number == 25 &&
+      github.event.comment.body == '/ledger-review-bridge-25' &&
+      github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      ISSUE_NUMBER: '25'
+      PR_NUMBER: '39'
+      BRANCH: 'agent/issue-25-38667506613'
+      REVIEWED_SHA: '5cb3cf63d83299806d7ae5671aae883d3bc6317a'
+      QA_REVIEW_PATH: /tmp/ledger-trial-25-qa-review.json
+      SECURITY_REVIEW_PATH: /tmp/ledger-trial-25-security-review.json
+    steps:
+      - name: Freeze trusted review controls from protected main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
+          for SPEC in \
+            'agent_operator/review_gate.py:ledger-review-gate.py' \
+            'agent_operator/review_schema.json:ledger-review-schema.json'; do
+            SOURCE="${SPEC%%:*}"
+            DEST="${SPEC##*:}"
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "/repos/$GITHUB_REPOSITORY/contents/$SOURCE?ref=$CONTROL_SHA" > "$RUNNER_TEMP/$DEST"
+          done
+          sha256sum "$RUNNER_TEMP/ledger-review-gate.py" "$RUNNER_TEMP/ledger-review-schema.json" \
+            > "$RUNNER_TEMP/ledger-review-controls.sha256"
+          chmod a-w "$RUNNER_TEMP/ledger-review-gate.py" "$RUNNER_TEMP/ledger-review-schema.json" \
+            "$RUNNER_TEMP/ledger-review-controls.sha256"
+
+      - name: Checkout exact preserved proposal commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.REVIEWED_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Install trusted proposal dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Revalidate exact branch, PR, scope, and human authority
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin main "$BRANCH" --quiet
+          test "$(git rev-parse HEAD)" = "$REVIEWED_SHA"
+          test "$(git rev-parse "origin/$BRANCH")" = "$REVIEWED_SHA"
+          test "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')" = "$REVIEWED_SHA"
+          test "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefName --jq '.headRefName')" = "$BRANCH"
+          test "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json baseRefName --jq '.baseRefName')" = 'main'
+          test "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = 'true'
+          test "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state --jq '.state')" = 'OPEN'
+          LABELS="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$LABELS" | grep -Eq '^(needs:human|agent:paused)$'; then
+            echo 'Human stop is active; refusing review bridge.' >&2
+            exit 1
+          fi
+          printf '%s\n' "$LABELS" | grep -qx 'agent:working'
+          git diff-tree --no-commit-id --name-only -r "$REVIEWED_SHA" | sort > "$RUNNER_TEMP/changed-files.txt"
+          printf '%s\n' 'agent_workbench/trial_finance.py' 'tests/test_agent_workbench_trial_finance.py' | sort > "$RUNNER_TEMP/allowed-files.txt"
+          diff -u "$RUNNER_TEMP/allowed-files.txt" "$RUNNER_TEMP/changed-files.txt"
+          (cd "$RUNNER_TEMP" && sha256sum -c ledger-review-controls.sha256)
+
+      - name: Run repository tests against exact proposal
+        run: python -m unittest discover -s tests -v
+
+      - name: Prepare independent QA prompt
+        run: |
+          cat > "$RUNNER_TEMP/qa-prompt.md" <<'EOF'
+          Act as LEDGER's independent QA / Critic reviewer. Read AGENTS.md, PROJECT_BRIEF.md,
+          docs/AI_ENGINEERING_PIPELINE.md, and .github/agents/qa-critic.agent.md. Inspect ONLY the
+          changes in origin/main...HEAD. Do not modify any file. Try to disprove correctness. Check
+          the issue #25 finance semantics, regressions, edge cases, misleading claims, skipped
+          validation, and test quality. Return only the required JSON object. Top-level keys must be
+          exactly verdict, summary, findings, and tests; all four are required. A pass means there is
+          no concrete blocking correctness or trust defect in the scoped change.
+          EOF
+
+      - name: Run read-only independent QA reviewer
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':read-only'
+          working-directory: ${{ github.workspace }}
+          prompt-file: ${{ runner.temp }}/qa-prompt.md
+          output-schema-file: ${{ runner.temp }}/ledger-review-schema.json
+          output-file: ${{ env.QA_REVIEW_PATH }}
+          effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
+          model: ${{ vars.LEDGER_CODEX_REVIEW_MODEL }}
+
+      - name: Revalidate exact proposal after QA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REVIEWED_SHA"
+          test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$REVIEWED_SHA"
+          test "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')" = "$REVIEWED_SHA"
+          (cd "$RUNNER_TEMP" && sha256sum -c ledger-review-controls.sha256)
+
+      - name: Prepare Security and Data Integrity prompt
+        run: |
+          cat > "$RUNNER_TEMP/security-prompt.md" <<'EOF'
+          Act as LEDGER's independent Security & Data Integrity reviewer. Read AGENTS.md,
+          PROJECT_BRIEF.md, and .github/agents/security-integrity.agent.md. Inspect ONLY the changes
+          in origin/main...HEAD. Do not modify any file. Focus especially on exact money arithmetic,
+          refunds, fees, payout/deposit double counting, unknown transaction kinds, data integrity,
+          destructive behavior, secrets, permissions, and whether claims exceed evidence. Return one
+          raw JSON object only, with no markdown or code fences. Top-level keys must be exactly
+          verdict, summary, findings, and tests; all four are required.
+          EOF
+
+      - name: Run read-only Security and Data Integrity reviewer
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':read-only'
+          working-directory: ${{ github.workspace }}
+          prompt-file: ${{ runner.temp }}/security-prompt.md
+          output-file: ${{ env.SECURITY_REVIEW_PATH }}
+          effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
+          model: ${{ vars.LEDGER_CODEX_REVIEW_MODEL }}
+
+      - name: Revalidate exact proposal after Security review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REVIEWED_SHA"
+          test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$REVIEWED_SHA"
+          test "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')" = "$REVIEWED_SHA"
+          (cd "$RUNNER_TEMP" && sha256sum -c ledger-review-controls.sha256)
+
+      - name: Evaluate strict review gate
+        id: gate
+        continue-on-error: true
+        run: python -I -S "$RUNNER_TEMP/ledger-review-gate.py" "$QA_REVIEW_PATH" "$SECURITY_REVIEW_PATH"
+
+      - name: Post reviewer evidence
+        if: always() && (steps.gate.outcome == 'success' || steps.gate.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            printf 'One-shot trial #25 reviewer bridge. Reviewed commit: `%s`\n\n### QA\n' "$REVIEWED_SHA"
+            cat "$QA_REVIEW_PATH" 2>/dev/null || printf '{"verdict":"needs-human","summary":"QA output missing","findings":[],"tests":[]}'
+            printf '\n\n### Security & Data Integrity\n'
+            cat "$SECURITY_REVIEW_PATH" 2>/dev/null || printf '{"verdict":"needs-human","summary":"Security output missing","findings":[],"tests":[]}'
+          } > "$RUNNER_TEMP/review-evidence.md"
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/review-evidence.md"
+
+      - name: Promote exact reviewed proposal to awaiting human review
+        if: steps.gate.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LABELS="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$LABELS" | grep -Eq '^(needs:human|agent:paused)$'; then exit 1; fi
+          test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$REVIEWED_SHA"
+          test "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')" = "$REVIEWED_SHA"
+          for LABEL in agent:ready agent:claimed agent:working agent:blocked; do
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL" >/dev/null 2>&1 || true
+          done
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label 'agent:awaiting-review'
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Trial #25 recovery review completed on exact preserved commit \`$REVIEWED_SHA\`. QA and Security/Data Integrity passed the strict protected-main gate. Draft PR #$PR_NUMBER remains unmerged for human review."
+
+      - name: Block on reviewer rejection or malformed evidence
+        if: steps.gate.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for LABEL in agent:ready agent:claimed agent:working agent:awaiting-review; do
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL" >/dev/null 2>&1 || true
+          done
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label 'agent:blocked'
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Trial #25 reviewer bridge rejected, escalated, or received malformed evidence for exact commit \`$REVIEWED_SHA\`. Draft PR #$PR_NUMBER was preserved."
+          exit 1
