@@ -8,27 +8,45 @@ from pathlib import Path
 ALLOWED_VERDICTS = {"pass", "fail", "needs-human"}
 ALLOWED_SEVERITIES = {"blocking", "important", "minor"}
 SERIOUS_SEVERITIES = {"blocking", "important"}
+REQUIRED_REVIEW_KEYS = {"verdict", "summary", "findings", "tests"}
+REQUIRED_FINDING_KEYS = {"severity", "title", "evidence"}
 
 
 def load_review(path: Path) -> dict:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"{path} did not contain a JSON object")
-    verdict = payload.get("verdict")
+    if set(payload) != REQUIRED_REVIEW_KEYS:
+        raise ValueError(
+            f"{path} must contain exactly {sorted(REQUIRED_REVIEW_KEYS)!r}; "
+            f"received {sorted(payload)!r}"
+        )
+
+    verdict = payload["verdict"]
     if verdict not in ALLOWED_VERDICTS:
         raise ValueError(f"{path} has unsupported verdict: {verdict!r}")
-    if not isinstance(payload.get("summary"), str):
+    if not isinstance(payload["summary"], str):
         raise ValueError(f"{path} is missing a string summary")
-    findings = payload.get("findings")
+
+    tests = payload["tests"]
+    if not isinstance(tests, list) or any(not isinstance(test, str) for test in tests):
+        raise ValueError(f"{path} must contain a tests list of strings")
+
+    findings = payload["findings"]
     if not isinstance(findings, list):
         raise ValueError(f"{path} is missing findings list")
     for finding in findings:
         if not isinstance(finding, dict):
             raise ValueError(f"{path} contains a non-object finding")
-        severity = finding.get("severity")
+        if set(finding) != REQUIRED_FINDING_KEYS:
+            raise ValueError(
+                f"{path} finding must contain exactly {sorted(REQUIRED_FINDING_KEYS)!r}; "
+                f"received {sorted(finding)!r}"
+            )
+        severity = finding["severity"]
         if severity not in ALLOWED_SEVERITIES:
             raise ValueError(f"{path} has unsupported finding severity: {severity!r}")
-        if not isinstance(finding.get("title"), str) or not isinstance(finding.get("evidence"), str):
+        if not isinstance(finding["title"], str) or not isinstance(finding["evidence"], str):
             raise ValueError(f"{path} contains a malformed finding")
     return payload
 
