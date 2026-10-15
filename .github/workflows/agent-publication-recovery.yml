@@ -639,7 +639,6 @@ jobs:
           permission-profile: ':read-only'
           working-directory: ${{ github.workspace }}
           prompt-file: ${{ runner.temp }}/ledger-recovery-security-prompt.md
-          output-schema-file: ${{ runner.temp }}/ledger-review-schema.json
           output-file: ${{ env.SECURITY_REVIEW_PATH }}
           effort: ${{ vars.LEDGER_CODEX_REVIEW_EFFORT || 'medium' }}
           model: ${{ vars.LEDGER_CODEX_REVIEW_MODEL }}
