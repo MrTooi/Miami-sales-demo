@@ -1,0 +1,65 @@
+name: Agent OS scheduled readiness evidence
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-os-scheduled-readiness-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  record-readiness-evidence:
+    # The readiness gate requires three independent scheduled successes. After
+    # the first three workflow runs, future schedule wakeups skip without using
+    # a runner or creating more artifacts.
+    if: github.event_name == 'schedule' && github.run_number <= 3
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Run deterministic Agent OS readiness tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python -m unittest discover -s tests -p 'test_agent_*.py' -v
+
+      - name: Build immutable run evidence
+        env:
+          EVIDENCE_PATH: ${{ runner.temp }}/agent-os-scheduled-readiness.json
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          keys = {
+              "event": "GITHUB_EVENT_NAME",
+              "repository": "GITHUB_REPOSITORY",
+              "run_id": "GITHUB_RUN_ID",
+              "run_attempt": "GITHUB_RUN_ATTEMPT",
+              "run_number": "GITHUB_RUN_NUMBER",
+              "sha": "GITHUB_SHA",
+              "ref": "GITHUB_REF",
+              "workflow": "GITHUB_WORKFLOW",
+          }
+          evidence = {key: os.environ.get(env_name, "") for key, env_name in keys.items()}
+          evidence["test_scope"] = "python -m unittest discover -s tests -p 'test_agent_*.py' -v"
+          evidence["scheduled_gate_sample"] = int(evidence["run_number"])
+          path = Path(os.environ["EVIDENCE_PATH"])
+          path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload scheduled readiness evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-os-scheduled-readiness-${{ github.run_id }}
+          path: ${{ runner.temp }}/agent-os-scheduled-readiness.json
+          if-no-files-found: error
+          retention-days: 7
