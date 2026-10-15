@@ -1,0 +1,28 @@
+name: One-shot Agent OS recovery dispatch for issue 25
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/one-shot-recover-25.yml
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch-recovery:
+    if: github.repository == 'MrTooi/Miami-sales-demo'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch fixed publication recovery for frozen trial 25
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh workflow run agent-publication-recovery.yml
+          --repo "$GITHUB_REPOSITORY"
+          --ref main
+          -f source_run_id=38667506613
+          -f issue_number=25
