@@ -33,11 +33,13 @@ class AgentReviewOutputContractTests(unittest.TestCase):
             for index, value in enumerate(node):
                 self._assert_all_object_schemas_are_strict(value, f"{path}[{index}]")
 
-    def _assert_prompt_contract_matches_structured_reviewers(self, path):
+    def _assert_prompt_contract_matches_reviewers(self, path):
         text = path.read_text(encoding="utf-8")
-        schema_calls = text.count("output-schema-file:")
-        self.assertGreater(schema_calls, 0)
-        self.assertEqual(text.count(PROMPT_CONTRACT), schema_calls)
+        reviewer_outputs = text.count("output-file: ${{ env.QA_REVIEW_PATH }}") + text.count(
+            "output-file: ${{ env.SECURITY_REVIEW_PATH }}"
+        )
+        self.assertGreater(reviewer_outputs, 0)
+        self.assertEqual(text.count(PROMPT_CONTRACT), reviewer_outputs)
 
     def test_schema_accepts_string_test_evidence(self):
         jsonschema.validate(
@@ -111,11 +113,26 @@ class AgentReviewOutputContractTests(unittest.TestCase):
     def test_every_object_schema_is_strict_output_compatible(self):
         self._assert_all_object_schemas_are_strict(self.schema)
 
-    def test_executor_reviewer_prompts_cover_every_structured_reviewer(self):
-        self._assert_prompt_contract_matches_structured_reviewers(EXECUTOR_PATH)
+    def test_executor_reviewer_prompts_cover_every_reviewer(self):
+        self._assert_prompt_contract_matches_reviewers(EXECUTOR_PATH)
 
-    def test_recovery_reviewer_prompts_cover_every_structured_reviewer(self):
-        self._assert_prompt_contract_matches_structured_reviewers(RECOVERY_PATH)
+    def test_recovery_reviewer_prompts_cover_every_reviewer(self):
+        self._assert_prompt_contract_matches_reviewers(RECOVERY_PATH)
+
+    def test_recovery_security_review_uses_local_strict_gate_fallback(self):
+        text = RECOVERY_PATH.read_text(encoding="utf-8")
+        security_block = text.split(
+            "- name: Run read-only Security & Data Integrity recovery reviewer", 1
+        )[1].split("- name: Verify Security evidence is still pinned to exact proposal", 1)[0]
+        self.assertIn("output-file: ${{ env.SECURITY_REVIEW_PATH }}", security_block)
+        self.assertNotIn("output-schema-file:", security_block)
+
+    def test_recovery_qa_review_keeps_native_structured_output(self):
+        text = RECOVERY_PATH.read_text(encoding="utf-8")
+        qa_block = text.split("- name: Run read-only independent QA recovery reviewer", 1)[1].split(
+            "- name: Verify QA evidence is still pinned to exact proposal", 1
+        )[0]
+        self.assertIn("output-schema-file:", qa_block)
 
 
 if __name__ == "__main__":
