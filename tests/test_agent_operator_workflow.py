@@ -63,18 +63,34 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertIn("contains(github.event.issue.labels.*.name, 'agent:ready')", text)
         dispatch = text.split("  dispatch:", 1)[1]
         self.assertIn("actions: write", dispatch)
+        self.assertIn("issues: read", dispatch)
         self.assertNotIn("contents: write", dispatch)
         self.assertNotIn("issues: write", dispatch)
         self.assertNotIn("pull-requests: write", dispatch)
         self.assertNotIn("actions/checkout", text)
+        self.assertIn("gh issue list", text)
+        self.assertIn("--label 'agent:ready'", text)
+        self.assertIn("READY_COUNT", text)
+        self.assertIn('"$READY_COUNT" != "1"', text)
+        self.assertIn('"$READY_NUMBERS" != "$ISSUE_NUMBER"', text)
         self.assertIn("gh workflow run agent-executor.yml", text)
         self.assertIn("--ref main", text)
 
-    def test_executor_only_allows_trusted_github_actions_bot(self):
+    def test_executor_uses_pinned_trusted_bot_opt_in_without_custom_allowlists(self):
         text = EXECUTOR.read_text(encoding="utf-8")
         self.assertEqual(text.count("allow-bots: true"), 3)
         self.assertNotIn("allow-users:", text)
         self.assertNotIn("allow-bot-users:", text)
+
+    def test_executor_event_surface_remains_manual_or_schedule_only(self):
+        text = EXECUTOR.read_text(encoding="utf-8")
+        header = text.split("permissions:", 1)[0]
+        self.assertIn("workflow_dispatch:", header)
+        self.assertIn("schedule:", header)
+        self.assertNotIn("issue_comment:", header)
+        self.assertNotIn("pull_request:", header)
+        self.assertNotIn("pull_request_target:", header)
+        self.assertNotIn("repository_dispatch:", header)
 
     def test_executor_uses_pinned_actions_and_never_automatic_claude(self):
         text = EXECUTOR.read_text(encoding="utf-8")
