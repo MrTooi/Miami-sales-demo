@@ -1,0 +1,748 @@
+name: Agent OS final scheduled blind readiness
+
+on:
+  schedule:
+    - cron: '43 * * * *'
+
+permissions: {}
+
+concurrency:
+  group: agent-os-final-scheduled-readiness-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  select-suite:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      should_run: ${{ steps.select.outputs.should_run }}
+      suite: ${{ steps.select.outputs.suite }}
+      evidence_count: ${{ steps.select.outputs.evidence_count }}
+    steps:
+      - name: Checkout exact scheduled commit without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Verify deterministic final-readiness assets before any model call
+        run: >-
+          python -m unittest
+          tests.test_agent_final_readiness
+          tests.test_agent_scheduled_readiness
+          tests.test_agent_final_readiness_scheduled_workflow
+          -v
+
+      - name: Select A then B then C from verified evidence on this exact commit
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FILE: agent-final-readiness-scheduled.yml
+        run: |
+          set -euo pipefail
+
+          COMPLETE_ARTIFACT="agent-final-readiness-complete"
+          COMPLETE_LIST="$RUNNER_TEMP/completion-artifacts.json"
+
+          # A verified completion marker is global across later main commits. This
+          # closes the race between Suite C completing and removal of the schedule:
+          # a new main SHA must never restart paid readiness from Suite A.
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$COMPLETE_ARTIFACT&per_page=100" \
+            > "$COMPLETE_LIST"
+
+          COMPLETE_ROW="$(python - "$COMPLETE_LIST" <<'PY'
+          import json
+          import sys
+
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          artifacts = data.get("artifacts")
+          if not isinstance(artifacts, list):
+              raise SystemExit("completion artifact history is malformed")
+          live = [
+              item for item in artifacts
+              if isinstance(item, dict)
+              and item.get("name") == "agent-final-readiness-complete"
+              and item.get("expired") is False
+          ]
+          if len(live) > 1:
+              raise SystemExit("multiple live completion markers are ambiguous; refusing model spend")
+          if not live:
+              print("")
+              raise SystemExit(0)
+          artifact = live[0]
+          artifact_id = artifact.get("id")
+          workflow_run = artifact.get("workflow_run")
+          if not isinstance(artifact_id, int) or not isinstance(workflow_run, dict):
+              raise SystemExit("completion marker metadata is malformed")
+          run_id = workflow_run.get("id")
+          if not isinstance(run_id, int):
+              raise SystemExit("completion marker run id is malformed")
+          print(f"{artifact_id}\t{run_id}")
+          PY
+          )"
+
+          if [ -n "$COMPLETE_ROW" ]; then
+            COMPLETE_ARTIFACT_ID="$(printf '%s' "$COMPLETE_ROW" | cut -f1)"
+            COMPLETE_RUN_ID="$(printf '%s' "$COMPLETE_ROW" | cut -f2)"
+            test -n "$COMPLETE_ARTIFACT_ID"
+            test -n "$COMPLETE_RUN_ID"
+
+            COMPLETE_RUN_JSON="$RUNNER_TEMP/completion-run.json"
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$COMPLETE_RUN_ID" \
+              > "$COMPLETE_RUN_JSON"
+
+            python - "$COMPLETE_RUN_JSON" "$COMPLETE_RUN_ID" <<'PY'
+          import json
+          import sys
+
+          path, expected_run_id = sys.argv[1:]
+          run = json.load(open(path, encoding="utf-8"))
+          checks = {
+              "id": str(run.get("id")) == expected_run_id,
+              "event": run.get("event") == "schedule",
+              "status": run.get("status") == "completed",
+              "conclusion": run.get("conclusion") == "success",
+              "attempt": run.get("run_attempt") == 1,
+              "workflow": run.get("path") == ".github/workflows/agent-final-readiness-scheduled.yml",
+          }
+          failed = [name for name, passed in checks.items() if not passed]
+          if failed:
+              raise SystemExit(f"completion marker owner run failed verification: {failed}")
+          sha = run.get("head_sha")
+          if not isinstance(sha, str) or len(sha) != 40:
+              raise SystemExit("completion marker owner run has invalid head sha")
+          PY
+
+            COMPLETE_DIR="$RUNNER_TEMP/completion-marker"
+            mkdir -p "$COMPLETE_DIR"
+            gh run download "$COMPLETE_RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "$COMPLETE_ARTIFACT" \
+              --dir "$COMPLETE_DIR"
+
+            MARKER_FIELDS="$(python - "$COMPLETE_DIR/completion.json" "$COMPLETE_RUN_JSON" <<'PY'
+          import json
+          import re
+          import sys
+
+          marker_path, run_path = sys.argv[1:]
+          marker = json.load(open(marker_path, encoding="utf-8"))
+          run = json.load(open(run_path, encoding="utf-8"))
+          expected_run_id = str(run.get("id"))
+          expected_sha = run.get("head_sha")
+          if marker.get("complete") is not True:
+              raise SystemExit("completion marker is not complete")
+          if marker.get("event") != "schedule" or marker.get("suite") != "c":
+              raise SystemExit("completion marker event/suite mismatch")
+          if str(marker.get("run_id")) != expected_run_id:
+              raise SystemExit("completion marker run id mismatch")
+          if str(marker.get("run_attempt")) != "1":
+              raise SystemExit("completion marker attempt mismatch")
+          if marker.get("sha") != expected_sha:
+              raise SystemExit("completion marker sha mismatch")
+          evidence_name = marker.get("evidence_artifact_name")
+          evidence_hash = marker.get("evidence_json_sha256")
+          expected_name = f"agent-final-readiness-c-{expected_run_id}-attempt-1"
+          if evidence_name != expected_name:
+              raise SystemExit("completion marker evidence artifact mismatch")
+          if not isinstance(evidence_hash, str) or re.fullmatch(r"[0-9a-f]{64}", evidence_hash) is None:
+              raise SystemExit("completion marker evidence hash is invalid")
+          print(f"{evidence_name}\t{evidence_hash}")
+          PY
+            )"
+            EVIDENCE_ARTIFACT="$(printf '%s' "$MARKER_FIELDS" | cut -f1)"
+            EVIDENCE_HASH="$(printf '%s' "$MARKER_FIELDS" | cut -f2)"
+
+            COMPLETE_RUN_ARTIFACTS="$RUNNER_TEMP/completion-run-artifacts.json"
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$COMPLETE_RUN_ID/artifacts?per_page=100" \
+              > "$COMPLETE_RUN_ARTIFACTS"
+
+            python - "$COMPLETE_RUN_ARTIFACTS" "$EVIDENCE_ARTIFACT" <<'PY'
+          import json
+          import sys
+
+          path, expected = sys.argv[1:]
+          data = json.load(open(path, encoding="utf-8"))
+          artifacts = data.get("artifacts")
+          if not isinstance(artifacts, list):
+              raise SystemExit("completion run artifact history is malformed")
+          matches = [
+              item for item in artifacts
+              if isinstance(item, dict)
+              and item.get("name") == expected
+              and item.get("expired") is False
+          ]
+          if len(matches) != 1:
+              raise SystemExit(f"expected exactly one live completion evidence artifact, found {len(matches)}")
+          PY
+
+            COMPLETE_EVIDENCE_DIR="$RUNNER_TEMP/completion-evidence"
+            mkdir -p "$COMPLETE_EVIDENCE_DIR"
+            gh run download "$COMPLETE_RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "$EVIDENCE_ARTIFACT" \
+              --dir "$COMPLETE_EVIDENCE_DIR"
+
+            python - "$COMPLETE_EVIDENCE_DIR/evidence.json" "$EVIDENCE_HASH" "$COMPLETE_RUN_ID" "$COMPLETE_RUN_JSON" <<'PY'
+          import hashlib
+          import json
+          import re
+          import sys
+
+          evidence_path, expected_hash, expected_run_id, run_path = sys.argv[1:]
+          raw = open(evidence_path, "rb").read()
+          actual_hash = hashlib.sha256(raw).hexdigest()
+          if actual_hash != expected_hash:
+              raise SystemExit("completion evidence hash mismatch")
+          evidence = json.loads(raw)
+          run = json.load(open(run_path, encoding="utf-8"))
+          if evidence.get("event") != "schedule" or evidence.get("suite") != "c":
+              raise SystemExit("completion evidence event/suite mismatch")
+          if evidence.get("sha") != run.get("head_sha"):
+              raise SystemExit("completion evidence sha mismatch")
+          if str(evidence.get("run_id")) != expected_run_id:
+              raise SystemExit("completion evidence run id mismatch")
+          if str(evidence.get("run_attempt")) != "1":
+              raise SystemExit("completion evidence attempt mismatch")
+          if evidence.get("validation", {}).get("ready") is not True:
+              raise SystemExit("completion evidence is not readiness-passing")
+          for field in (
+              "source_prompts_sha256",
+              "source_rubric_sha256",
+              "source_team_profiles_sha256",
+              "sanitized_team_profiles_sha256",
+              "blind_output_sha256",
+              "judge_output_sha256",
+              "combined_results_sha256",
+          ):
+              value = evidence.get(field)
+              if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                  raise SystemExit(f"completion evidence missing valid {field}")
+          PY
+
+            echo "Verified global A/B/C completion marker; refusing all further readiness model spend."
+            echo "evidence_count=3" >> "$GITHUB_OUTPUT"
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "suite=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          RUNS_JSON="$RUNNER_TEMP/scheduled-runs.json"
+          SERIES_TSV="$RUNNER_TEMP/current-sha-series.tsv"
+
+          # Fail closed if GitHub history cannot be read. Never convert an API
+          # error into an empty history, because that could spend again.
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_FILE/runs?event=schedule&per_page=100" \
+            > "$RUNS_JSON"
+
+          python - "$RUNS_JSON" "$GITHUB_SHA" "$GITHUB_RUN_ID" > "$SERIES_TSV" <<'PY'
+          import json
+          import sys
+
+          path, sha, current_run_id = sys.argv[1:]
+          data = json.load(open(path, encoding="utf-8"))
+          runs = data.get("workflow_runs")
+          if not isinstance(runs, list):
+              raise SystemExit("workflow run history is malformed")
+          matching = []
+          for run in runs:
+              if not isinstance(run, dict):
+                  raise SystemExit("workflow run history contains a malformed run")
+              if str(run.get("id")) == current_run_id:
+                  continue
+              if run.get("head_sha") != sha or run.get("event") != "schedule":
+                  continue
+              if run.get("status") != "completed":
+                  continue
+              matching.append(run)
+          matching.sort(key=lambda run: (str(run.get("created_at", "")), int(run.get("id", 0))))
+          for run in matching:
+              print(
+                  f"{run.get('id')}\t{run.get('run_attempt')}\t{run.get('conclusion')}\t"
+                  f"{run.get('created_at', '')}"
+              )
+          PY
+
+          EVIDENCE_COUNT=0
+          while IFS=$'\t' read -r PRIOR_RUN_ID PRIOR_ATTEMPT PRIOR_CONCLUSION PRIOR_CREATED_AT; do
+            [ -n "$PRIOR_RUN_ID" ] || continue
+
+            if [ "$EVIDENCE_COUNT" -ge 3 ]; then
+              break
+            fi
+
+            if [ "$PRIOR_ATTEMPT" != "1" ]; then
+              echo "Prior readiness run $PRIOR_RUN_ID used attempt $PRIOR_ATTEMPT; refusing ambiguous series." >&2
+              exit 1
+            fi
+            if [ "$PRIOR_CONCLUSION" != "success" ]; then
+              echo "Prior scheduled readiness run $PRIOR_RUN_ID failed on this exact commit; refusing blind retry until state changes." >&2
+              exit 1
+            fi
+
+            case "$EVIDENCE_COUNT" in
+              0) EXPECTED_SUITE="a" ;;
+              1) EXPECTED_SUITE="b" ;;
+              2) EXPECTED_SUITE="c" ;;
+              *)
+                echo "Unexpected evidence count: $EVIDENCE_COUNT" >&2
+                exit 1
+                ;;
+            esac
+
+            EXPECTED_ARTIFACT="agent-final-readiness-${EXPECTED_SUITE}-${PRIOR_RUN_ID}-attempt-1"
+            ARTIFACTS_JSON="$RUNNER_TEMP/artifacts-${PRIOR_RUN_ID}.json"
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$PRIOR_RUN_ID/artifacts?per_page=100" \
+              > "$ARTIFACTS_JSON"
+
+            ARTIFACT_ID="$(python - "$ARTIFACTS_JSON" "$EXPECTED_ARTIFACT" <<'PY'
+          import json
+          import sys
+          path, expected = sys.argv[1:]
+          data = json.load(open(path, encoding="utf-8"))
+          artifacts = data.get("artifacts")
+          if not isinstance(artifacts, list):
+              raise SystemExit("artifact history is malformed")
+          matches = [a for a in artifacts if isinstance(a, dict) and a.get("name") == expected]
+          if len(matches) != 1:
+              raise SystemExit(f"expected exactly one artifact named {expected!r}, found {len(matches)}")
+          artifact = matches[0]
+          if artifact.get("expired") is not False:
+              raise SystemExit(f"required artifact {expected!r} is expired or has unknown expiry state")
+          artifact_id = artifact.get("id")
+          if not isinstance(artifact_id, int):
+              raise SystemExit("required artifact has invalid id")
+          print(artifact_id)
+          PY
+            )"
+            test -n "$ARTIFACT_ID"
+
+            PRIOR_DIR="$RUNNER_TEMP/prior-${EXPECTED_SUITE}-${PRIOR_RUN_ID}"
+            mkdir -p "$PRIOR_DIR"
+            gh run download "$PRIOR_RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "$EXPECTED_ARTIFACT" \
+              --dir "$PRIOR_DIR"
+
+            python - "$PRIOR_DIR/evidence.json" "$EXPECTED_SUITE" "$GITHUB_SHA" "$PRIOR_RUN_ID" <<'PY'
+          import json
+          import re
+          import sys
+
+          path, expected_suite, expected_sha, expected_run_id = sys.argv[1:]
+          with open(path, encoding="utf-8") as handle:
+              evidence = json.load(handle)
+          if evidence.get("event") != "schedule":
+              raise SystemExit("prior evidence did not come from schedule")
+          if evidence.get("suite") != expected_suite:
+              raise SystemExit("prior evidence suite does not match expected progression")
+          if evidence.get("sha") != expected_sha:
+              raise SystemExit("prior evidence commit does not match current frozen series commit")
+          if str(evidence.get("run_id")) != expected_run_id:
+              raise SystemExit("prior evidence run id does not match artifact owner")
+          if str(evidence.get("run_attempt")) != "1":
+              raise SystemExit("prior evidence was not produced on run attempt 1")
+          if evidence.get("validation", {}).get("ready") is not True:
+              raise SystemExit("prior evidence is not readiness-passing")
+          for field in (
+              "source_prompts_sha256",
+              "source_rubric_sha256",
+              "source_team_profiles_sha256",
+              "sanitized_team_profiles_sha256",
+              "blind_output_sha256",
+              "judge_output_sha256",
+              "combined_results_sha256",
+          ):
+              value = evidence.get(field)
+              if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                  raise SystemExit(f"prior evidence missing valid {field}")
+          PY
+
+            EVIDENCE_COUNT="$((EVIDENCE_COUNT + 1))"
+          done < "$SERIES_TSV"
+
+          echo "evidence_count=$EVIDENCE_COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$EVIDENCE_COUNT" -ge 3 ]; then
+            echo "Three verified A/B/C scheduled artifacts exist on this exact commit; refusing further model spend."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "suite=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          case "$EVIDENCE_COUNT" in
+            0) SUITE="a" ;;
+            1) SUITE="b" ;;
+            2) SUITE="c" ;;
+            *)
+              echo "Unexpected evidence count: $EVIDENCE_COUNT" >&2
+              exit 1
+              ;;
+          esac
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "suite=$SUITE" >> "$GITHUB_OUTPUT"
+
+  prepare-blind:
+    needs: select-suite
+    if: github.run_attempt == 1 && needs.select-suite.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact scheduled commit without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Build sanitized blind package
+        env:
+          SUITE: ${{ needs.select-suite.outputs.suite }}
+        run: >-
+          python -m agent_evals.scheduled_readiness prepare-blind
+          --suite "$SUITE"
+          --out-dir "$RUNNER_TEMP/blind-input"
+          --commit-sha "$GITHUB_SHA"
+
+      - name: Upload immutable sanitized blind package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-final-blind-input-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/blind-input
+          if-no-files-found: error
+          retention-days: 14
+
+  blind-pass:
+    needs: [select-suite, prepare-blind]
+    if: github.run_attempt == 1 && needs.prepare-blind.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions: {}
+    outputs:
+      result: ${{ steps.blind.outputs.final-message }}
+    steps:
+      - name: Download only the sanitized same-run blind package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: agent-final-blind-input-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/blind-input
+
+      - name: Run blind Pass 1 as the final step on this runner
+        id: blind
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          safety-strategy: drop-sudo
+          permission-profile: ':read-only'
+          working-directory: ${{ runner.temp }}/blind-input
+          prompt-file: ${{ runner.temp }}/blind-input/blind_prompt.md
+          output-schema-file: ${{ runner.temp }}/blind-input/blind_output_schema.json
+          effort: ${{ vars.LEDGER_CODEX_EFFORT || 'medium' }}
+          model: ${{ vars.LEDGER_CODEX_MODEL }}
+
+  prepare-judge:
+    needs: [select-suite, prepare-blind, blind-pass]
+    if: github.run_attempt == 1 && needs.blind-pass.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact scheduled commit without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Download immutable same-run blind input
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: agent-final-blind-input-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/blind-input
+
+      - name: Freeze blind model output from job output
+        env:
+          BLIND_RESULT: ${{ needs.blind-pass.outputs.result }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ.get("BLIND_RESULT", "")
+          if not value.strip():
+              raise SystemExit("blind model returned empty output")
+          Path(os.environ["RUNNER_TEMP"], "blind-output.json").write_text(
+              value + ("\n" if not value.endswith("\n") else ""),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Validate frozen blind output and build hidden-rubric judge package
+        env:
+          SUITE: ${{ needs.select-suite.outputs.suite }}
+        run: >-
+          python -m agent_evals.scheduled_readiness prepare-judge
+          --suite "$SUITE"
+          --blind-input-dir "$RUNNER_TEMP/blind-input"
+          --blind-output "$RUNNER_TEMP/blind-output.json"
+          --out-dir "$RUNNER_TEMP/judge-input"
+          --commit-sha "$GITHUB_SHA"
+
+      - name: Upload immutable judge package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-final-judge-input-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/judge-input
+          if-no-files-found: error
+          retention-days: 14
+
+  judge-pass:
+    needs: [select-suite, prepare-judge]
+    if: github.run_attempt == 1 && needs.prepare-judge.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions: {}
+    outputs:
+      result: ${{ steps.judge.outputs.final-message }}
+    steps:
+      - name: Download only the frozen same-run judge package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: agent-final-judge-input-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/judge-input
+
+      - name: Run independent Pass 2 judge as the final step on this runner
+        id: judge
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          safety-strategy: drop-sudo
+          permission-profile: ':read-only'
+          working-directory: ${{ runner.temp }}/judge-input
+          prompt-file: ${{ runner.temp }}/judge-input/judge_prompt.md
+          output-schema-file: ${{ runner.temp }}/judge-input/judge_output_schema.json
+          effort: ${{ vars.LEDGER_CODEX_EFFORT || 'medium' }}
+          model: ${{ vars.LEDGER_CODEX_MODEL }}
+
+  finalize-evidence:
+    needs: [select-suite, prepare-blind, blind-pass, prepare-judge, judge-pass]
+    if: github.run_attempt == 1 && needs.judge-pass.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact scheduled commit without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Download blind package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: agent-final-blind-input-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/blind-input
+
+      - name: Download judge package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: agent-final-judge-input-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/judge-input
+
+      - name: Materialize frozen model outputs without shell interpolation
+        env:
+          BLIND_RESULT: ${{ needs.blind-pass.outputs.result }}
+          JUDGE_RESULT: ${{ needs.judge-pass.outputs.result }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          for env_name, filename in (
+              ("BLIND_RESULT", "blind-output.json"),
+              ("JUDGE_RESULT", "judge-output.json"),
+          ):
+              value = os.environ.get(env_name, "")
+              if not value.strip():
+                  raise SystemExit(f"{env_name} was empty")
+              (root / filename).write_text(
+                  value + ("\n" if not value.endswith("\n") else ""),
+                  encoding="utf-8",
+              )
+          PY
+
+      - name: Deterministically validate and assemble immutable evidence
+        id: finalize
+        env:
+          SUITE: ${{ needs.select-suite.outputs.suite }}
+        run: |
+          set +e
+          python -m agent_evals.scheduled_readiness finalize \
+            --suite "$SUITE" \
+            --blind-input-dir "$RUNNER_TEMP/blind-input" \
+            --judge-input-dir "$RUNNER_TEMP/judge-input" \
+            --blind-output "$RUNNER_TEMP/blind-output.json" \
+            --judge-output "$RUNNER_TEMP/judge-output.json" \
+            --out-dir "$RUNNER_TEMP/final-evidence" \
+            --event "$GITHUB_EVENT_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --ref "$GITHUB_REF" \
+            --sha "$GITHUB_SHA"
+          STATUS="$?"
+          set -e
+          echo "$STATUS" > "$RUNNER_TEMP/finalize-status"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+      - name: Add explicit blind-profile provenance to evidence
+        if: always()
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          evidence_path = root / "final-evidence" / "evidence.json"
+          if not evidence_path.is_file():
+              raise SystemExit("final evidence is missing before provenance augmentation")
+          evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+          manifest = json.loads((root / "blind-input" / "manifest.json").read_text(encoding="utf-8"))
+          sanitized_path = root / "blind-input" / "team_profiles.json"
+          evidence["source_team_profiles_sha256"] = manifest["source_team_profiles_sha256"]
+          evidence["sanitized_team_profiles_sha256"] = hashlib.sha256(sanitized_path.read_bytes()).hexdigest()
+          evidence["blind_profile_fields"] = ["capabilities", "independent_review"]
+          evidence["blind_profile_note"] = "Pass 1 intentionally excludes repo paths/source metadata and hidden rubric fields."
+          evidence_path.write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Verify evidence contains required run and provenance fields
+        if: always()
+        run: |
+          test -f "$RUNNER_TEMP/final-evidence/evidence.json"
+          grep -q '"event"' "$RUNNER_TEMP/final-evidence/evidence.json"
+          grep -q '"source_prompts_sha256"' "$RUNNER_TEMP/final-evidence/evidence.json"
+          grep -q '"source_rubric_sha256"' "$RUNNER_TEMP/final-evidence/evidence.json"
+          grep -q '"source_team_profiles_sha256"' "$RUNNER_TEMP/final-evidence/evidence.json"
+          grep -q '"sanitized_team_profiles_sha256"' "$RUNNER_TEMP/final-evidence/evidence.json"
+          grep -q '"blind_output_sha256"' "$RUNNER_TEMP/final-evidence/evidence.json"
+          grep -q '"judge_output_sha256"' "$RUNNER_TEMP/final-evidence/evidence.json"
+
+      - name: Upload immutable final suite evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-final-readiness-${{ needs.select-suite.outputs.suite }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/final-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce suite readiness after evidence upload
+        if: always()
+        run: |
+          test -f "$RUNNER_TEMP/finalize-status"
+          STATUS="$(cat "$RUNNER_TEMP/finalize-status")"
+          if [ "$STATUS" != "0" ]; then
+            echo "Suite did not pass deterministic readiness validation (status $STATUS)." >&2
+            exit 1
+          fi
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          evidence = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "final-evidence", "evidence.json").read_text(encoding="utf-8")
+          )
+          if evidence.get("event") != "schedule":
+              raise SystemExit("readiness evidence did not come from a scheduled event")
+          if str(evidence.get("run_attempt")) != "1":
+              raise SystemExit("readiness evidence was not produced on first attempt")
+          if evidence.get("validation", {}).get("ready") is not True:
+              raise SystemExit("suite readiness is not true")
+          PY
+
+      - name: Create verified global completion marker after Suite C
+        if: needs.select-suite.outputs.suite == 'c'
+        env:
+          EVIDENCE_ARTIFACT_NAME: agent-final-readiness-c-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          evidence_path = root / "final-evidence" / "evidence.json"
+          raw = evidence_path.read_bytes()
+          evidence = json.loads(raw)
+          if evidence.get("event") != "schedule" or evidence.get("suite") != "c":
+              raise SystemExit("completion marker can only be created by passing Suite C schedule evidence")
+          if str(evidence.get("run_attempt")) != "1":
+              raise SystemExit("completion marker requires first-attempt evidence")
+          if evidence.get("validation", {}).get("ready") is not True:
+              raise SystemExit("completion marker requires readiness-passing Suite C evidence")
+          marker = {
+              "complete": True,
+              "event": "schedule",
+              "suite": "c",
+              "run_id": str(evidence["run_id"]),
+              "run_attempt": "1",
+              "sha": evidence["sha"],
+              "evidence_artifact_name": os.environ["EVIDENCE_ARTIFACT_NAME"],
+              "evidence_json_sha256": hashlib.sha256(raw).hexdigest(),
+          }
+          marker_dir = root / "completion-marker"
+          marker_dir.mkdir(parents=True, exist_ok=False)
+          (marker_dir / "completion.json").write_text(
+              json.dumps(marker, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload global completion marker after Suite C
+        if: needs.select-suite.outputs.suite == 'c'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-final-readiness-complete
+          path: ${{ runner.temp }}/completion-marker
+          if-no-files-found: error
+          retention-days: 90
