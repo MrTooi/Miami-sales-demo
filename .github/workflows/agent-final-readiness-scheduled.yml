@@ -2,7 +2,7 @@ name: Agent final readiness scheduled
 
 on:
   schedule:
-    - cron: '17 * * * *'
+    - cron: '*/5 * * * *'
 
 permissions: {}
 
@@ -52,11 +52,40 @@ jobs:
             exit 0
           fi
 
-          LATEST_COMPLETED="$(jq -c --argjson current "$CURRENT_RUN_ID" '[.[] | select(.id != $current and .event == "schedule" and .status == "completed")] | sort_by(.created_at) | reverse | .[0] // empty' "$RUNS")"
-          if [ -n "$LATEST_COMPLETED" ] && [ "$(jq -r '.conclusion' <<<"$LATEST_COMPLETED")" != 'success' ]; then
-            FAILED_SHA="$(jq -r '.head_sha' <<<"$LATEST_COMPLETED")"
+          # GitHub concurrency may cancel an older pending schedule event when a newer one
+          # arrives. Ignore a cancelled run only when Actions proves neither model-stage
+          # job ever started. A cancelled run that reached blind-pass or judge-pass, or
+          # whose job history cannot be verified, remains a paid-retry barrier.
+          LATEST_EFFECTIVE=''
+          while IFS= read -r CANDIDATE; do
+            CONCLUSION="$(jq -r '.conclusion' <<<"$CANDIDATE")"
+            if [ "$CONCLUSION" = 'cancelled' ]; then
+              RID="$(jq -r '.id' <<<"$CANDIDATE")"
+              JOB_PAGES="$RUNNER_TEMP/jobs-$RID-pages.json"
+              JOBS="$RUNNER_TEMP/jobs-$RID.json"
+              MODEL_STAGE_STARTED='unknown'
+              if gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/jobs?filter=all&per_page=100" > "$JOB_PAGES" \
+                && jq '[.[] | .jobs[]]' "$JOB_PAGES" > "$JOBS"; then
+                MODEL_STAGE_STARTED="$(jq '[.[] | select((.name == "blind-pass" or .name == "judge-pass") and .started_at != null)] | length' "$JOBS")"
+              fi
+              if [ "$MODEL_STAGE_STARTED" = '0' ]; then
+                echo "Ignoring cancelled run $RID because no model-stage job started."
+                continue
+              fi
+              if [ "$MODEL_STAGE_STARTED" = 'unknown' ]; then
+                echo "Could not verify cancelled run $RID job history; treating it as a paid-relevant failure." >&2
+              else
+                echo "Cancelled run $RID reached a model-stage job; treating it as a paid-relevant failure." >&2
+              fi
+            fi
+            LATEST_EFFECTIVE="$CANDIDATE"
+            break
+          done < <(jq -c --argjson current "$CURRENT_RUN_ID" '[.[] | select(.id != $current and .event == "schedule" and .status == "completed")] | sort_by(.created_at) | reverse | .[]' "$RUNS")
+
+          if [ -n "$LATEST_EFFECTIVE" ] && [ "$(jq -r '.conclusion' <<<"$LATEST_EFFECTIVE")" != 'success' ]; then
+            FAILED_SHA="$(jq -r '.head_sha' <<<"$LATEST_EFFECTIVE")"
             if [ "$FAILED_SHA" = "$CURRENT_SHA" ]; then
-              echo 'Most recent scheduled run failed on this exact commit; refusing a blind paid retry.' >&2
+              echo 'Most recent paid-relevant scheduled run failed on this exact commit; refusing a blind paid retry.' >&2
               exit 1
             fi
             echo "failed_sha=$FAILED_SHA" >> "$GITHUB_OUTPUT"
