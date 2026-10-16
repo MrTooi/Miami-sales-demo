@@ -28,11 +28,24 @@ class AgentOperatorWorkflowTests(unittest.TestCase):
         self.assertNotIn("pull-requests: write", text)
 
     def test_foundation_workflow_invokes_no_model_provider(self):
-        text = PLANNER.read_text(encoding="utf-8").lower()
-        self.assertNotIn("@claude", text)
-        self.assertNotIn("anthropic", text)
-        self.assertNotIn("openai_api_key", text)
-        self.assertNotIn("codex", text)
+        text = PLANNER.read_text(encoding="utf-8")
+        plan = text.split("  plan-next-task:", 1)[1].split("  final-readiness:", 1)[0].lower()
+        self.assertNotIn("@claude", plan)
+        self.assertNotIn("anthropic", plan)
+        self.assertNotIn("openai_api_key", plan)
+        self.assertNotIn("codex", plan)
+
+    def test_final_readiness_caller_is_schedule_only_and_passes_only_model_secret(self):
+        text = PLANNER.read_text(encoding="utf-8")
+        self.assertEqual(text.count("\n  final-readiness:"), 1)
+        caller = text.split("\n  final-readiness:", 1)[1]
+        self.assertIn("if: github.event_name == 'schedule'", caller)
+        self.assertIn("uses: ./.github/workflows/agent-final-readiness-core.yml", caller)
+        self.assertEqual(caller.count("OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}"), 1)
+        self.assertEqual(text.count("secrets.OPENAI_API_KEY"), 1)
+        self.assertNotIn("secrets: inherit", text)
+        self.assertNotIn("workflow_dispatch", caller)
+        self.assertNotIn("openai/codex-action", caller)
 
     def test_scheduler_prevents_overlapping_runs_and_has_timeout(self):
         text = PLANNER.read_text(encoding="utf-8")
