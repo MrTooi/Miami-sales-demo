@@ -50,13 +50,15 @@ jobs:
           gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/workflows/agent-operator.yml/runs?event=schedule&per_page=100" > "$RUN_PAGES"
           jq '[.[] | .workflow_runs[]]' "$RUN_PAGES" > "$RUNS"
 
-          # Historical Operator runs predate this carrier migration. A run becomes
-          # readiness-relevant only if its exact commit contains the reusable core.
-          # Once the core exists, failure to find exactly one prepare marker is
-          # ambiguous infrastructure state and therefore fails closed.
+          # Historical Operator runs predate this carrier migration. A completed run
+          # is readiness-relevant only if its exact commit contains this reusable
+          # core and Actions proves the exact prepare job existed. A cancelled run
+          # with no prepare marker is ignored only when no non-skipped model-stage
+          # job started. Any ambiguous shape fails closed.
           while IFS= read -r CANDIDATE; do
             RID="$(jq -r '.id' <<<"$CANDIDATE")"
             SHA="$(jq -r '.head_sha' <<<"$CANDIDATE")"
+            CONCLUSION="$(jq -r '.conclusion' <<<"$CANDIDATE")"
             CORE_ERR="$RUNNER_TEMP/core-$RID.err"
             if ! gh api "/repos/$GITHUB_REPOSITORY/contents/.github/workflows/agent-final-readiness-core.yml?ref=$SHA" >/dev/null 2>"$CORE_ERR"; then
               if grep -q 'HTTP 404' "$CORE_ERR"; then
@@ -74,9 +76,15 @@ jobs:
               exit 1
             fi
             jq '[.[] | .jobs[]]' "$JOB_PAGES" > "$JOBS"
-            MARKERS="$(jq '[.[] | select(.name | contains("final-readiness-prepare"))] | length' "$JOBS")"
+            MARKERS="$(jq '[.[] | select(.name == "final-readiness / final-readiness-prepare")] | length' "$JOBS")"
+            MODEL_STAGE_STARTED="$(jq '[.[] | select(((.name == "final-readiness / final-readiness-blind-pass") or (.name == "final-readiness / final-readiness-judge-pass")) and .conclusion != "skipped" and .started_at != null)] | length' "$JOBS")"
+
+            if [ "$MARKERS" = '0' ] && [ "$CONCLUSION" = 'cancelled' ] && [ "$MODEL_STAGE_STARTED" = '0' ]; then
+              echo "Ignoring cancelled carrier run $RID because no readiness prepare/model-stage job started."
+              continue
+            fi
             if [ "$MARKERS" != '1' ]; then
-              echo "Carrier run $RID contains the readiness core but has $MARKERS prepare markers; refusing ambiguous history." >&2
+              echo "Carrier run $RID contains the readiness core but has $MARKERS exact prepare markers; refusing ambiguous history." >&2
               exit 1
             fi
             printf '%s\n' "$CANDIDATE" >> "$RELEVANT"
@@ -112,8 +120,8 @@ jobs:
           fi
 
           # Ignore a cancelled carrier attempt only when Actions proves neither
-          # model-stage job ever started. Any uncertainty or paid model start is
-          # treated as a paid-relevant failure.
+          # non-skipped model-stage job ever started. Any uncertainty or possible
+          # paid model start remains a paid-relevant failure.
           LATEST_EFFECTIVE=''
           while IFS= read -r CANDIDATE; do
             [ -n "$CANDIDATE" ] || continue
@@ -125,7 +133,7 @@ jobs:
               MODEL_STAGE_STARTED='unknown'
               if gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/jobs?filter=all&per_page=100" > "$JOB_PAGES" \
                 && jq '[.[] | .jobs[]]' "$JOB_PAGES" > "$JOBS"; then
-                MODEL_STAGE_STARTED="$(jq '[.[] | select(((.name | contains("final-readiness-blind-pass")) or (.name | contains("final-readiness-judge-pass"))) and .started_at != null)] | length' "$JOBS")"
+                MODEL_STAGE_STARTED="$(jq '[.[] | select(((.name == "final-readiness / final-readiness-blind-pass") or (.name == "final-readiness / final-readiness-judge-pass")) and .conclusion != "skipped" and .started_at != null)] | length' "$JOBS")"
               fi
               if [ "$MODEL_STAGE_STARTED" = '0' ]; then
                 echo "Ignoring cancelled carrier run $RID because no model-stage job started."
@@ -509,7 +517,9 @@ jobs:
             RID="${IDS[$INDEX]}"
             EXPECTED_SUITE="${EXPECTED_SUITES[$INDEX]}"
             DEST="$RUNNER_TEMP/prior-$RID"
+            RUN_META="$RUNNER_TEMP/prior-run-$RID.json"
             mkdir -p "$DEST"
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RID" > "$RUN_META"
             gh run download "$RID" --repo "$GITHUB_REPOSITORY" --name "agent-final-readiness-evidence-$RID" --dir "$DEST"
             test -s "$DEST/hashes.sha256"
             (cd "$DEST" && sha256sum -c hashes.sha256)
@@ -517,12 +527,21 @@ jobs:
             test -s "$DEST/blind.json"
             test -s "$DEST/judge.json"
 
+            test "$(jq -r '.event' "$RUN_META")" = 'schedule'
+            test "$(jq -r '.run_attempt' "$RUN_META")" = '1'
             test "$(jq -r '.event' "$DEST/metadata.json")" = 'schedule'
             test "$(jq -r '.repository' "$DEST/metadata.json")" = "$GITHUB_REPOSITORY"
             test "$(jq -r '.run_id' "$DEST/metadata.json")" = "$RID"
             test "$(jq -r '.run_attempt' "$DEST/metadata.json")" = '1'
+            test "$(jq -r '.commit_sha' "$DEST/metadata.json")" = "$(jq -r '.head_sha' "$RUN_META")"
+            test "$(jq -r '.ref' "$DEST/metadata.json")" = 'refs/heads/main'
             test "$(jq -r '.deterministic_validation' "$DEST/metadata.json")" = 'passed'
             test "$(jq -r '.suite' "$DEST/metadata.json")" = "$EXPECTED_SUITE"
+
+            BLIND_ACTUAL="$(sha256sum "$DEST/blind.json" | cut -d' ' -f1)"
+            JUDGE_ACTUAL="$(sha256sum "$DEST/judge.json" | cut -d' ' -f1)"
+            test "$(jq -r '.blind_sha256' "$DEST/metadata.json")" = "$BLIND_ACTUAL"
+            test "$(jq -r '.judge_sha256' "$DEST/metadata.json")" = "$JUDGE_ACTUAL"
 
             CURRENT_PROMPT_SHA="$(sha256sum "agent_evals/final_suite_${EXPECTED_SUITE}_prompts.json" | cut -d' ' -f1)"
             CURRENT_RUBRIC_SHA="$(sha256sum "agent_evals/final_suite_${EXPECTED_SUITE}_rubric.json" | cut -d' ' -f1)"
