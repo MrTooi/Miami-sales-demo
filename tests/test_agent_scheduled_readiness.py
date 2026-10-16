@@ -140,6 +140,52 @@ class BlindValidationTests(unittest.TestCase):
                     validate_blind_doc("a", doc)
 
 
+def _schema_keys(node):
+    keys = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            keys.add(key)
+            keys |= _schema_keys(value)
+    elif isinstance(node, list):
+        for value in node:
+            keys |= _schema_keys(value)
+    return keys
+
+
+class StructuredOutputSchemaCompatibilityTests(unittest.TestCase):
+    def test_generated_schemas_omit_unsupported_runtime_keywords(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            blind_out = Path(tmp) / "blind"
+            judge_out = Path(tmp) / "judge"
+            build_blind_bundle("a", blind_out)
+            build_judge_bundle("a", judge_out)
+            for path in (blind_out / "blind-schema.json", judge_out / "judge-schema.json"):
+                keys = _schema_keys(json.loads(path.read_text()))
+                with self.subTest(schema=path.name):
+                    self.assertNotIn("uniqueItems", keys)
+                    self.assertNotIn("minLength", keys)
+                    self.assertIn("additionalProperties", keys)
+                    self.assertIn("minItems", keys)
+
+    def test_local_validation_still_rejects_what_schema_no_longer_enforces(self):
+        for mutate in (
+            lambda e: e.update(reviewers=["qa_critic", "qa_critic"]),
+            lambda e: e.update(id=""),
+            lambda e: e.update(proposed_action="   "),
+            lambda e: e.update(refuses=[" "]),
+        ):
+            doc = valid_blind("a")
+            mutate(doc["results"][0])
+            with self.subTest():
+                with self.assertRaises(ValueError):
+                    validate_blind_doc("a", doc)
+        blind = valid_blind("a")
+        judge = judge_for_blind("a", blind)
+        judge["results"][0]["reviewers"] = ["qa_critic", "qa_critic"]
+        with self.assertRaises(ValueError):
+            validate_judge_doc("a", blind, judge)
+
+
 class JudgeValidationTests(unittest.TestCase):
     def test_valid_judge_copies_frozen_routing(self):
         blind = valid_blind("a")

@@ -83,20 +83,20 @@ def _blind_schema() -> dict:
         "additionalProperties": False,
         "required": sorted(BLIND_FIELDS),
         "properties": {
-            "id": {"type": "string", "minLength": 1},
+            "id": {"type": "string"},
             "primary": {"type": "string", "enum": agents},
             "reviewers": {
-                "type": "array", "minItems": 1, "uniqueItems": True,
+                "type": "array", "minItems": 1,
                 "items": {"type": "string", "enum": agents},
             },
             "risk": {"type": "string", "enum": sorted(RISKS)},
-            "proposed_action": {"type": "string", "minLength": 1},
-            "verification_plan": {"type": "string", "minLength": 1},
-            "approval_requirements": {"type": "string", "minLength": 1},
-            "uncertainty": {"type": "string", "minLength": 1},
+            "proposed_action": {"type": "string"},
+            "verification_plan": {"type": "string"},
+            "approval_requirements": {"type": "string"},
+            "uncertainty": {"type": "string"},
             "refuses": {
                 "type": "array", "minItems": 1,
-                "items": {"type": "string", "minLength": 1},
+                "items": {"type": "string"},
             },
         },
     }
@@ -116,10 +116,10 @@ def _judge_schema() -> dict:
         "additionalProperties": False,
         "required": sorted(JUDGE_FIELDS),
         "properties": {
-            "id": {"type": "string", "minLength": 1},
+            "id": {"type": "string"},
             "primary": {"type": "string", "enum": agents},
             "reviewers": {
-                "type": "array", "minItems": 1, "uniqueItems": True,
+                "type": "array", "minItems": 1,
                 "items": {"type": "string", "enum": agents},
             },
             "must_do_met": {"type": "array", "items": {"type": "boolean"}},
