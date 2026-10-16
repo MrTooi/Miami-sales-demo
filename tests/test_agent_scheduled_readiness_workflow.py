@@ -86,7 +86,9 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         self.assertIn("Three successful scheduled evidence runs already exist", prepare)
         self.assertIn("Most recent scheduled run failed on this exact commit; refusing a blind paid retry.", prepare)
         self.assertIn("Require reviewed hardening change after a prior failed paid run", prepare)
-        self.assertRegex(prepare, r"0\) SUITE='a'.*1\) SUITE='b'.*2\) SUITE='c'", msg="A/B/C selection must be success-count driven")
+        self.assertIn("0) SUITE='a' ;;", prepare)
+        self.assertIn("1) SUITE='b' ;;", prepare)
+        self.assertIn("2) SUITE='c' ;;", prepare)
 
     def test_canonical_local_validation_controls_scoring_and_final_aggregate(self):
         final = job_block("validate-and-record")
@@ -136,7 +138,6 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
             "deterministic_validation",
         ):
             self.assertIn(key, final)
-        self.assertIn("event=schedule", text().replace("'", "")) if False else None
         self.assertIn("test \"$GITHUB_EVENT_NAME\" = 'schedule'", job_block("prepare", "blind-pass"))
 
 
