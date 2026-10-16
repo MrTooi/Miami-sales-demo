@@ -1,0 +1,377 @@
+name: Agent OS final scheduled blind readiness
+
+on:
+  schedule:
+    - cron: '43 * * * *'
+
+permissions: {}
+
+concurrency:
+  group: agent-os-final-scheduled-readiness-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  select-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      should_run: ${{ steps.select.outputs.should_run }}
+      suite: ${{ steps.select.outputs.suite }}
+      success_count: ${{ steps.select.outputs.success_count }}
+    steps:
+      - name: Checkout exact scheduled commit without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Verify deterministic final-readiness assets before any model call
+        run: >-
+          python -m unittest
+          tests.test_agent_final_readiness
+          tests.test_agent_scheduled_readiness
+          tests.test_agent_final_readiness_scheduled_workflow
+          -v
+
+      - name: Select A then B then C from prior successful scheduled runs
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FILE: agent-final-readiness-scheduled.yml
+        run: |
+          set -euo pipefail
+
+          SUCCESS_COUNT="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_FILE/runs?event=schedule&status=success&per_page=100" \
+              --jq '.workflow_runs | length'
+          )"
+          if ! printf '%s' "$SUCCESS_COUNT" | grep -Eq '^[0-9]+$'; then
+            echo "Invalid successful scheduled-run count: $SUCCESS_COUNT" >&2
+            exit 1
+          fi
+          echo "success_count=$SUCCESS_COUNT" >> "$GITHUB_OUTPUT"
+
+          if [ "$SUCCESS_COUNT" -ge 3 ]; then
+            echo "All three successful scheduled readiness runs already exist; refusing more model spend."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "suite=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A failed run on the exact same repository state is not retried blindly.
+          # A human must inspect/remediate the failure so a later commit changes state.
+          LATEST_COMPLETED="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_FILE/runs?event=schedule&per_page=10" \
+              --jq '.workflow_runs[] | select(.status == "completed") | [.head_sha, .conclusion] | @tsv' \
+              | head -n 1 || true
+          )"
+          if [ -n "$LATEST_COMPLETED" ]; then
+            LATEST_SHA="$(printf '%s' "$LATEST_COMPLETED" | cut -f1)"
+            LATEST_CONCLUSION="$(printf '%s' "$LATEST_COMPLETED" | cut -f2)"
+            if [ "$LATEST_SHA" = "$GITHUB_SHA" ] && [ "$LATEST_CONCLUSION" != "success" ]; then
+              echo "Previous scheduled run failed on the same commit; refusing blind retry on unchanged failed state." >&2
+              exit 1
+            fi
+          fi
+
+          case "$SUCCESS_COUNT" in
+            0) SUITE="a" ;;
+            1) SUITE="b" ;;
+            2) SUITE="c" ;;
+            *)
+              echo "Unexpected successful run count: $SUCCESS_COUNT" >&2
+              exit 1
+              ;;
+          esac
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "suite=$SUITE" >> "$GITHUB_OUTPUT"
+
+  prepare-blind:
+    needs: select-suite
+    if: needs.select-suite.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact scheduled commit without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Build sanitized blind package
+        env:
+          SUITE: ${{ needs.select-suite.outputs.suite }}
+        run: >-
+          python -m agent_evals.scheduled_readiness prepare-blind
+          --suite "$SUITE"
+          --out-dir "$RUNNER_TEMP/blind-input"
+          --commit-sha "$GITHUB_SHA"
+
+      - name: Upload immutable sanitized blind package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-final-blind-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/blind-input
+          if-no-files-found: error
+          retention-days: 14
+
+  blind-pass:
+    needs: [select-suite, prepare-blind]
+    if: needs.prepare-blind.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+    outputs:
+      result: ${{ steps.blind.outputs.final-message }}
+    steps:
+      - name: Download only the sanitized blind package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: agent-final-blind-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/blind-input
+
+      - name: Run blind Pass 1 as the final step on this runner
+        id: blind
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
+        with:
+          allow-bots: true
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          safety-strategy: drop-sudo
+          permission-profile: ':read-only'
+          working-directory: ${{ runner.temp }}/blind-input
+          prompt-file: ${{ runner.temp }}/blind-input/blind_prompt.md
+          output-schema-file: ${{ runner.temp }}/blind-input/blind_output_schema.json
+          effort: ${{ vars.LEDGER_CODEX_EFFORT || 'medium' }}
+          model: ${{ vars.LEDGER_CODEX_MODEL }}
+
+  prepare-judge:
+    needs: [select-suite, prepare-blind, blind-pass]
+    if: needs.blind-pass.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout exact scheduled commit without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Download immutable blind input
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: agent-final-blind-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/blind-input
+
+      - name: Freeze blind model output from job output
+        env:
+          BLIND_RESULT: ${{ needs.blind-pass.outputs.result }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ.get("BLIND_RESULT", "")
+          if not value.strip():
+              raise SystemExit("blind model returned empty output")
+          Path(os.environ["RUNNER_TEMP"], "blind-output.json").write_text(
+              value + ("\n" if not value.endswith("\n") else ""),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Validate frozen blind output and build hidden-rubric judge package
+        env:
+          SUITE: ${{ needs.select-suite.outputs.suite }}
+        run: >-
+          python -m agent_evals.scheduled_readiness prepare-judge
+          --suite "$SUITE"
+          --blind-input-dir "$RUNNER_TEMP/blind-input"
+          --blind-output "$RUNNER_TEMP/blind-output.json"
+          --out-dir "$RUNNER_TEMP/judge-input"
+          --commit-sha "$GITHUB_SHA"
+
+      - name: Upload immutable judge package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-final-judge-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/judge-input
+          if-no-files-found: error
+          retention-days: 14
+
+  judge-pass:
+    needs: [select-suite, prepare-judge]
+    if: needs.prepare-judge.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+    outputs:
+      result: ${{ steps.judge.outputs.final-message }}
+    steps:
+      - name: Download only the frozen judge package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: agent-final-judge-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/judge-input
+
+      - name: Run independent Pass 2 judge as the final step on this runner
+        id: judge
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
+        with:
+          allow-bots: true
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          safety-strategy: drop-sudo
+          permission-profile: ':read-only'
+          working-directory: ${{ runner.temp }}/judge-input
+          prompt-file: ${{ runner.temp }}/judge-input/judge_prompt.md
+          output-schema-file: ${{ runner.temp }}/judge-input/judge_output_schema.json
+          effort: ${{ vars.LEDGER_CODEX_EFFORT || 'medium' }}
+          model: ${{ vars.LEDGER_CODEX_MODEL }}
+
+  finalize-evidence:
+    needs: [select-suite, prepare-blind, blind-pass, prepare-judge, judge-pass]
+    if: needs.judge-pass.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout exact scheduled commit without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Download blind package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: agent-final-blind-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/blind-input
+
+      - name: Download judge package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: agent-final-judge-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/judge-input
+
+      - name: Materialize frozen model outputs without shell interpolation
+        env:
+          BLIND_RESULT: ${{ needs.blind-pass.outputs.result }}
+          JUDGE_RESULT: ${{ needs.judge-pass.outputs.result }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          for env_name, filename in (
+              ("BLIND_RESULT", "blind-output.json"),
+              ("JUDGE_RESULT", "judge-output.json"),
+          ):
+              value = os.environ.get(env_name, "")
+              if not value.strip():
+                  raise SystemExit(f"{env_name} was empty")
+              (root / filename).write_text(
+                  value + ("\n" if not value.endswith("\n") else ""),
+                  encoding="utf-8",
+              )
+          PY
+
+      - name: Deterministically validate and assemble immutable evidence
+        id: finalize
+        env:
+          SUITE: ${{ needs.select-suite.outputs.suite }}
+        run: |
+          set +e
+          python -m agent_evals.scheduled_readiness finalize \
+            --suite "$SUITE" \
+            --blind-input-dir "$RUNNER_TEMP/blind-input" \
+            --judge-input-dir "$RUNNER_TEMP/judge-input" \
+            --blind-output "$RUNNER_TEMP/blind-output.json" \
+            --judge-output "$RUNNER_TEMP/judge-output.json" \
+            --out-dir "$RUNNER_TEMP/final-evidence" \
+            --event "$GITHUB_EVENT_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --ref "$GITHUB_REF" \
+            --sha "$GITHUB_SHA"
+          STATUS="$?"
+          set -e
+          echo "$STATUS" > "$RUNNER_TEMP/finalize-status"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+      - name: Verify evidence contains required run and hash fields
+        if: always()
+        run: |
+          test -f "$RUNNER_TEMP/final-evidence/evidence.json"
+          grep -q '"event"' "$RUNNER_TEMP/final-evidence/evidence.json"
+          grep -q '"source_prompts_sha256"' "$RUNNER_TEMP/final-evidence/evidence.json"
+          grep -q '"source_rubric_sha256"' "$RUNNER_TEMP/final-evidence/evidence.json"
+          grep -q '"blind_output_sha256"' "$RUNNER_TEMP/final-evidence/evidence.json"
+          grep -q '"judge_output_sha256"' "$RUNNER_TEMP/final-evidence/evidence.json"
+
+      - name: Upload immutable final suite evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-final-readiness-${{ needs.select-suite.outputs.suite }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/final-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce suite readiness after evidence upload
+        if: always()
+        run: |
+          test -f "$RUNNER_TEMP/finalize-status"
+          STATUS="$(cat "$RUNNER_TEMP/finalize-status")"
+          if [ "$STATUS" != "0" ]; then
+            echo "Suite did not pass deterministic readiness validation (status $STATUS)." >&2
+            exit 1
+          fi
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          evidence = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "final-evidence", "evidence.json").read_text(encoding="utf-8")
+          )
+          if evidence.get("event") != "schedule":
+              raise SystemExit("readiness evidence did not come from a scheduled event")
+          if evidence.get("validation", {}).get("ready") is not True:
+              raise SystemExit("suite readiness is not true")
+          PY
