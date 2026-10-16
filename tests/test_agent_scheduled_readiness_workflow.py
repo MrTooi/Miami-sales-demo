@@ -103,41 +103,52 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(f"name: {name}", data)
 
-    def test_exact_prepare_marker_jq_filter_does_not_match_prepare_judge(self):
+    def test_suffix_prepare_marker_jq_filter_does_not_match_prepare_judge(self):
         jq = shutil.which("jq")
         self.assertIsNotNone(jq, "jq is required by the readiness workflow and its regression test")
-        jobs = [
-            {"name": "final-readiness / final-readiness-prepare", "started_at": "2026-10-16T00:00:00Z", "conclusion": "success"},
-            {"name": "final-readiness / final-readiness-blind-pass", "started_at": "2026-10-16T00:00:01Z", "conclusion": "success"},
-            {"name": "final-readiness / final-readiness-validate-blind", "started_at": "2026-10-16T00:00:02Z", "conclusion": "success"},
-            {"name": "final-readiness / final-readiness-prepare-judge", "started_at": "2026-10-16T00:00:03Z", "conclusion": "success"},
-            {"name": "final-readiness / final-readiness-judge-pass", "started_at": "2026-10-16T00:00:04Z", "conclusion": "success"},
-            {"name": "final-readiness / final-readiness-validate-and-record", "started_at": "2026-10-16T00:00:05Z", "conclusion": "success"},
-        ]
-        expression = '[.[] | select(.name == "final-readiness / final-readiness-prepare")] | length'
-        result = subprocess.run(
-            [jq, expression],
-            input=json.dumps(jobs),
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        self.assertEqual(result.stdout.strip(), "1")
+        expression = '[.[] | select(.name | endswith("final-readiness-prepare"))] | length'
+        for caller_prefix in ("final-readiness / ", "carrier-job / ", ""):
+            with self.subTest(prefix=caller_prefix):
+                jobs = [
+                    {"name": caller_prefix + name, "started_at": "2026-10-16T00:00:00Z", "conclusion": "success"}
+                    for name in (
+                        "final-readiness-prepare",
+                        "final-readiness-blind-pass",
+                        "final-readiness-validate-blind",
+                        "final-readiness-prepare-judge",
+                        "final-readiness-judge-pass",
+                        "final-readiness-validate-and-record",
+                    )
+                ]
+                result = subprocess.run(
+                    [jq, expression],
+                    input=json.dumps(jobs),
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                )
+                self.assertEqual(result.stdout.strip(), "1")
         prepare = job_block("prepare", "blind-pass")
         self.assertIn(expression, prepare)
         self.assertNotIn('contains("final-readiness-prepare")', prepare)
 
-    def test_cancelled_zero_marker_case_is_handled_before_marker_fail_closed(self):
+    def test_zero_marker_case_is_handled_before_marker_fail_closed(self):
         prepare = job_block("prepare", "blind-pass")
-        zero_marker = "if [ \"$MARKERS\" = '0' ] && [ \"$MODEL_STAGE_STARTED\" = '0' ] && [ \"$CONCLUSION\" != 'success' ]; then"
+        zero_marker = (
+            "if [ \"$MARKERS\" = '0' ] && [ \"$READINESS_JOB_COUNT\" = '0' ] && "
+            "[ \"$MODEL_STAGE_STARTED\" = '0' ] && [ \"$READINESS_ARTIFACT_COUNT\" = '0' ] && "
+            "[ \"$CONCLUSION\" != 'success' ]; then"
+        )
         marker_fail = "if [ \"$MARKERS\" != '1' ]; then"
         self.assertIn(zero_marker, prepare)
         self.assertIn(marker_fail, prepare)
         self.assertLess(prepare.index(zero_marker), prepare.index(marker_fail))
-        self.assertIn("Ignoring no-job carrier run $RID with conclusion=$CONCLUSION because no readiness prepare/model-stage job started.", prepare)
+        self.assertIn("because no readiness job, model stage, or readiness artifact exists.", prepare)
         self.assertIn('.conclusion != "skipped"', prepare)
+        self.assertIn('contains("final-readiness")', prepare)
+        self.assertIn('startswith("agent-final-readiness-")', prepare)
 
-    def _classify_history_run(self, conclusion, jobs):
+    def _classify_history_run(self, conclusion, jobs, artifacts=()):
         """Run the workflow's real classification shell block against a fixture."""
         jq = shutil.which("jq")
         bash = shutil.which("bash")
@@ -153,8 +164,18 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             jobs_path = Path(tmp) / "jobs.json"
+            artifacts_path = Path(tmp) / "artifacts.json"
             jobs_path.write_text(json.dumps(jobs), encoding="utf-8")
-            env = dict(os.environ, JOBS=str(jobs_path), CONCLUSION=conclusion, RID="1")
+            artifacts_path.write_text(
+                json.dumps({"artifacts": [{"name": n} for n in artifacts]}), encoding="utf-8"
+            )
+            env = dict(
+                os.environ,
+                JOBS=str(jobs_path),
+                ARTIFACTS=str(artifacts_path),
+                CONCLUSION=conclusion,
+                RID="1",
+            )
             result = subprocess.run(
                 [bash, "-c", script], env=env, text=True, capture_output=True
             )
@@ -163,29 +184,64 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         return "relevant" if "RELEVANT" in result.stdout else "ignored"
 
     def test_history_classification_fixtures_for_zero_marker_runs(self):
-        prefix = "final-readiness / final-readiness-"
         started = "2026-10-16T00:00:00Z"
         for conclusion in ("startup_failure", "failure", "cancelled"):
-            with self.subTest(conclusion=conclusion, jobs="empty"):
+            with self.subTest(conclusion=conclusion, case="no jobs, no artifacts"):
                 self.assertEqual(self._classify_history_run(conclusion, []), "ignored")
         self.assertEqual(self._classify_history_run("success", []), "fail-closed")
+        # Unrelated artifacts do not block ignoring.
+        self.assertEqual(self._classify_history_run("failure", [], ["unrelated"]), "ignored")
 
-        for conclusion in ("success", "failure", "cancelled", "startup_failure", "timed_out"):
-            for stage in ("blind-pass", "judge-pass"):
-                with self.subTest(conclusion=conclusion, started=stage):
-                    jobs = [{"name": prefix + stage, "conclusion": "failure", "started_at": started}]
-                    self.assertEqual(self._classify_history_run(conclusion, jobs), "fail-closed")
+        for prefix in ("final-readiness / final-readiness-", "other-caller / final-readiness-"):
+            # A started blind/judge stage fails closed under any caller prefix.
+            for conclusion in ("success", "failure", "cancelled", "startup_failure", "timed_out"):
+                for stage in ("blind-pass", "judge-pass"):
+                    with self.subTest(prefix=prefix, conclusion=conclusion, started=stage):
+                        jobs = [{"name": prefix + stage, "conclusion": "failure", "started_at": started}]
+                        self.assertEqual(self._classify_history_run(conclusion, jobs), "fail-closed")
 
-        # Skipped model-stage jobs do not count as started.
-        skipped = [{"name": prefix + "blind-pass", "conclusion": "skipped", "started_at": started}]
-        self.assertEqual(self._classify_history_run("cancelled", skipped), "ignored")
-        self.assertEqual(self._classify_history_run("success", skipped), "fail-closed")
+            # A skipped model stage is not paid-stage evidence, but it is still a
+            # readiness-named job, so a zero-marker run is not ignored either.
+            skipped = [{"name": prefix + "blind-pass", "conclusion": "skipped", "started_at": started}]
+            for conclusion in ("cancelled", "failure", "success"):
+                with self.subTest(prefix=prefix, conclusion=conclusion, case="skipped only"):
+                    self.assertEqual(self._classify_history_run(conclusion, skipped), "fail-closed")
 
-        # Exactly one exact prepare marker is relevant; duplicates fail closed.
-        one = [{"name": prefix + "prepare", "conclusion": "success", "started_at": started}]
-        self.assertEqual(self._classify_history_run("success", one), "relevant")
-        self.assertEqual(self._classify_history_run("failure", one), "relevant")
-        self.assertEqual(self._classify_history_run("failure", one + one), "fail-closed")
+            # Exactly one prepare marker is relevant; duplicates fail closed.
+            one = [{"name": prefix + "prepare", "conclusion": "success", "started_at": started}]
+            self.assertEqual(self._classify_history_run("success", one), "relevant")
+            self.assertEqual(self._classify_history_run("failure", one), "relevant")
+            self.assertEqual(self._classify_history_run("failure", one + one), "fail-closed")
+
+        # A readiness-named job with an unexpected name shape fails closed.
+        odd = [{"name": "weird / final-readiness-prepare-v2", "conclusion": "failure", "started_at": started}]
+        for conclusion in ("startup_failure", "failure", "cancelled"):
+            self.assertEqual(self._classify_history_run(conclusion, odd), "fail-closed")
+
+        # Any readiness artifact, even with no recognised jobs, fails closed.
+        for conclusion in ("startup_failure", "failure", "cancelled"):
+            for artifact in ("agent-final-readiness-blind-input-1", "agent-final-readiness-evidence-1"):
+                with self.subTest(conclusion=conclusion, artifact=artifact):
+                    self.assertEqual(self._classify_history_run(conclusion, [], [artifact]), "fail-closed")
+
+    def test_skipped_model_stage_is_not_counted_as_started(self):
+        jq = shutil.which("jq")
+        self.assertIsNotNone(jq, "jq is required")
+        expression = next(
+            line.split("'")[1]
+            for line in job_block("prepare", "blind-pass").splitlines()
+            if line.strip().startswith("MODEL_STAGE_STARTED=\"$(jq")
+        )
+        for prefix in ("final-readiness / ", "other-caller / "):
+            jobs = [
+                {"name": prefix + "final-readiness-blind-pass", "conclusion": "skipped", "started_at": "2026-10-16T00:00:00Z"},
+                {"name": prefix + "final-readiness-judge-pass", "conclusion": "skipped", "started_at": None},
+            ]
+            out = subprocess.run([jq, expression], input=json.dumps(jobs), text=True, capture_output=True, check=True)
+            self.assertEqual(out.stdout.strip(), "0")
+            jobs[0]["conclusion"] = "failure"
+            out = subprocess.run([jq, expression], input=json.dumps(jobs), text=True, capture_output=True, check=True)
+            self.assertEqual(out.stdout.strip(), "1")
 
     def test_prepare_creates_only_blind_input_before_validation(self):
         prepare = job_block("prepare", "blind-pass")
@@ -250,7 +306,7 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         self.assertIn("contents/.github/workflows/agent-final-readiness-core.yml?ref=$SHA", prepare)
         self.assertIn("if grep -q 'HTTP 404'", prepare)
         self.assertIn("continue", prepare)
-        self.assertIn('select(.name == "final-readiness / final-readiness-prepare")', prepare)
+        self.assertIn('select(.name | endswith("final-readiness-prepare"))', prepare)
         self.assertIn("MARKERS", prepare)
         self.assertIn("refusing ambiguous history", prepare)
 
@@ -266,16 +322,22 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         self.assertIn("2) SUITE='c' ;;", prepare)
         self.assertIn("Three successful scheduled evidence runs already exist", prepare)
 
-    def test_cancelled_attempts_are_ignored_only_when_no_model_job_started(self):
+    def test_cancelled_attempts_are_ignored_only_when_no_model_job_or_artifact_started(self):
         prepare = job_block("prepare", "blind-pass")
         self.assertIn("MODEL_STAGE_STARTED='unknown'", prepare)
-        self.assertIn('final-readiness / final-readiness-blind-pass', prepare)
-        self.assertIn('final-readiness / final-readiness-judge-pass', prepare)
+        self.assertIn("READINESS_ARTIFACT_COUNT='unknown'", prepare)
+        self.assertIn('endswith("final-readiness-blind-pass")', prepare)
+        self.assertIn('endswith("final-readiness-judge-pass")', prepare)
         self.assertIn(".started_at != null", prepare)
         self.assertIn('.conclusion != "skipped"', prepare)
-        self.assertIn("Ignoring cancelled carrier run $RID because no model-stage job started.", prepare)
-        self.assertIn("Could not verify cancelled carrier run $RID job history; treating it as a paid-relevant failure.", prepare)
-        self.assertIn("Cancelled carrier run $RID reached a model-stage job; treating it as a paid-relevant failure.", prepare)
+        ignore = "if [ \"$MODEL_STAGE_STARTED\" = '0' ] && [ \"$READINESS_ARTIFACT_COUNT\" = '0' ]; then"
+        unknown = "if [ \"$MODEL_STAGE_STARTED\" = 'unknown' ] || [ \"$READINESS_ARTIFACT_COUNT\" = 'unknown' ]; then"
+        self.assertIn(ignore, prepare)
+        self.assertIn(unknown, prepare)
+        self.assertLess(prepare.index(ignore), prepare.index(unknown))
+        self.assertIn("Ignoring cancelled carrier run $RID because no model-stage job or readiness artifact started.", prepare)
+        self.assertIn("Could not verify cancelled carrier run $RID job/artifact history; treating it as a paid-relevant failure.", prepare)
+        self.assertIn("may have reached paid readiness work", prepare)
 
     def test_same_sha_retry_barrier_and_reviewed_change_gate_remain(self):
         prepare = job_block("prepare", "blind-pass")
