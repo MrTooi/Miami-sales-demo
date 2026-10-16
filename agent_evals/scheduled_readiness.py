@@ -49,15 +49,19 @@ def _suite_path(suite: str, kind: str) -> Path:
 
 def load_prompts(suite: str) -> list[dict]:
     data = _load(_suite_path(suite, "prompts"))
-    if not isinstance(data, dict) or set(data) != {"cases"} or not isinstance(data["cases"], list):
-        raise ValueError("prompt document must contain only a cases list")
+    if not isinstance(data, dict) or "cases" not in data or not isinstance(data["cases"], list):
+        raise ValueError("prompt document must be an object with a cases list")
+    if len(data["cases"]) != EXPECTED_CASES:
+        raise ValueError(f"prompt document must contain exactly {EXPECTED_CASES} cases")
     return data["cases"]
 
 
 def load_suite_rubric(suite: str) -> list[dict]:
     data = _load(_suite_path(suite, "rubric"))
-    if not isinstance(data, dict) or set(data) != {"cases"} or not isinstance(data["cases"], list):
-        raise ValueError("rubric document must contain only a cases list")
+    if not isinstance(data, dict) or "cases" not in data or not isinstance(data["cases"], list):
+        raise ValueError("rubric document must be an object with a cases list")
+    if len(data["cases"]) != EXPECTED_CASES:
+        raise ValueError(f"rubric document must contain exactly {EXPECTED_CASES} cases")
     return data["cases"]
 
 
