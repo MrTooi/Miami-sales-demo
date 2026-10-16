@@ -24,7 +24,7 @@ jobs:
       prompt_sha: ${{ steps.bundle.outputs.prompt_sha }}
       rubric_sha: ${{ steps.bundle.outputs.rubric_sha }}
     steps:
-      - name: Select next suite from successful scheduled runs and enforce retry barrier
+      - name: Select next suite from complete successful scheduled history and enforce retry barrier
         id: select
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,10 +39,12 @@ jobs:
             exit 1
           fi
 
+          RUN_PAGES="$RUNNER_TEMP/scheduled-run-pages.json"
           RUNS="$RUNNER_TEMP/scheduled-runs.json"
-          gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/agent-final-readiness-scheduled.yml/runs?event=schedule&per_page=100" > "$RUNS"
+          gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/workflows/agent-final-readiness-scheduled.yml/runs?event=schedule&per_page=100" > "$RUN_PAGES"
+          jq '[.[] | .workflow_runs[]]' "$RUN_PAGES" > "$RUNS"
 
-          SUCCESS_COUNT="$(jq --argjson current "$CURRENT_RUN_ID" '[.workflow_runs[] | select(.id != $current and .event == "schedule" and .conclusion == "success")] | length' "$RUNS")"
+          SUCCESS_COUNT="$(jq --argjson current "$CURRENT_RUN_ID" '[.[] | select(.id != $current and .event == "schedule" and .conclusion == "success")] | length' "$RUNS")"
           if [ "$SUCCESS_COUNT" -ge 3 ]; then
             echo 'Three successful scheduled evidence runs already exist; refusing further model/evidence work.'
             echo 'execute=false' >> "$GITHUB_OUTPUT"
@@ -50,7 +52,7 @@ jobs:
             exit 0
           fi
 
-          LATEST_COMPLETED="$(jq -c --argjson current "$CURRENT_RUN_ID" '[.workflow_runs[] | select(.id != $current and .event == "schedule" and .status == "completed")] | sort_by(.created_at) | reverse | .[0] // empty' "$RUNS")"
+          LATEST_COMPLETED="$(jq -c --argjson current "$CURRENT_RUN_ID" '[.[] | select(.id != $current and .event == "schedule" and .status == "completed")] | sort_by(.created_at) | reverse | .[0] // empty' "$RUNS")"
           if [ -n "$LATEST_COMPLETED" ] && [ "$(jq -r '.conclusion' <<<"$LATEST_COMPLETED")" != 'success' ]; then
             FAILED_SHA="$(jq -r '.head_sha' <<<"$LATEST_COMPLETED")"
             if [ "$FAILED_SHA" = "$CURRENT_SHA" ]; then
@@ -103,7 +105,7 @@ jobs:
         if: steps.select.outputs.execute == 'true'
         run: python -m unittest tests.test_agent_final_readiness tests.test_agent_scheduled_readiness tests.test_agent_scheduled_readiness_workflow -v
 
-      - name: Build physically separated blind and judge inputs
+      - name: Build blind-only input and freeze current suite hashes
         if: steps.select.outputs.execute == 'true'
         id: bundle
         env:
@@ -111,9 +113,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m agent_evals.scheduled_readiness build-blind --suite "$SUITE" --out "$RUNNER_TEMP/blind-input"
-          python -m agent_evals.scheduled_readiness build-judge --suite "$SUITE" --out "$RUNNER_TEMP/judge-input"
           test ! -e "$RUNNER_TEMP/blind-input/rubric.json"
-          test -e "$RUNNER_TEMP/judge-input/rubric.json"
           PROMPT_SHA="$(sha256sum "agent_evals/final_suite_${SUITE}_prompts.json" | cut -d' ' -f1)"
           RUBRIC_SHA="$(sha256sum "agent_evals/final_suite_${SUITE}_rubric.json" | cut -d' ' -f1)"
           echo "prompt_sha=$PROMPT_SHA" >> "$GITHUB_OUTPUT"
@@ -125,15 +125,6 @@ jobs:
         with:
           name: agent-final-readiness-blind-input-${{ github.run_id }}
           path: ${{ runner.temp }}/blind-input
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Upload judge-only model input
-        if: steps.select.outputs.execute == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: agent-final-readiness-judge-input-${{ github.run_id }}
-          path: ${{ runner.temp }}/judge-input
           if-no-files-found: error
           retention-days: 1
 
@@ -163,7 +154,7 @@ jobs:
 
       - name: Run blind read-only Agent OS evaluator
         id: blind
-        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81 # pinned; :read-only + drop-sudo blocks filesystem writes and network access
         with:
           allow-bots: true
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -229,9 +220,49 @@ jobs:
           (cd "$RUNNER_TEMP/frozen-blind" && sha256sum -c blind.sha256)
           python -m agent_evals.scheduled_readiness validate-blind --suite "$SUITE" --file "$RUNNER_TEMP/frozen-blind/blind.json"
 
-  judge-pass:
+  prepare-judge:
     needs: [prepare, blind-pass, validate-blind]
     if: needs.validate-blind.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout exact scheduled commit without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Build judge-only input after blind validation
+        env:
+          SUITE: ${{ needs.prepare.outputs.suite }}
+          EXPECTED_PROMPT_SHA: ${{ needs.prepare.outputs.prompt_sha }}
+          EXPECTED_RUBRIC_SHA: ${{ needs.prepare.outputs.rubric_sha }}
+        run: |
+          set -euo pipefail
+          test "$(sha256sum "agent_evals/final_suite_${SUITE}_prompts.json" | cut -d' ' -f1)" = "$EXPECTED_PROMPT_SHA"
+          test "$(sha256sum "agent_evals/final_suite_${SUITE}_rubric.json" | cut -d' ' -f1)" = "$EXPECTED_RUBRIC_SHA"
+          python -m agent_evals.scheduled_readiness build-judge --suite "$SUITE" --out "$RUNNER_TEMP/judge-input"
+          test -e "$RUNNER_TEMP/judge-input/rubric.json"
+
+      - name: Upload judge-only model input after blind validation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-final-readiness-judge-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/judge-input
+          if-no-files-found: error
+          retention-days: 1
+
+  judge-pass:
+    needs: [prepare, blind-pass, validate-blind, prepare-judge]
+    if: needs.prepare-judge.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -264,7 +295,7 @@ jobs:
 
       - name: Run isolated read-only independent judge
         id: judge
-        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81 # pinned; :read-only + drop-sudo blocks filesystem writes and network access
         with:
           allow-bots: true
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -302,7 +333,7 @@ jobs:
           retention-days: 1
 
   validate-and-record:
-    needs: [prepare, blind-pass, validate-blind, judge-pass]
+    needs: [prepare, blind-pass, validate-blind, prepare-judge, judge-pass]
     if: needs.judge-pass.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -355,22 +386,41 @@ jobs:
           CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
+          RUN_PAGES="$RUNNER_TEMP/prior-success-pages.json"
           RUNS="$RUNNER_TEMP/prior-successes.json"
-          gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/agent-final-readiness-scheduled.yml/runs?event=schedule&status=success&per_page=100" > "$RUNS"
-          mapfile -t IDS < <(jq -r --argjson current "$CURRENT_RUN_ID" '[.workflow_runs[] | select(.id != $current and .conclusion == "success")] | sort_by(.created_at) | .[-2:][] | .id' "$RUNS")
+          gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/workflows/agent-final-readiness-scheduled.yml/runs?event=schedule&status=success&per_page=100" > "$RUN_PAGES"
+          jq '[.[] | .workflow_runs[]]' "$RUN_PAGES" > "$RUNS"
+          mapfile -t IDS < <(jq -r --argjson current "$CURRENT_RUN_ID" '[.[] | select(.id != $current and .event == "schedule" and .conclusion == "success")] | sort_by(.created_at) | .[-2:][] | .id' "$RUNS")
           test "${#IDS[@]}" -eq 2
+          EXPECTED_SUITES=(a b)
           mkdir -p "$RUNNER_TEMP/prior-a" "$RUNNER_TEMP/prior-b"
-          for RID in "${IDS[@]}"; do
+          for INDEX in 0 1; do
+            RID="${IDS[$INDEX]}"
+            EXPECTED_SUITE="${EXPECTED_SUITES[$INDEX]}"
             DEST="$RUNNER_TEMP/prior-$RID"
             mkdir -p "$DEST"
             gh run download "$RID" --repo "$GITHUB_REPOSITORY" --name "agent-final-readiness-evidence-$RID" --dir "$DEST"
+            test -s "$DEST/hashes.sha256"
             (cd "$DEST" && sha256sum -c hashes.sha256)
-            SUITE="$(jq -r '.suite' "$DEST/metadata.json")"
-            case "$SUITE" in
-              a) cp "$DEST/judge.json" "$RUNNER_TEMP/prior-a/judge.json" ;;
-              b) cp "$DEST/judge.json" "$RUNNER_TEMP/prior-b/judge.json" ;;
-              *) echo "Unexpected prior successful evidence suite: $SUITE" >&2; exit 1 ;;
-            esac
+            test -s "$DEST/metadata.json"
+            test -s "$DEST/blind.json"
+            test -s "$DEST/judge.json"
+
+            test "$(jq -r '.event' "$DEST/metadata.json")" = 'schedule'
+            test "$(jq -r '.repository' "$DEST/metadata.json")" = "$GITHUB_REPOSITORY"
+            test "$(jq -r '.run_id' "$DEST/metadata.json")" = "$RID"
+            test "$(jq -r '.run_attempt' "$DEST/metadata.json")" = '1'
+            test "$(jq -r '.deterministic_validation' "$DEST/metadata.json")" = 'passed'
+            test "$(jq -r '.suite' "$DEST/metadata.json")" = "$EXPECTED_SUITE"
+
+            CURRENT_PROMPT_SHA="$(sha256sum "agent_evals/final_suite_${EXPECTED_SUITE}_prompts.json" | cut -d' ' -f1)"
+            CURRENT_RUBRIC_SHA="$(sha256sum "agent_evals/final_suite_${EXPECTED_SUITE}_rubric.json" | cut -d' ' -f1)"
+            test "$(jq -r '.prompt_sha256' "$DEST/metadata.json")" = "$CURRENT_PROMPT_SHA"
+            test "$(jq -r '.rubric_sha256' "$DEST/metadata.json")" = "$CURRENT_RUBRIC_SHA"
+
+            python -m agent_evals.scheduled_readiness validate-blind --suite "$EXPECTED_SUITE" --file "$DEST/blind.json"
+            python -m agent_evals.scheduled_readiness validate-judge --suite "$EXPECTED_SUITE" --blind "$DEST/blind.json" --judge "$DEST/judge.json"
+            cp "$DEST/judge.json" "$RUNNER_TEMP/prior-${EXPECTED_SUITE}/judge.json"
           done
           test -s "$RUNNER_TEMP/prior-a/judge.json"
           test -s "$RUNNER_TEMP/prior-b/judge.json"

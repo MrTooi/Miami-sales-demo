@@ -45,22 +45,55 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         self.assertEqual(data.count("openai-api-key: ${{ secrets.OPENAI_API_KEY }}"), 2)
         self.assertNotIn("permission-profile: ':workspace'", data)
 
+    def test_prepare_creates_only_blind_input_before_validation(self):
+        prepare = job_block("prepare", "blind-pass")
+        self.assertIn("build-blind --suite", prepare)
+        self.assertIn("agent-final-readiness-blind-input", prepare)
+        self.assertNotIn("build-judge", prepare)
+        self.assertNotIn("agent-final-readiness-judge-input", prepare)
+        self.assertNotIn("$RUNNER_TEMP/judge-input/rubric.json", prepare)
+        self.assertIn("test ! -e \"$RUNNER_TEMP/blind-input/rubric.json\"", prepare)
+
+    def test_prepare_judge_is_after_blind_validation_and_is_non_model(self):
+        data = text()
+        self.assertLess(data.index("  validate-blind:\n"), data.index("  prepare-judge:\n"))
+        prepare_judge = job_block("prepare-judge", "judge-pass")
+        self.assertIn("needs: [prepare, blind-pass, validate-blind]", prepare_judge)
+        self.assertIn("build-judge --suite", prepare_judge)
+        self.assertIn("agent-final-readiness-judge-input", prepare_judge)
+        self.assertIn("test -e \"$RUNNER_TEMP/judge-input/rubric.json\"", prepare_judge)
+        self.assertIn(f"actions/checkout@{CHECKOUT_SHA}", prepare_judge)
+        self.assertIn("persist-credentials: false", prepare_judge)
+        self.assertNotIn("openai/codex-action@", prepare_judge)
+
     def test_blind_and_judge_model_jobs_have_no_repository_checkout(self):
         blind = job_block("blind-pass", "validate-blind")
         judge = job_block("judge-pass", "validate-and-record")
         self.assertNotIn("actions/checkout@", blind)
         self.assertNotIn("actions/checkout@", judge)
         self.assertNotIn("agent-final-readiness-judge-input", blind)
+        self.assertNotIn("build-judge", blind)
         self.assertIn("test ! -e \"$RUNNER_TEMP/blind/rubric.json\"", blind)
         self.assertIn("agent-final-readiness-blind-output", judge)
         self.assertIn("chmod a-w \"$RUNNER_TEMP/judge/blind.json\"", judge)
 
+    def test_judge_requires_post_validation_judge_preparation(self):
+        judge = job_block("judge-pass", "validate-and-record")
+        self.assertIn("needs: [prepare, blind-pass, validate-blind, prepare-judge]", judge)
+        self.assertIn("if: needs.prepare-judge.result == 'success'", judge)
+        self.assertIn("agent-final-readiness-judge-input", judge)
+
     def test_every_repository_checkout_is_pinned_and_non_model_jobs_only(self):
         data = text()
         checkouts = re.findall(r"uses: actions/checkout@([0-9a-f]+)", data)
-        self.assertGreaterEqual(len(checkouts), 2)
+        self.assertGreaterEqual(len(checkouts), 3)
         self.assertTrue(all(sha == CHECKOUT_SHA for sha in checkouts))
-        for block in (job_block("prepare", "blind-pass"), job_block("validate-blind", "judge-pass"), job_block("validate-and-record")):
+        for block in (
+            job_block("prepare", "blind-pass"),
+            job_block("validate-blind", "prepare-judge"),
+            job_block("prepare-judge", "judge-pass"),
+            job_block("validate-and-record"),
+        ):
             if "actions/checkout@" in block:
                 self.assertIn("persist-credentials: false", block)
 
@@ -77,10 +110,12 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         self.assertIn("retention-days: 30", final)
         self.assertIn("sha256sum -c hashes.sha256", final)
 
-    def test_cost_controls_select_by_success_and_block_blind_retries(self):
+    def test_cost_controls_use_complete_paginated_history_and_block_blind_retries(self):
         prepare = job_block("prepare", "blind-pass")
         self.assertIn("CURRENT_ATTEMPT", prepare)
         self.assertIn("Manual reruns are blocked to prevent duplicate paid model calls.", prepare)
+        self.assertIn("gh api --paginate --slurp", prepare)
+        self.assertIn("jq '[.[] | .workflow_runs[]]'", prepare)
         self.assertIn(".conclusion == \"success\"", prepare)
         self.assertIn("SUCCESS_COUNT", prepare)
         self.assertIn("Three successful scheduled evidence runs already exist", prepare)
@@ -89,6 +124,42 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         self.assertIn("0) SUITE='a' ;;", prepare)
         self.assertIn("1) SUITE='b' ;;", prepare)
         self.assertIn("2) SUITE='c' ;;", prepare)
+
+    def test_both_run_history_queries_are_paginated_and_slurped(self):
+        data = text()
+        self.assertEqual(data.count("gh api --paginate --slurp"), 2)
+        self.assertEqual(data.count("jq '[.[] | .workflow_runs[]]'"), 2)
+        final = job_block("validate-and-record")
+        self.assertIn("status=success&per_page=100", final)
+
+    def test_suite_c_binds_and_revalidates_prior_a_b_evidence(self):
+        final = job_block("validate-and-record")
+        for required in (
+            "test -s \"$DEST/hashes.sha256\"",
+            "sha256sum -c hashes.sha256",
+            "test -s \"$DEST/metadata.json\"",
+            "test -s \"$DEST/blind.json\"",
+            "test -s \"$DEST/judge.json\"",
+            "'.event'",
+            "'.repository'",
+            "'.run_id'",
+            "'.run_attempt'",
+            "'.deterministic_validation'",
+            "'.suite'",
+            "EXPECTED_SUITES=(a b)",
+            "final_suite_${EXPECTED_SUITE}_prompts.json",
+            "final_suite_${EXPECTED_SUITE}_rubric.json",
+            "'.prompt_sha256'",
+            "'.rubric_sha256'",
+            "validate-blind --suite \"$EXPECTED_SUITE\" --file \"$DEST/blind.json\"",
+            "validate-judge --suite \"$EXPECTED_SUITE\" --blind \"$DEST/blind.json\" --judge \"$DEST/judge.json\"",
+        ):
+            self.assertIn(required, final)
+        self.assertIn("= 'schedule'", final)
+        self.assertIn("= \"$GITHUB_REPOSITORY\"", final)
+        self.assertIn("= \"$RID\"", final)
+        self.assertIn("= '1'", final)
+        self.assertIn("= 'passed'", final)
 
     def test_canonical_local_validation_controls_scoring_and_final_aggregate(self):
         final = job_block("validate-and-record")
@@ -103,6 +174,7 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
 
     def test_workflow_has_no_repository_mutation_or_deployment_permissions(self):
         data = text()
+        folded = data.casefold()
         for forbidden in (
             "contents: write",
             "actions: write",
@@ -116,7 +188,7 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
             "deploy",
             "deployment",
         ):
-            self.assertNotIn(forbidden, data.casefold() if forbidden.islower() else data)
+            self.assertNotIn(forbidden, folded)
         permission_values = re.findall(r"^\s{6}(actions|contents):\s+(\w+)\s*$", data, flags=re.MULTILINE)
         self.assertTrue(permission_values)
         self.assertTrue(all(value == "read" for _, value in permission_values))
@@ -125,6 +197,7 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         final = job_block("validate-and-record")
         for key in (
             "event",
+            "repository",
             "run_id",
             "run_attempt",
             "commit_sha",
