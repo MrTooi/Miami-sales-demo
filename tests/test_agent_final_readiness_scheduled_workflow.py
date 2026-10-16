@@ -47,16 +47,51 @@ class FinalScheduledReadinessWorkflowTests(unittest.TestCase):
         self.assertNotIn("github.run_number <=", self.text)
         self.assertNotIn("status=success", self.text)
 
+    def test_verified_completion_marker_blocks_respends_across_later_main_shas(self):
+        selector = self.text[
+            self.text.index("      - name: Select A then B then C") : self.text.index("  prepare-blind:")
+        ]
+        marker_lookup = selector.index("actions/artifacts?name=$COMPLETE_ARTIFACT")
+        current_sha_history = selector.index("current-sha-series.tsv")
+        self.assertLess(marker_lookup, current_sha_history)
+        self.assertIn('COMPLETE_ARTIFACT="agent-final-readiness-complete"', selector)
+        self.assertIn('run.get("path") == ".github/workflows/agent-final-readiness-scheduled.yml"', selector)
+        self.assertIn('run.get("conclusion") == "success"', selector)
+        self.assertIn('run.get("run_attempt") == 1', selector)
+        self.assertIn('marker.get("suite") != "c"', selector)
+        self.assertIn("evidence_json_sha256", selector)
+        self.assertIn("completion evidence hash mismatch", selector)
+        self.assertIn('evidence.get("validation", {}).get("ready") is not True', selector)
+        self.assertIn(
+            "Verified global A/B/C completion marker; refusing all further readiness model spend.",
+            selector,
+        )
+        self.assertIn('echo "should_run=false" >> "$GITHUB_OUTPUT"', selector)
+
+    def test_completion_marker_is_created_only_after_passing_suite_c(self):
+        enforce = self.text.index("      - name: Enforce suite readiness after evidence upload")
+        create = self.text.index("      - name: Create verified global completion marker after Suite C")
+        upload = self.text.index("      - name: Upload global completion marker after Suite C")
+        self.assertLess(enforce, create)
+        self.assertLess(create, upload)
+        completion_tail = self.text[create:]
+        self.assertGreaterEqual(completion_tail.count("if: needs.select-suite.outputs.suite == 'c'"), 2)
+        self.assertIn('evidence.get("validation", {}).get("ready") is not True', completion_tail)
+        self.assertIn('"evidence_json_sha256": hashlib.sha256(raw).hexdigest()', completion_tail)
+        self.assertIn("name: agent-final-readiness-complete", completion_tail)
+        self.assertIn("retention-days: 90", completion_tail)
+
     def test_history_and_artifact_api_reads_fail_closed(self):
         selector = self.text[
             self.text.index("      - name: Select A then B then C") : self.text.index("  prepare-blind:")
         ]
         self.assertIn("set -euo pipefail", selector)
-        self.assertGreaterEqual(selector.count("gh api"), 2)
+        self.assertGreaterEqual(selector.count("gh api"), 5)
         self.assertNotIn("|| true", selector)
         self.assertIn("refusing blind retry until state changes", selector)
         self.assertIn("expected exactly one artifact", selector)
         self.assertIn("is expired or has unknown expiry state", selector)
+        self.assertIn("multiple live completion markers are ambiguous", selector)
 
     def test_permissions_are_read_only_and_model_jobs_have_zero_repo_permissions(self):
         self.assertIn("permissions: {}", self.text)
@@ -153,13 +188,14 @@ class FinalScheduledReadinessWorkflowTests(unittest.TestCase):
         self.assertIn("if-no-files-found: error", self.text)
         self.assertIn("Enforce suite readiness after evidence upload", self.text)
 
-    def test_all_artifact_names_are_attempt_specific(self):
+    def test_all_per_run_artifact_names_are_attempt_specific(self):
         self.assertIn("agent-final-blind-input-${{ github.run_id }}-attempt-${{ github.run_attempt }}", self.text)
         self.assertIn("agent-final-judge-input-${{ github.run_id }}-attempt-${{ github.run_attempt }}", self.text)
         self.assertIn(
             "agent-final-readiness-${{ needs.select-suite.outputs.suite }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}",
             self.text,
         )
+        self.assertIn("agent-final-readiness-complete", self.text)
 
     def test_pinned_actions(self):
         for action, sha in (
