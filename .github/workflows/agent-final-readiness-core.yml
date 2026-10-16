@@ -52,10 +52,11 @@ jobs:
 
           # Historical Operator runs predate this carrier migration. A completed run
           # is readiness-relevant only if its exact commit contains this reusable
-          # core and Actions proves the exact prepare job existed. A core-bearing
-          # run with no readiness jobs is ignored only when Actions proves no
-          # non-skipped model stage started and the overall run did not claim
-          # success. Any ambiguous shape fails closed.
+          # core and Actions proves the readiness job surface existed. Job-name
+          # suffixes are used so caller-prefix formatting cannot hide model stages.
+          # A core-bearing run with no readiness jobs/artifacts is ignored only
+          # when there is also no evidence of a non-skipped model stage and the
+          # overall run did not claim success. Any ambiguity fails closed.
           while IFS= read -r CANDIDATE; do
             RID="$(jq -r '.id' <<<"$CANDIDATE")"
             SHA="$(jq -r '.head_sha' <<<"$CANDIDATE")"
@@ -72,20 +73,27 @@ jobs:
 
             JOB_PAGES="$RUNNER_TEMP/jobs-$RID-pages.json"
             JOBS="$RUNNER_TEMP/jobs-$RID.json"
+            ARTIFACTS="$RUNNER_TEMP/history-artifacts-$RID.json"
             if ! gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/jobs?filter=all&per_page=100" > "$JOB_PAGES"; then
               echo "Could not verify readiness jobs for carrier run $RID; refusing ambiguous history." >&2
               exit 1
             fi
+            if ! gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/artifacts?per_page=100" > "$ARTIFACTS"; then
+              echo "Could not verify readiness artifacts for carrier run $RID; refusing ambiguous history." >&2
+              exit 1
+            fi
             jq '[.[] | .jobs[]]' "$JOB_PAGES" > "$JOBS"
-            MARKERS="$(jq '[.[] | select(.name == "final-readiness / final-readiness-prepare")] | length' "$JOBS")"
-            MODEL_STAGE_STARTED="$(jq '[.[] | select(((.name == "final-readiness / final-readiness-blind-pass") or (.name == "final-readiness / final-readiness-judge-pass")) and .conclusion != "skipped" and .started_at != null)] | length' "$JOBS")"
+            MARKERS="$(jq '[.[] | select(.name | endswith("final-readiness-prepare"))] | length' "$JOBS")"
+            READINESS_JOB_COUNT="$(jq '[.[] | select(.name | contains("final-readiness"))] | length' "$JOBS")"
+            MODEL_STAGE_STARTED="$(jq '[.[] | select((((.name | endswith("final-readiness-blind-pass"))) or ((.name | endswith("final-readiness-judge-pass")))) and .conclusion != "skipped" and .started_at != null)] | length' "$JOBS")"
+            READINESS_ARTIFACT_COUNT="$(jq '[.artifacts[] | select(.name | startswith("agent-final-readiness-"))] | length' "$ARTIFACTS")"
 
-            if [ "$MARKERS" = '0' ] && [ "$MODEL_STAGE_STARTED" = '0' ] && [ "$CONCLUSION" != 'success' ]; then
-              echo "Ignoring no-job carrier run $RID with conclusion=$CONCLUSION because no readiness prepare/model-stage job started."
+            if [ "$MARKERS" = '0' ] && [ "$READINESS_JOB_COUNT" = '0' ] && [ "$MODEL_STAGE_STARTED" = '0' ] && [ "$READINESS_ARTIFACT_COUNT" = '0' ] && [ "$CONCLUSION" != 'success' ]; then
+              echo "Ignoring no-readiness-work carrier run $RID with conclusion=$CONCLUSION because no readiness job, model stage, or readiness artifact exists."
               continue
             fi
             if [ "$MARKERS" != '1' ]; then
-              echo "Carrier run $RID contains the readiness core but has $MARKERS exact prepare markers; refusing ambiguous history." >&2
+              echo "Carrier run $RID contains the readiness core but has $MARKERS prepare markers with readiness_job_count=$READINESS_JOB_COUNT readiness_artifact_count=$READINESS_ARTIFACT_COUNT; refusing ambiguous history." >&2
               exit 1
             fi
             printf '%s\n' "$CANDIDATE" >> "$RELEVANT"
@@ -120,9 +128,10 @@ jobs:
             exit 0
           fi
 
-          # Ignore a cancelled carrier attempt only when Actions proves neither
-          # non-skipped model-stage job ever started. Any uncertainty or possible
-          # paid model start remains a paid-relevant failure.
+          # Ignore a cancelled carrier attempt only when Actions proves no
+          # non-skipped model stage started AND no readiness artifact exists.
+          # Once blind input/evidence exists, the run is conservatively treated
+          # as paid-relevant even if job-name formatting changes.
           LATEST_EFFECTIVE=''
           while IFS= read -r CANDIDATE; do
             [ -n "$CANDIDATE" ] || continue
@@ -131,19 +140,23 @@ jobs:
               RID="$(jq -r '.id' <<<"$CANDIDATE")"
               JOB_PAGES="$RUNNER_TEMP/cancelled-jobs-$RID-pages.json"
               JOBS="$RUNNER_TEMP/cancelled-jobs-$RID.json"
+              ARTIFACTS="$RUNNER_TEMP/cancelled-artifacts-$RID.json"
               MODEL_STAGE_STARTED='unknown'
+              READINESS_ARTIFACT_COUNT='unknown'
               if gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/jobs?filter=all&per_page=100" > "$JOB_PAGES" \
-                && jq '[.[] | .jobs[]]' "$JOB_PAGES" > "$JOBS"; then
-                MODEL_STAGE_STARTED="$(jq '[.[] | select(((.name == "final-readiness / final-readiness-blind-pass") or (.name == "final-readiness / final-readiness-judge-pass")) and .conclusion != "skipped" and .started_at != null)] | length' "$JOBS")"
+                && jq '[.[] | .jobs[]]' "$JOB_PAGES" > "$JOBS" \
+                && gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/artifacts?per_page=100" > "$ARTIFACTS"; then
+                MODEL_STAGE_STARTED="$(jq '[.[] | select((((.name | endswith("final-readiness-blind-pass"))) or ((.name | endswith("final-readiness-judge-pass")))) and .conclusion != "skipped" and .started_at != null)] | length' "$JOBS")"
+                READINESS_ARTIFACT_COUNT="$(jq '[.artifacts[] | select(.name | startswith("agent-final-readiness-"))] | length' "$ARTIFACTS")"
               fi
-              if [ "$MODEL_STAGE_STARTED" = '0' ]; then
-                echo "Ignoring cancelled carrier run $RID because no model-stage job started."
+              if [ "$MODEL_STAGE_STARTED" = '0' ] && [ "$READINESS_ARTIFACT_COUNT" = '0' ]; then
+                echo "Ignoring cancelled carrier run $RID because no model-stage job or readiness artifact started."
                 continue
               fi
-              if [ "$MODEL_STAGE_STARTED" = 'unknown' ]; then
-                echo "Could not verify cancelled carrier run $RID job history; treating it as a paid-relevant failure." >&2
+              if [ "$MODEL_STAGE_STARTED" = 'unknown' ] || [ "$READINESS_ARTIFACT_COUNT" = 'unknown' ]; then
+                echo "Could not verify cancelled carrier run $RID job/artifact history; treating it as a paid-relevant failure." >&2
               else
-                echo "Cancelled carrier run $RID reached a model-stage job; treating it as a paid-relevant failure." >&2
+                echo "Cancelled carrier run $RID may have reached paid readiness work (model_stages=$MODEL_STAGE_STARTED artifacts=$READINESS_ARTIFACT_COUNT); treating it as a paid-relevant failure." >&2
               fi
             fi
             LATEST_EFFECTIVE="$CANDIDATE"
