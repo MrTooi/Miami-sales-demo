@@ -29,7 +29,7 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         data = text()
         header = data.split("jobs:", 1)[0]
         self.assertIn("on:\n  schedule:\n", header)
-        self.assertIn("cron: '17 * * * *'", header)
+        self.assertIn("cron: '*/5 * * * *'", header)
         for forbidden in ("workflow_dispatch:", "pull_request:", "push:", "issue_comment:"):
             self.assertNotIn(forbidden, header)
         self.assertIn("permissions: {}", header)
