@@ -85,6 +85,9 @@ class ScheduledReadinessHelperTests(unittest.TestCase):
             cases = json.loads((out / "blind_cases.json").read_text(encoding="utf-8"))
             self.assertEqual(len(cases["cases"]), 18)
             self.assertTrue(all(set(case) == {"id", "prompt"} for case in cases["cases"]))
+            schema_text = (out / "blind_output_schema.json").read_text(encoding="utf-8")
+            self.assertNotIn("uniqueItems", schema_text)
+            self.assertNotIn("minLength", schema_text)
             combined_text = "\n".join(
                 path.read_text(encoding="utf-8")
                 for path in out.iterdir()

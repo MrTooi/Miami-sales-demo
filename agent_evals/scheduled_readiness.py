@@ -182,10 +182,9 @@ def _blind_schema(agent_ids: list[str]) -> dict[str, Any]:
                         "primary": {"type": "string", "enum": agent_ids},
                         "reviewers": {
                             "type": "array",
-                            "items": {"type": "string", "enum": agent_ids},
-                            "uniqueItems": True,
+                            "items": {"type": "string", "enum": agent_ids}
                         },
-                        "response": {"type": "string", "minLength": 1},
+                        "response": {"type": "string"},
                     },
                     "required": ["id", "primary", "reviewers", "response"],
                 },
