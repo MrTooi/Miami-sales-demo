@@ -2,7 +2,7 @@ name: Agent final readiness scheduled
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '2-57/5 * * * *'
 
 permissions: {}
 
