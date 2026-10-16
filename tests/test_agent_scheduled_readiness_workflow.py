@@ -129,13 +129,63 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
 
     def test_cancelled_zero_marker_case_is_handled_before_marker_fail_closed(self):
         prepare = job_block("prepare", "blind-pass")
-        zero_marker = "if [ \"$MARKERS\" = '0' ] && [ \"$CONCLUSION\" = 'cancelled' ] && [ \"$MODEL_STAGE_STARTED\" = '0' ]; then"
+        zero_marker = "if [ \"$MARKERS\" = '0' ] && [ \"$MODEL_STAGE_STARTED\" = '0' ] && [ \"$CONCLUSION\" != 'success' ]; then"
         marker_fail = "if [ \"$MARKERS\" != '1' ]; then"
         self.assertIn(zero_marker, prepare)
         self.assertIn(marker_fail, prepare)
         self.assertLess(prepare.index(zero_marker), prepare.index(marker_fail))
-        self.assertIn("Ignoring cancelled carrier run $RID because no readiness prepare/model-stage job started.", prepare)
+        self.assertIn("Ignoring no-job carrier run $RID with conclusion=$CONCLUSION because no readiness prepare/model-stage job started.", prepare)
         self.assertIn('.conclusion != "skipped"', prepare)
+
+    def _classify_history_run(self, conclusion, jobs):
+        """Run the workflow's real classification shell block against a fixture."""
+        jq = shutil.which("jq")
+        bash = shutil.which("bash")
+        self.assertIsNotNone(jq, "jq is required")
+        self.assertIsNotNone(bash, "bash is required")
+        prepare = job_block("prepare", "blind-pass")
+        start = prepare.index('MARKERS="$(jq')
+        end = prepare.index("printf '%s\\n' \"$CANDIDATE\" >> \"$RELEVANT\"")
+        snippet = "\n".join(line.strip() for line in prepare[start:end].splitlines())
+        script = f'for _ in 1; do\n{snippet}\necho RELEVANT\ndone\n'
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs_path = Path(tmp) / "jobs.json"
+            jobs_path.write_text(json.dumps(jobs), encoding="utf-8")
+            env = dict(os.environ, JOBS=str(jobs_path), CONCLUSION=conclusion, RID="1")
+            result = subprocess.run(
+                [bash, "-c", script], env=env, text=True, capture_output=True
+            )
+        if result.returncode != 0:
+            return "fail-closed"
+        return "relevant" if "RELEVANT" in result.stdout else "ignored"
+
+    def test_history_classification_fixtures_for_zero_marker_runs(self):
+        prefix = "final-readiness / final-readiness-"
+        started = "2026-10-16T00:00:00Z"
+        for conclusion in ("startup_failure", "failure", "cancelled"):
+            with self.subTest(conclusion=conclusion, jobs="empty"):
+                self.assertEqual(self._classify_history_run(conclusion, []), "ignored")
+        self.assertEqual(self._classify_history_run("success", []), "fail-closed")
+
+        for conclusion in ("success", "failure", "cancelled", "startup_failure", "timed_out"):
+            for stage in ("blind-pass", "judge-pass"):
+                with self.subTest(conclusion=conclusion, started=stage):
+                    jobs = [{"name": prefix + stage, "conclusion": "failure", "started_at": started}]
+                    self.assertEqual(self._classify_history_run(conclusion, jobs), "fail-closed")
+
+        # Skipped model-stage jobs do not count as started.
+        skipped = [{"name": prefix + "blind-pass", "conclusion": "skipped", "started_at": started}]
+        self.assertEqual(self._classify_history_run("cancelled", skipped), "ignored")
+        self.assertEqual(self._classify_history_run("success", skipped), "fail-closed")
+
+        # Exactly one exact prepare marker is relevant; duplicates fail closed.
+        one = [{"name": prefix + "prepare", "conclusion": "success", "started_at": started}]
+        self.assertEqual(self._classify_history_run("success", one), "relevant")
+        self.assertEqual(self._classify_history_run("failure", one), "relevant")
+        self.assertEqual(self._classify_history_run("failure", one + one), "fail-closed")
 
     def test_prepare_creates_only_blind_input_before_validation(self):
         prepare = job_block("prepare", "blind-pass")
