@@ -1,4 +1,7 @@
+import json
 import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -66,6 +69,8 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         self.assertIn("uses: ./.github/workflows/agent-final-readiness-core.yml", readiness)
         self.assertIn("OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}", readiness)
         self.assertNotIn("secrets: inherit", readiness)
+        self.assertNotIn("workflow_dispatch", readiness)
+        self.assertNotIn("openai/codex-action", readiness)
         planner = data.split("  plan-next-task:\n", 1)[1].split("  final-readiness:\n", 1)[0]
         self.assertIn("vars.LEDGER_AGENT_OPERATOR_ENABLED == 'true'", planner)
         self.assertIn("github.event_name == 'workflow_dispatch'", planner)
@@ -97,6 +102,40 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
             "final-readiness-validate-and-record",
         ):
             self.assertIn(f"name: {name}", data)
+
+    def test_exact_prepare_marker_jq_filter_does_not_match_prepare_judge(self):
+        jq = shutil.which("jq")
+        self.assertIsNotNone(jq, "jq is required by the readiness workflow and its regression test")
+        jobs = [
+            {"name": "final-readiness / final-readiness-prepare", "started_at": "2026-10-16T00:00:00Z", "conclusion": "success"},
+            {"name": "final-readiness / final-readiness-blind-pass", "started_at": "2026-10-16T00:00:01Z", "conclusion": "success"},
+            {"name": "final-readiness / final-readiness-validate-blind", "started_at": "2026-10-16T00:00:02Z", "conclusion": "success"},
+            {"name": "final-readiness / final-readiness-prepare-judge", "started_at": "2026-10-16T00:00:03Z", "conclusion": "success"},
+            {"name": "final-readiness / final-readiness-judge-pass", "started_at": "2026-10-16T00:00:04Z", "conclusion": "success"},
+            {"name": "final-readiness / final-readiness-validate-and-record", "started_at": "2026-10-16T00:00:05Z", "conclusion": "success"},
+        ]
+        expression = '[.[] | select(.name == "final-readiness / final-readiness-prepare")] | length'
+        result = subprocess.run(
+            [jq, expression],
+            input=json.dumps(jobs),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout.strip(), "1")
+        prepare = job_block("prepare", "blind-pass")
+        self.assertIn(expression, prepare)
+        self.assertNotIn('contains("final-readiness-prepare")', prepare)
+
+    def test_cancelled_zero_marker_case_is_handled_before_marker_fail_closed(self):
+        prepare = job_block("prepare", "blind-pass")
+        zero_marker = "if [ \"$MARKERS\" = '0' ] && [ \"$CONCLUSION\" = 'cancelled' ] && [ \"$MODEL_STAGE_STARTED\" = '0' ]; then"
+        marker_fail = "if [ \"$MARKERS\" != '1' ]; then"
+        self.assertIn(zero_marker, prepare)
+        self.assertIn(marker_fail, prepare)
+        self.assertLess(prepare.index(zero_marker), prepare.index(marker_fail))
+        self.assertIn("Ignoring cancelled carrier run $RID because no readiness prepare/model-stage job started.", prepare)
+        self.assertIn('.conclusion != "skipped"', prepare)
 
     def test_prepare_creates_only_blind_input_before_validation(self):
         prepare = job_block("prepare", "blind-pass")
@@ -161,7 +200,7 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         self.assertIn("contents/.github/workflows/agent-final-readiness-core.yml?ref=$SHA", prepare)
         self.assertIn("if grep -q 'HTTP 404'", prepare)
         self.assertIn("continue", prepare)
-        self.assertIn("final-readiness-prepare", prepare)
+        self.assertIn('select(.name == "final-readiness / final-readiness-prepare")', prepare)
         self.assertIn("MARKERS", prepare)
         self.assertIn("refusing ambiguous history", prepare)
 
@@ -180,9 +219,10 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
     def test_cancelled_attempts_are_ignored_only_when_no_model_job_started(self):
         prepare = job_block("prepare", "blind-pass")
         self.assertIn("MODEL_STAGE_STARTED='unknown'", prepare)
-        self.assertIn("final-readiness-blind-pass", prepare)
-        self.assertIn("final-readiness-judge-pass", prepare)
+        self.assertIn('final-readiness / final-readiness-blind-pass', prepare)
+        self.assertIn('final-readiness / final-readiness-judge-pass', prepare)
         self.assertIn(".started_at != null", prepare)
+        self.assertIn('.conclusion != "skipped"', prepare)
         self.assertIn("Ignoring cancelled carrier run $RID because no model-stage job started.", prepare)
         self.assertIn("Could not verify cancelled carrier run $RID job history; treating it as a paid-relevant failure.", prepare)
         self.assertIn("Cancelled carrier run $RID reached a model-stage job; treating it as a paid-relevant failure.", prepare)
@@ -207,10 +247,15 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
             "test -s \"$DEST/metadata.json\"",
             "test -s \"$DEST/blind.json\"",
             "test -s \"$DEST/judge.json\"",
+            "gh api \"/repos/$GITHUB_REPOSITORY/actions/runs/$RID\" > \"$RUN_META\"",
             "'.event'",
             "'.repository'",
             "'.run_id'",
             "'.run_attempt'",
+            "'.commit_sha'",
+            "'.ref'",
+            "'.blind_sha256'",
+            "'.judge_sha256'",
             "'.deterministic_validation'",
             "'.suite'",
             "final_suite_${EXPECTED_SUITE}_prompts.json",
@@ -223,7 +268,10 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
             self.assertIn(required, final)
         self.assertIn("= 'schedule'", final)
         self.assertIn("= '1'", final)
+        self.assertIn("= 'refs/heads/main'", final)
         self.assertIn("= 'passed'", final)
+        self.assertIn("BLIND_ACTUAL=", final)
+        self.assertIn("JUDGE_ACTUAL=", final)
 
     def test_canonical_local_validation_controls_scoring_and_final_aggregate(self):
         final = job_block("validate-and-record")
