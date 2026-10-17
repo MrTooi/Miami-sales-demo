@@ -67,25 +67,52 @@ def next_slot(now: datetime, minutes: list[int] | None) -> datetime | None:
     return min(later) if later else None
 
 
-def latest_run_display(latest_run: dict | None) -> tuple[str, str, str]:
+def _created(run: dict, tz) -> datetime | None:
+    value = run.get("created_at")
+    if not value:
+        return None
+    created = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return created.astimezone(tz) if (created.tzinfo is not None and tz is not None) else created
+
+
+def latest_run_display(latest_run: dict | None, expected_slot: datetime | None) -> tuple[str, str, str]:
     """(value, tone, note) for any 'latest scheduled run' status shown to the owner.
 
-    Only an attempt-1 run may show its own conclusion. A rerun (or a run whose attempt
-    is unknown) shows RERUN / CHECK so a manual re-run can never display SUCCESS as
-    schedule health. Tone is never "ok": a historical run says nothing about the
-    current slot.
+    Only an attempt-1 run created in the current expected slot may show its own
+    conclusion. A rerun or unknown attempt shows RERUN / CHECK; a run from an earlier
+    slot, or any run when the schedule is unknown, shows NOT CURRENT. So an old success
+    can never sit beside a LATE scheduler as plain SUCCESS. Tone is never "ok".
     """
     if not latest_run:
         return "UNKNOWN", "warn", "No Operator schedule event is visible in the current API window."
     attempt = latest_run.get("run_attempt")
+    state = str(latest_run.get("conclusion") or latest_run.get("status") or "unknown").lower()
     if attempt != 1:
         return (
             "RERUN / CHECK",
             "warn",
             f"Attempt {attempt!r}: a manual rerun or unknown attempt is not schedule-health evidence.",
         )
-    state = str(latest_run.get("conclusion") or latest_run.get("status") or "unknown").lower()
-    return state.upper(), ("info" if state == "success" else "warn"), "Attempt 1."
+    created = _created(latest_run, expected_slot.tzinfo if expected_slot else None)
+    if expected_slot is None or created is None or created < expected_slot:
+        return (
+            "NOT CURRENT",
+            "warn",
+            f"Last attempt-1 run concluded {state}, but it is not from the current expected slot "
+            "(or the slot is unknown); it is history, not current schedule health.",
+        )
+    return state.upper(), ("info" if state == "success" else "warn"), "Attempt 1, current slot."
+
+
+def activity_state_label(run: dict) -> str:
+    """Conclusion/status text for activity lists that always discloses reruns."""
+    state = str(run.get("conclusion") or run.get("status") or "unknown")
+    attempt = run.get("run_attempt")
+    if attempt == 1:
+        return state
+    if attempt is None:
+        return f"{state} (attempt unknown)"
+    return f"{state} (rerun, attempt {attempt})"
 
 
 def classify_schedule_slot(

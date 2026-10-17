@@ -154,7 +154,7 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("Current main", short_sha(main_sha))
 c2.metric("Scheduler", state)
 c3.metric("Open PRs", len(pulls or []))
-latest_value, _latest_tone, latest_note = latest_run_display(latest_operator)
+latest_value, _latest_tone, latest_note = latest_run_display(latest_operator, expected_slot)
 c4.metric("Latest schedule", latest_value, help=latest_note)
 st.caption(state_note)
 

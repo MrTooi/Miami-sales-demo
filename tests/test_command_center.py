@@ -76,11 +76,12 @@ class CommandCenterTests(unittest.TestCase):
         # The card's tone comes only from the shared helper, whose tones are never "ok"
         # (behavior-tested in tests/test_command_center_schedule_parsing.py).
         self.assertIn('card("Latest Scheduled Run", run_value, run_note, run_tone)', self.source)
-        self.assertIn("run_value, run_tone, run_note = latest_run_display(latest_operator)", self.source)
+        self.assertIn("run_value, run_tone, run_note = latest_run_display(", self.source)
         from command_center.status_logic import latest_run_display
 
-        stale_success = {"run_attempt": 1, "status": "completed", "conclusion": "success"}
-        self.assertNotEqual(latest_run_display(stale_success)[1], "ok")
+        stale_success = {"run_attempt": 1, "status": "completed", "conclusion": "success",
+                         "created_at": "2026-10-16T20:02:00Z"}
+        self.assertEqual(latest_run_display(stale_success, None)[:2], ("NOT CURRENT", "warn"))
 
     def test_schedule_has_no_invented_fallback_minutes(self):
         self.assertIn("return None", self.source)

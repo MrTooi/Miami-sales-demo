@@ -24,7 +24,13 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[1])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from command_center.status_logic import latest_run_display, next_slot, parse_cron_minutes  # noqa: E402
+from command_center.status_logic import (  # noqa: E402
+    activity_state_label,
+    latest_run_display,
+    next_slot,
+    parse_cron_minutes,
+    previous_slot,
+)
 
 REPO = "MrTooi/Miami-sales-demo"
 API = "https://api.github.com"
@@ -248,7 +254,9 @@ with cols[2]:
         card("Next Operator Slot", "UNKNOWN", "Current cron could not be parsed from main; no fallback time is invented.", "warn")
 
 with cols[3]:
-    run_value, run_tone, run_note = latest_run_display(latest_operator)
+    run_value, run_tone, run_note = latest_run_display(
+        latest_operator, previous_slot(fetched_at, operator_minutes())
+    )
     if latest_operator:
         run_note = (
             f"#{latest_operator.get('run_number')} · {age(latest_operator.get('created_at'))} · "
@@ -305,7 +313,7 @@ st.subheader("Recent System Activity")
 if all_runs:
     for run in all_runs[:12]:
         event = html.escape(str(run.get("event", "unknown")))
-        state = html.escape(str(run.get("conclusion") or run.get("status") or "unknown"))
+        state = html.escape(activity_state_label(run))
         name = html.escape(str(run.get("name", "Workflow")))
         st.markdown(
             f"**{name}** · `{event}` · **{state}** · `{short_sha(run.get('head_sha'))}` · {age(run.get('created_at'))}"

@@ -87,48 +87,73 @@ class RerunIsNotScheduleHealthTests(unittest.TestCase):
 
 
 class LatestRunDisplayTests(unittest.TestCase):
+    SLOT = datetime(2026, 10, 17, 1, 17, tzinfo=timezone.utc)
+    CURRENT = {"created_at": "2026-10-17T01:18:00Z", "status": "completed", "conclusion": "success"}
+    OLD = {"created_at": "2026-10-16T20:02:00Z", "status": "completed", "conclusion": "success"}
+
     def test_rerun_or_unknown_attempt_never_displays_success(self):
         from command_center.status_logic import latest_run_display
 
-        base = {"status": "completed", "conclusion": "success"}
         for attempt in (2, 3, None, "1", 0):
             with self.subTest(attempt=attempt):
-                value, tone, note = latest_run_display(dict(base, run_attempt=attempt))
+                value, tone, note = latest_run_display(dict(self.CURRENT, run_attempt=attempt), self.SLOT)
                 self.assertEqual(value, "RERUN / CHECK")
                 self.assertEqual(tone, "warn")
                 self.assertIn(repr(attempt), note)
-        value, tone, _ = latest_run_display(dict(base, run_attempt=1))
+        value, tone, _ = latest_run_display(dict(self.CURRENT, run_attempt=1), self.SLOT)
         self.assertEqual((value, tone), ("SUCCESS", "info"))
-        value, tone, _ = latest_run_display(dict(base, conclusion="failure", run_attempt=1))
+        value, tone, _ = latest_run_display(dict(self.CURRENT, conclusion="failure", run_attempt=1), self.SLOT)
         self.assertEqual((value, tone), ("FAILURE", "warn"))
-        self.assertEqual(latest_run_display(None)[:2], ("UNKNOWN", "warn"))
+        self.assertEqual(latest_run_display(None, self.SLOT)[:2], ("UNKNOWN", "warn"))
+
+    def test_old_attempt1_success_is_not_current_and_matches_late_scheduler(self):
+        # ChatGPT round 2: Project Map must not show "LATE / CHECK" beside plain SUCCESS.
+        from command_center.status_logic import classify_schedule_slot, latest_run_display
+
+        old = dict(self.OLD, run_attempt=1)
+        now = self.SLOT.replace(minute=50)
+        state, _ = classify_schedule_slot(now=now, expected_slot=self.SLOT, latest_run=old, runs_error=False)
+        self.assertEqual(state, "LATE / CHECK")
+        value, tone, note = latest_run_display(old, self.SLOT)
+        self.assertEqual((value, tone), ("NOT CURRENT", "warn"))
+        self.assertIn("success", note)
+        for slot in (None,):
+            self.assertEqual(latest_run_display(dict(self.CURRENT, run_attempt=1), slot)[0], "NOT CURRENT")
+        undated = {"status": "completed", "conclusion": "success", "run_attempt": 1}
+        self.assertEqual(latest_run_display(undated, self.SLOT)[0], "NOT CURRENT")
 
     def test_display_tone_is_never_green(self):
         from command_center.status_logic import latest_run_display
 
-        for run in (None, {"run_attempt": 1, "status": "completed", "conclusion": "success"},
-                    {"run_attempt": 2, "status": "completed", "conclusion": "success"}):
-            self.assertNotEqual(latest_run_display(run)[1], "ok")
+        for run in (None, dict(self.CURRENT, run_attempt=1), dict(self.CURRENT, run_attempt=2), dict(self.OLD, run_attempt=1)):
+            for slot in (self.SLOT, None):
+                self.assertNotEqual(latest_run_display(run, slot)[1], "ok")
+
+    def test_activity_list_always_discloses_reruns(self):
+        from command_center.status_logic import activity_state_label
+
+        self.assertEqual(activity_state_label({"conclusion": "success", "run_attempt": 1}), "success")
+        self.assertEqual(activity_state_label({"conclusion": "success", "run_attempt": 2}), "success (rerun, attempt 2)")
+        self.assertEqual(activity_state_label({"status": "in_progress"}), "in_progress (attempt unknown)")
 
     def test_missing_attempt_in_current_slot_is_check(self):
         from command_center.status_logic import classify_schedule_slot
 
-        slot = datetime(2026, 10, 17, 1, 17, tzinfo=timezone.utc)
-        run = {"created_at": "2026-10-17T01:18:00Z", "status": "completed", "conclusion": "success"}
-        self.assertEqual(classify_schedule_slot(now=slot, expected_slot=slot, latest_run=run, runs_error=False)[0],
-                         "CHECK")
+        self.assertEqual(classify_schedule_slot(now=self.SLOT, expected_slot=self.SLOT, latest_run=self.CURRENT,
+                                                runs_error=False)[0], "CHECK")
 
-    def test_both_pages_render_latest_run_only_through_the_shared_helper(self):
+    def test_every_visible_run_status_goes_through_shared_helpers(self):
         app = (ROOT / "command_center/app.py").read_text(encoding="utf-8")
         page = (ROOT / "command_center/pages/1_Project_Map.py").read_text(encoding="utf-8")
-        self.assertIn("latest_run_display(latest_operator)", app)
+        self.assertIn("latest_run_display(\n        latest_operator, previous_slot(fetched_at, operator_minutes())\n    )", app.replace("\r\n", "\n"))
         self.assertIn('card("Latest Scheduled Run", run_value, run_note, run_tone)', app)
-        self.assertIn("latest_run_display(latest_operator)", page)
+        self.assertIn("latest_run_display(latest_operator, expected_slot)", page)
         self.assertIn('c4.metric("Latest schedule", latest_value', page)
+        self.assertIn("state = html.escape(activity_state_label(run))", app)
         for source in (app, page):
             self.assertNotIn('latest_operator.get("conclusion")', source)
             self.assertNotIn('(latest_operator or {}).get("conclusion")', source)
-
+            self.assertNotIn('str(run.get("conclusion") or run.get("status")', source)
 
 class PagesUseSharedParserTests(unittest.TestCase):
     def test_no_page_keeps_a_private_first_match_cron_parser(self):
