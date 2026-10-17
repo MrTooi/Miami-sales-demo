@@ -82,6 +82,31 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         self.assertIn("CURRENT_ATTEMPT", prepare)
         self.assertIn("Manual reruns are blocked to prevent duplicate paid model calls.", prepare)
 
+    def test_every_readiness_job_has_job_level_attempt_one_guard(self):
+        jobs = [
+            "prepare",
+            "blind-pass",
+            "validate-blind",
+            "prepare-judge",
+            "judge-pass",
+            "validate-and-record",
+        ]
+        data = core_text()
+        self.assertEqual(re.findall(r"^  ([a-z-]+):\n", data.split("\njobs:\n", 1)[1], re.M), jobs)
+        for index, name in enumerate(jobs):
+            block = job_block(name, jobs[index + 1] if index + 1 < len(jobs) else None)
+            if_lines = re.findall(r"^    if: (.+)$", block, re.M)
+            self.assertEqual(len(if_lines), 1, name)
+            self.assertIn("github.run_attempt == 1", if_lines[0], name)
+        for name, nxt in (("blind-pass", "validate-blind"), ("judge-pass", "validate-and-record")):
+            block = job_block(name, nxt)
+            self.assertIn("openai/codex-action", block)
+            self.assertRegex(block, r"(?m)^    if: github\.run_attempt == 1 && ")
+        self.assertIn(
+            "if: github.event_name == 'schedule' && github.run_attempt == 1",
+            job_block("prepare", "blind-pass"),
+        )
+
     def test_model_calls_are_exactly_two_pinned_read_only_drop_sudo_calls(self):
         data = core_text()
         self.assertEqual(data.count(f"openai/codex-action@{CODEX_ACTION_SHA}"), 2)
