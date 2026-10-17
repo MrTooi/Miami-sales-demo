@@ -204,11 +204,43 @@ class FailureKindTests(unittest.TestCase):
         no_failed_step = job(BLIND, "cancelled", steps=[{"name": "Set up job", "conclusion": "success"}])
         self.assertEqual(rh.failure_kind([prep(), no_failed_step]), "behavioral")
 
+    def test_chatgpt_blocker1_output_freeze_failures_after_model_success_are_behavioral(self):
+        blind = job(BLIND, "failure", steps=[
+            {"name": "Run blind read-only Agent OS evaluator", "conclusion": "success"},
+            {"name": "Freeze blind output by hash", "conclusion": "failure"},
+        ])
+        self.assertEqual(rh.failure_kind([prep(), blind]), "behavioral")
+        judge = job(JUDGE, "failure", steps=[
+            {"name": "Run isolated read-only independent judge", "conclusion": "success"},
+            {"name": "Reverify blind immutability and freeze judge output", "conclusion": "failure"},
+        ])
+        self.assertEqual(rh.failure_kind([prep(), job(BLIND), job(VALIDATE_BLIND), job(PREP_JUDGE), judge]),
+                         "behavioral")
+        for guard in ("Prove hidden rubric is absent before blind model call",
+                      "Verify and lock frozen blind answer for independent judge",
+                      "Build judge-only input after blind validation",
+                      "A step nobody listed"):
+            with self.subTest(step=guard):
+                failed = job(BLIND, "failure", steps=[{"name": guard, "conclusion": "failure"}])
+                self.assertEqual(rh.failure_kind([prep(), failed]), "behavioral")
+
+    def test_infra_requires_every_failed_step_on_the_allowlist(self):
+        mixed = job(BLIND, "failure", steps=[
+            {"name": "Download only blind inputs on a runner with no repository checkout", "conclusion": "failure"},
+            {"name": "Freeze blind output by hash", "conclusion": "failure"},
+        ])
+        self.assertEqual(rh.failure_kind([prep(), mixed]), "behavioral")
+        for step in sorted(rh.RUNTIME_INFRA_STEPS):
+            with self.subTest(step=step):
+                failed = job(BLIND, "failure", steps=[{"name": step, "conclusion": "failure"}])
+                self.assertEqual(rh.failure_kind([prep(), failed]), "infrastructure")
+        self.assertFalse(rh.RUNTIME_INFRA_STEPS & rh.MODEL_CALL_STEPS)
+
     def test_model_call_step_names_exist_in_core_workflow(self):
         core = (Path(__file__).resolve().parents[1] / ".github/workflows/agent-final-readiness-core.yml").read_text(
             encoding="utf-8")
         lines = {line.strip() for line in core.splitlines()}
-        for step in rh.MODEL_CALL_STEPS:
+        for step in rh.MODEL_CALL_STEPS | (rh.RUNTIME_INFRA_STEPS - {"Set up job"}):
             self.assertIn(f"- name: {step}", lines)
         for suffix in ("final-readiness-blind-pass", "final-readiness-judge-pass", "final-readiness-prepare",
                        "final-readiness-validate-blind", "final-readiness-prepare-judge",
@@ -268,6 +300,9 @@ class SelectSuiteTests(unittest.TestCase):
                                  current_sha=current_sha, max_runs=max_runs)
         result = dict(result)
         self.last_prior_ids = result.pop("prior_success_ids", None)
+        runs_ = result.pop("prior_success_runs", None)
+        if self.last_prior_ids is not None:
+            self.assertEqual([r["id"] for r in runs_], self.last_prior_ids)
         return result, calls
 
     def ok(self, rid, sha="sha-old"):
@@ -455,13 +490,11 @@ class CliTests(unittest.TestCase):
                 raise AssertionError(path)
             return mock.Mock(returncode=0, stdout=json.dumps(body), stderr="")
 
-        current = sr.instruction_hashes()
         with mock.patch.object(rh.subprocess, "run", side_effect=fake_run), \
-                mock.patch.object(rh, "_download_evidence_metadata",
-                                  side_effect=lambda repo, rid: dict(current, run_id=str(rid))) as dl:
+                mock.patch.object(rh, "verify_prior_successes") as verify:
             result = rh.github_select("o/r", 999, "s2")
         self.assertEqual(result, {"execute": True, "suite": "c", "prior_success_ids": [3, 2]})
-        self.assertEqual([c.args[1] for c in dl.call_args_list], [3, 2])
+        self.assertEqual([r["id"] for r in verify.call_args.args[0]], [3, 2])
         for cmd in calls:
             self.assertEqual(cmd[:2], ["gh", "api"])
             for forbidden in ("-X", "--method", "-f", "-F", "--field", "--raw-field", "--input"):
@@ -480,21 +513,19 @@ class CliTests(unittest.TestCase):
                 with self.assertRaisesRegex(rh.ReadinessHistoryError, "refusing model spend"):
                     rh.require_matching_instruction_hashes([dict(current), prior], current)
 
-    def test_w1_github_select_checks_prior_evidence_and_fails_closed_on_download_error(self):
-        selection = {"execute": True, "suite": "b", "prior_success_ids": [7]}
-        with mock.patch.object(rh, "select_suite", return_value=selection), \
-                mock.patch.object(rh, "_download_evidence_metadata", return_value={"run_id": "7"}):
-            with self.assertRaisesRegex(rh.ReadinessHistoryError, "refusing model spend"):
-                rh.github_select("o/r", 999, "s")
-        with mock.patch.object(rh, "select_suite", return_value=selection), \
+    def test_github_select_download_failure_fails_closed_and_suite_a_downloads_nothing(self):
+        prior = run(7, "success", sha="sha-a")
+        selection = {"execute": True, "suite": "b", "prior_success_ids": [7], "prior_success_runs": [prior]}
+        with mock.patch.object(rh, "select_suite", return_value=dict(selection)), \
                 mock.patch.object(rh.subprocess, "run",
                                   return_value=mock.Mock(returncode=1, stdout="", stderr="HTTP 410 expired")):
             with self.assertRaisesRegex(rh.ReadinessHistoryError, "could not download evidence"):
                 rh.github_select("o/r", 999, "s")
-        suite_a = {"execute": True, "suite": "a", "prior_success_ids": []}
-        with mock.patch.object(rh, "select_suite", return_value=suite_a), \
-                mock.patch.object(rh, "_download_evidence_metadata") as dl:
-            self.assertEqual(rh.github_select("o/r", 999, "s"), suite_a)
+        suite_a = {"execute": True, "suite": "a", "prior_success_ids": [], "prior_success_runs": []}
+        with mock.patch.object(rh, "select_suite", return_value=dict(suite_a)), \
+                mock.patch.object(rh, "_download_evidence") as dl:
+            self.assertEqual(rh.github_select("o/r", 999, "s"),
+                             {"execute": True, "suite": "a", "prior_success_ids": []})
         dl.assert_not_called()
 
     def test_github_select_api_failure_fails_closed(self):
@@ -502,6 +533,93 @@ class CliTests(unittest.TestCase):
                                return_value=mock.Mock(returncode=1, stdout="", stderr="HTTP 403 rate limit")):
             with self.assertRaises(rh.ReadinessHistoryError):
                 rh.github_select("o/r", 999, "s")
+
+
+class PriorEvidenceVerificationTests(unittest.TestCase):
+    """ChatGPT blocker 2: a prior success must prove its evidence before B/C spend."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def make_evidence(self, tmp, run_obj, suite, **overrides):
+        import hashlib
+
+        d = Path(tmp) / str(run_obj["id"])
+        d.mkdir(parents=True)
+        (d / "blind.json").write_text('{"results": []}', encoding="utf-8")
+        (d / "judge.json").write_text('{"results": []}', encoding="utf-8")
+        report = overrides.pop("report", {"suite": suite, "ready": True})
+        (d / "suite-report.json").write_text(json.dumps(report), encoding="utf-8")
+
+        def sha(p):
+            return hashlib.sha256(p.read_bytes()).hexdigest()
+
+        meta = {
+            "event": "schedule", "run_id": str(run_obj["id"]), "run_attempt": "1",
+            "commit_sha": run_obj["head_sha"], "ref": "refs/heads/main",
+            "deterministic_validation": "passed", "suite": suite,
+            "blind_sha256": sha(d / "blind.json"), "judge_sha256": sha(d / "judge.json"),
+            "prompt_sha256": sha(self.ROOT / f"agent_evals/final_suite_{suite}_prompts.json"),
+            "rubric_sha256": sha(self.ROOT / f"agent_evals/final_suite_{suite}_rubric.json"),
+            **sr.instruction_hashes(),
+        }
+        meta.update(overrides.pop("meta", {}))
+        (d / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+        names = ["blind.json", "judge.json", "suite-report.json", "metadata.json"]
+        lines = [f"{sha(d / n)}  {n}" for n in names]
+        (d / "hashes.sha256").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        tamper = overrides.pop("tamper", None)
+        if tamper:
+            (d / tamper).write_text("tampered", encoding="utf-8")
+        return d
+
+    def verify(self, specs):
+        """specs: oldest-first list of (run, suite, overrides)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            dirs = {r["id"]: self.make_evidence(tmp, r, s, **o) for r, s, o in specs}
+            newest_first = [r for r, _, _ in reversed(specs)]
+            rh.verify_prior_successes(newest_first, lambda r: dirs[r["id"]], root=self.ROOT)
+
+    def test_valid_a_then_b_passes(self):
+        self.verify([(run(1, sha="sa"), "a", {}), (run(2, sha="sb"), "b", {})])
+
+    def test_each_tampering_or_provenance_defect_fails_closed(self):
+        a = run(1, sha="sa")
+        cases = {
+            "wrong suite order": {"meta": {"suite": "b"}},
+            "manual event": {"meta": {"event": "workflow_dispatch"}},
+            "rerun attempt": {"meta": {"run_attempt": "2"}},
+            "other run id": {"meta": {"run_id": "999"}},
+            "commit mismatch": {"meta": {"commit_sha": "other"}},
+            "not main": {"meta": {"ref": "refs/heads/feature"}},
+            "validation not passed": {"meta": {"deterministic_validation": "failed"}},
+            "stale prompt": {"meta": {"prompt_sha256": "0" * 64}},
+            "stale rubric": {"meta": {"rubric_sha256": "0" * 64}},
+            "blind hash mismatch": {"meta": {"blind_sha256": "0" * 64}},
+            "different instructions": {"meta": {"agents_md_sha256": "0" * 64}},
+            "unrecorded instructions": {"meta": {"team_profiles_sha256": None}},
+            "failing report": {"report": {"suite": "a", "ready": False}},
+            "tampered judge": {"tamper": "judge.json"},
+        }
+        for label, overrides in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(rh.ReadinessHistoryError):
+                    self.verify([(a, "a", dict(overrides))])
+
+    def test_missing_hash_coverage_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = run(1, sha="sa")
+            d = self.make_evidence(tmp, r, "a")
+            (d / "hashes.sha256").write_text("\n".join(
+                line for line in (d / "hashes.sha256").read_text().splitlines() if "metadata.json" not in line))
+            with self.assertRaisesRegex(rh.ReadinessHistoryError, "not covered"):
+                rh.verify_prior_successes([r], lambda _r: d, root=self.ROOT)
+            (d / "hashes.sha256").unlink()
+            with self.assertRaisesRegex(rh.ReadinessHistoryError, "missing hashes"):
+                rh.verify_prior_successes([r], lambda _r: d, root=self.ROOT)
+
+    def test_more_than_two_prior_successes_is_ambiguous(self):
+        with self.assertRaises(rh.ReadinessHistoryError):
+            rh.verify_prior_successes([run(3), run(2), run(1)], lambda _r: Path("."), root=self.ROOT)
 
 
 class InstructionHashTests(unittest.TestCase):

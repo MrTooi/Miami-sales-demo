@@ -71,6 +71,21 @@ MODEL_CALL_STEPS = frozenset({
     "Run blind read-only Agent OS evaluator",
     "Run isolated read-only independent judge",
 })
+# Strict allowlist of runner-plumbing steps in the model-runtime jobs (blind-pass,
+# prepare-judge, judge-pass). Only a failure confined to these is "infrastructure".
+# Output-presence, hash, freeze, guard and content-validation steps are deliberately
+# absent: their failure may reflect missing, empty or rejected model output.
+RUNTIME_INFRA_STEPS = frozenset({
+    "Set up job",
+    "Checkout exact scheduled commit without persisted credentials",
+    "Set up Python",
+    "Download only blind inputs on a runner with no repository checkout",
+    "Download isolated judge inputs on a fresh runner with no repository checkout",
+    "Download frozen blind output",
+    "Upload immutable blind intermediate",
+    "Upload judge-only model input after blind validation",
+    "Upload immutable judge intermediate",
+})
 
 # The exact instruction files copied into the blind bundle
 # (agent_evals/scheduled_readiness.py build_blind_bundle). Only these can change what
@@ -114,9 +129,10 @@ def failure_kind(jobs: list[dict]) -> str:
     """Classify a paid-relevant failure.
 
     ``infrastructure`` only when a model-runtime job (blind pass, judge preparation,
-    judge pass) failed before deterministic recording ran, *and* its step list proves
-    the failure was in runner plumbing rather than the model call itself. A failure in
-    the model step (refusal, turn/time exhaustion, empty or rejected output), a
+    judge pass) failed before deterministic recording ran, *and* every failed step is in
+    the ``RUNTIME_INFRA_STEPS`` allowlist (runner plumbing). A failure in the model step
+    (refusal, turn/time exhaustion), in output freeze/hash/guard steps (empty, missing
+    or rejected output), in any unknown step, a
     malformed or self-reviewing blind answer caught by ``validate-blind``, a threshold
     failure, or anything unproven is ``behavioral`` (the stricter gate).
     """
@@ -141,7 +157,7 @@ def failure_kind(jobs: list[dict]) -> str:
         if not isinstance(steps, list) or not steps:
             return "behavioral"  # cannot prove where it failed
         failed = [s.get("name") for s in steps if s.get("conclusion") in {"failure", "timed_out", "cancelled"}]
-        if not failed or any(name in MODEL_CALL_STEPS for name in failed):
+        if not failed or not all(name in RUNTIME_INFRA_STEPS for name in failed):
             return "behavioral"
     return "infrastructure"
 
@@ -245,6 +261,7 @@ def select_suite(
     """
     successes = 0
     success_ids: list[int] = []
+    success_runs: list[dict] = []
     latest: dict | None = None
     scanned = 0
     previous_created: str | None = None
@@ -281,12 +298,18 @@ def select_suite(
         if status == "success":
             successes += 1
             success_ids.append(run["id"])
+            success_runs.append(run)
             if successes >= REQUIRED_SUCCESSES:
                 break
 
     if successes >= REQUIRED_SUCCESSES:
         return {"execute": False, "suite": "complete"}
-    selection = {"execute": True, "suite": SUITE_BY_SUCCESS_COUNT[successes], "prior_success_ids": success_ids}
+    selection = {
+        "execute": True,
+        "suite": SUITE_BY_SUCCESS_COUNT[successes],
+        "prior_success_ids": success_ids,
+        "prior_success_runs": success_runs,
+    }
     if latest is not None and latest["status"] == "paid_relevant_failure":
         if latest["run"]["head_sha"] == current_sha:
             raise ReadinessHistoryError(SAME_SHA_REFUSAL)
@@ -313,8 +336,102 @@ def require_matching_instruction_hashes(prior_metadata: list[dict], current: dic
                 )
 
 
+EVIDENCE_REQUIRED_FILES = ("blind.json", "judge.json", "suite-report.json", "metadata.json")
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_prior_evidence(
+    evidence_dir: Path,
+    run: dict,
+    expected_suite: str,
+    current_instructions: dict[str, str],
+    root: Path,
+) -> None:
+    """Prove one prior successful run's evidence package before it may advance A→B→C.
+
+    Mirrors the Suite C aggregate checks, but runs before any B/C model spend:
+    package integrity, schedule/attempt-1/run/commit/main provenance, deterministic
+    validation, suite order, a passing suite report, the current frozen prompt/rubric
+    hashes for that suite, and today's exact blind instruction inputs.
+    """
+    rid = run["id"]
+
+    def fail(why: str) -> None:
+        raise ReadinessHistoryError(
+            f"prior success run {rid} evidence failed verification ({why}); refusing to advance or spend"
+        )
+
+    hashes_file = evidence_dir / "hashes.sha256"
+    if not hashes_file.is_file():
+        fail("missing hashes.sha256")
+    listed: dict[str, str] = {}
+    for line in hashes_file.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) != 2 or len(parts[0]) != 64:
+            fail("malformed hashes.sha256")
+        listed[parts[1].lstrip("*")] = parts[0]
+    for name in EVIDENCE_REQUIRED_FILES:
+        if name not in listed:
+            fail(f"{name} is not covered by hashes.sha256")
+    for name, digest in listed.items():
+        path = evidence_dir / name
+        if not path.is_file() or _sha256(path) != digest:
+            fail(f"{name} does not match hashes.sha256")
+
+    meta = json.loads((evidence_dir / "metadata.json").read_text(encoding="utf-8"))
+    report = json.loads((evidence_dir / "suite-report.json").read_text(encoding="utf-8"))
+    expected = {
+        "event": "schedule",
+        "run_id": str(rid),
+        "run_attempt": "1",
+        "commit_sha": run.get("head_sha"),
+        "ref": "refs/heads/main",
+        "deterministic_validation": "passed",
+        "suite": expected_suite,
+        "blind_sha256": listed["blind.json"],
+        "judge_sha256": listed["judge.json"],
+        "prompt_sha256": _sha256(root / f"agent_evals/final_suite_{expected_suite}_prompts.json"),
+        "rubric_sha256": _sha256(root / f"agent_evals/final_suite_{expected_suite}_rubric.json"),
+    }
+    for key, value in expected.items():
+        if not isinstance(meta, dict) or str(meta.get(key)) != str(value) or value is None:
+            fail(f"metadata {key} is {meta.get(key) if isinstance(meta, dict) else '?'!r}, expected {value!r}")
+    if not isinstance(report, dict) or report.get("ready") is not True or report.get("suite") != expected_suite:
+        fail("suite report is not a passing report for the expected suite")
+    require_matching_instruction_hashes([meta], current_instructions)
+
+
+def verify_prior_successes(prior_runs_newest_first: list[dict], fetch: Callable[[dict], Path], root: Path | None = None) -> None:
+    """Verify every prior success, oldest first, as Suite A then Suite B."""
+    from agent_evals.scheduled_readiness import ROOT, instruction_hashes
+
+    root = root or ROOT
+    current = instruction_hashes(root)
+    ordered = list(reversed(prior_runs_newest_first))
+    if len(ordered) > 2:
+        raise ReadinessHistoryError("more than two prior successes while selecting a suite; refusing ambiguous history")
+    for run, suite in zip(ordered, ("a", "b")):
+        verify_prior_evidence(fetch(run), run, suite, current, root)
+
+
 def hardening_allows_retry(changed_paths: list[str], kind: str) -> bool:
-    """Reviewed-hardening decision for a retry after a paid-relevant failure."""
+    """Path-based retry decision after a paid-relevant failure.
+
+    Limitation: this proves *which paths* changed, not that the change is substantive
+    or was independently reviewed. Branch protection / required reviews are not
+    enforced on this repository, so "reviewed hardening" remains an operational gate:
+    the owner's explicit approval of the hardening PR. Do not treat this function as a
+    machine guarantee of review.
+    """
     if kind not in {"behavioral", "infrastructure"}:
         raise ReadinessHistoryError(f"unknown failure kind: {kind!r}")
     if any(path in BLIND_INSTRUCTION_INPUTS for path in changed_paths):
@@ -394,28 +511,24 @@ def github_select(repo: str, current_run_id: int, current_sha: str) -> dict:
 
     selection = select_suite(_iter_schedule_runs(repo), has_core, details, current_run_id, current_sha)
     if selection["execute"] and selection["prior_success_ids"]:
-        from agent_evals.scheduled_readiness import instruction_hashes
-
-        prior = [_download_evidence_metadata(repo, rid) for rid in selection["prior_success_ids"]]
-        require_matching_instruction_hashes(prior, instruction_hashes())
+        with tempfile.TemporaryDirectory() as tmp:
+            verify_prior_successes(
+                selection["prior_success_runs"],
+                lambda run: _download_evidence(repo, run["id"], Path(tmp) / str(run["id"])),
+            )
+    selection.pop("prior_success_runs", None)
     return selection
 
 
-def _download_evidence_metadata(repo: str, run_id: int) -> dict:
-    with tempfile.TemporaryDirectory() as tmp:
-        proc = subprocess.run(
-            ["gh", "run", "download", str(run_id), "--repo", repo,
-             "--name", f"{EVIDENCE_PREFIX}{run_id}", "--dir", tmp],
-            text=True, capture_output=True,
-        )
-        if proc.returncode != 0:
-            raise ReadinessHistoryError(
-                f"could not download evidence for run {run_id}: {proc.stderr.strip()[:500]}"
-            )
-        path = Path(tmp) / "metadata.json"
-        if not path.is_file():
-            raise ReadinessHistoryError(f"evidence for run {run_id} has no metadata.json")
-        return json.loads(path.read_text(encoding="utf-8"))
+def _download_evidence(repo: str, run_id: int, dest: Path) -> Path:
+    proc = subprocess.run(
+        ["gh", "run", "download", str(run_id), "--repo", repo,
+         "--name", f"{EVIDENCE_PREFIX}{run_id}", "--dir", str(dest)],
+        text=True, capture_output=True,
+    )
+    if proc.returncode != 0:
+        raise ReadinessHistoryError(f"could not download evidence for run {run_id}: {proc.stderr.strip()[:500]}")
+    return dest
 
 
 def _changed_paths(failed_sha: str, current_sha: str) -> list[str]:
