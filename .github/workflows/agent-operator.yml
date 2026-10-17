@@ -6,6 +6,7 @@ on:
     - cron: '17,47 * * * *'
 
 permissions:
+  actions: read
   contents: read
   issues: read
   pull-requests: read
@@ -31,3 +32,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           AGENT_OPERATOR_OUTPUT: agent_operator_plan.json
         run: python -m agent_operator.cli
+
+  final-readiness:
+    if: github.event_name == 'schedule'
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/agent-final-readiness-core.yml
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

@@ -1,8 +1,10 @@
-name: Agent final readiness scheduled
+name: Agent final readiness core
 
 on:
-  schedule:
-    - cron: '2-57/5 * * * *'
+  workflow_call:
+    secrets:
+      OPENAI_API_KEY:
+        required: true
 
 permissions: {}
 
@@ -12,7 +14,8 @@ concurrency:
 
 jobs:
   prepare:
-    if: github.event_name == 'schedule'
+    name: final-readiness-prepare
+    if: github.event_name == 'schedule' && github.run_attempt == 1
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -24,7 +27,7 @@ jobs:
       prompt_sha: ${{ steps.bundle.outputs.prompt_sha }}
       rubric_sha: ${{ steps.bundle.outputs.rubric_sha }}
     steps:
-      - name: Select next suite from complete successful scheduled history and enforce retry barrier
+      - name: Select next suite from verified carrier history and enforce retry barrier
         id: select
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,12 +42,85 @@ jobs:
             exit 1
           fi
 
-          RUN_PAGES="$RUNNER_TEMP/scheduled-run-pages.json"
-          RUNS="$RUNNER_TEMP/scheduled-runs.json"
-          gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/workflows/agent-final-readiness-scheduled.yml/runs?event=schedule&per_page=100" > "$RUN_PAGES"
+          RUN_PAGES="$RUNNER_TEMP/carrier-run-pages.json"
+          RUNS="$RUNNER_TEMP/carrier-runs.json"
+          RELEVANT="$RUNNER_TEMP/readiness-carrier-runs.jsonl"
+          : > "$RELEVANT"
+
+          gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/workflows/agent-operator.yml/runs?event=schedule&per_page=100" > "$RUN_PAGES"
           jq '[.[] | .workflow_runs[]]' "$RUN_PAGES" > "$RUNS"
 
-          SUCCESS_COUNT="$(jq --argjson current "$CURRENT_RUN_ID" '[.[] | select(.id != $current and .event == "schedule" and .conclusion == "success")] | length' "$RUNS")"
+          # Historical Operator runs predate this carrier migration. A completed run
+          # is readiness-relevant only if its exact commit contains this reusable
+          # core and Actions proves the readiness job surface existed. Job-name
+          # suffixes are used so caller-prefix formatting cannot hide model stages.
+          # A core-bearing run with no readiness jobs/artifacts is ignored only
+          # when there is also no evidence of a non-skipped model stage and the
+          # overall run did not claim success. Any ambiguity fails closed.
+          while IFS= read -r CANDIDATE; do
+            RID="$(jq -r '.id' <<<"$CANDIDATE")"
+            SHA="$(jq -r '.head_sha' <<<"$CANDIDATE")"
+            CONCLUSION="$(jq -r '.conclusion' <<<"$CANDIDATE")"
+            CORE_ERR="$RUNNER_TEMP/core-$RID.err"
+            if ! gh api "/repos/$GITHUB_REPOSITORY/contents/.github/workflows/agent-final-readiness-core.yml?ref=$SHA" >/dev/null 2>"$CORE_ERR"; then
+              if grep -q 'HTTP 404' "$CORE_ERR"; then
+                continue
+              fi
+              echo "Could not verify carrier core presence for run $RID; refusing ambiguous history." >&2
+              cat "$CORE_ERR" >&2
+              exit 1
+            fi
+
+            JOB_PAGES="$RUNNER_TEMP/jobs-$RID-pages.json"
+            JOBS="$RUNNER_TEMP/jobs-$RID.json"
+            ARTIFACTS="$RUNNER_TEMP/history-artifacts-$RID.json"
+            if ! gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/jobs?filter=all&per_page=100" > "$JOB_PAGES"; then
+              echo "Could not verify readiness jobs for carrier run $RID; refusing ambiguous history." >&2
+              exit 1
+            fi
+            if ! gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/artifacts?per_page=100" > "$ARTIFACTS"; then
+              echo "Could not verify readiness artifacts for carrier run $RID; refusing ambiguous history." >&2
+              exit 1
+            fi
+            jq '[.[] | .jobs[]]' "$JOB_PAGES" > "$JOBS"
+            MARKERS="$(jq '[.[] | select(.name | endswith("final-readiness-prepare"))] | length' "$JOBS")"
+            READINESS_JOB_COUNT="$(jq '[.[] | select(.name | contains("final-readiness"))] | length' "$JOBS")"
+            MODEL_STAGE_STARTED="$(jq '[.[] | select((((.name | endswith("final-readiness-blind-pass"))) or ((.name | endswith("final-readiness-judge-pass")))) and .conclusion != "skipped" and .started_at != null)] | length' "$JOBS")"
+            READINESS_ARTIFACT_COUNT="$(jq '[.artifacts[] | select(.name | startswith("agent-final-readiness-"))] | length' "$ARTIFACTS")"
+
+            if [ "$MARKERS" = '0' ] && [ "$READINESS_JOB_COUNT" = '0' ] && [ "$MODEL_STAGE_STARTED" = '0' ] && [ "$READINESS_ARTIFACT_COUNT" = '0' ] && [ "$CONCLUSION" != 'success' ]; then
+              echo "Ignoring no-readiness-work carrier run $RID with conclusion=$CONCLUSION because no readiness job, model stage, or readiness artifact exists."
+              continue
+            fi
+            if [ "$MARKERS" != '1' ]; then
+              echo "Carrier run $RID contains the readiness core but has $MARKERS prepare markers with readiness_job_count=$READINESS_JOB_COUNT readiness_artifact_count=$READINESS_ARTIFACT_COUNT; refusing ambiguous history." >&2
+              exit 1
+            fi
+            printf '%s\n' "$CANDIDATE" >> "$RELEVANT"
+          done < <(jq -c --argjson current "$CURRENT_RUN_ID" '[.[] | select(.id != $current and .event == "schedule" and .status == "completed")] | sort_by(.created_at) | .[]' "$RUNS")
+
+          SUCCESS_COUNT=0
+          MISSING_SUCCESS_EVIDENCE=0
+          while IFS= read -r CANDIDATE; do
+            [ -n "$CANDIDATE" ] || continue
+            CONCLUSION="$(jq -r '.conclusion' <<<"$CANDIDATE")"
+            [ "$CONCLUSION" = 'success' ] || continue
+            RID="$(jq -r '.id' <<<"$CANDIDATE")"
+            ARTIFACTS="$RUNNER_TEMP/artifacts-$RID.json"
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/artifacts?per_page=100" > "$ARTIFACTS"
+            EXPECTED="agent-final-readiness-evidence-$RID"
+            COUNT="$(jq --arg expected "$EXPECTED" '[.artifacts[] | select(.name == $expected and .expired == false)] | length' "$ARTIFACTS")"
+            if [ "$COUNT" = '1' ]; then
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            else
+              MISSING_SUCCESS_EVIDENCE=$((MISSING_SUCCESS_EVIDENCE + 1))
+            fi
+          done < "$RELEVANT"
+
+          if [ "$SUCCESS_COUNT" -lt 3 ] && [ "$MISSING_SUCCESS_EVIDENCE" -ne 0 ]; then
+            echo 'A readiness-relevant successful carrier run lacks exactly one valid evidence artifact; refusing to advance.' >&2
+            exit 1
+          fi
           if [ "$SUCCESS_COUNT" -ge 3 ]; then
             echo 'Three successful scheduled evidence runs already exist; refusing further model/evidence work.'
             echo 'execute=false' >> "$GITHUB_OUTPUT"
@@ -52,35 +128,40 @@ jobs:
             exit 0
           fi
 
-          # GitHub concurrency may cancel an older pending schedule event when a newer one
-          # arrives. Ignore a cancelled run only when Actions proves neither model-stage
-          # job ever started. A cancelled run that reached blind-pass or judge-pass, or
-          # whose job history cannot be verified, remains a paid-retry barrier.
+          # Ignore a cancelled carrier attempt only when Actions proves no
+          # non-skipped model stage started AND no readiness artifact exists.
+          # Once blind input/evidence exists, the run is conservatively treated
+          # as paid-relevant even if job-name formatting changes.
           LATEST_EFFECTIVE=''
           while IFS= read -r CANDIDATE; do
+            [ -n "$CANDIDATE" ] || continue
             CONCLUSION="$(jq -r '.conclusion' <<<"$CANDIDATE")"
             if [ "$CONCLUSION" = 'cancelled' ]; then
               RID="$(jq -r '.id' <<<"$CANDIDATE")"
-              JOB_PAGES="$RUNNER_TEMP/jobs-$RID-pages.json"
-              JOBS="$RUNNER_TEMP/jobs-$RID.json"
+              JOB_PAGES="$RUNNER_TEMP/cancelled-jobs-$RID-pages.json"
+              JOBS="$RUNNER_TEMP/cancelled-jobs-$RID.json"
+              ARTIFACTS="$RUNNER_TEMP/cancelled-artifacts-$RID.json"
               MODEL_STAGE_STARTED='unknown'
+              READINESS_ARTIFACT_COUNT='unknown'
               if gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/jobs?filter=all&per_page=100" > "$JOB_PAGES" \
-                && jq '[.[] | .jobs[]]' "$JOB_PAGES" > "$JOBS"; then
-                MODEL_STAGE_STARTED="$(jq '[.[] | select((.name == "blind-pass" or .name == "judge-pass") and .started_at != null)] | length' "$JOBS")"
+                && jq '[.[] | .jobs[]]' "$JOB_PAGES" > "$JOBS" \
+                && gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/artifacts?per_page=100" > "$ARTIFACTS"; then
+                MODEL_STAGE_STARTED="$(jq '[.[] | select((((.name | endswith("final-readiness-blind-pass"))) or ((.name | endswith("final-readiness-judge-pass")))) and .conclusion != "skipped" and .started_at != null)] | length' "$JOBS")"
+                READINESS_ARTIFACT_COUNT="$(jq '[.artifacts[] | select(.name | startswith("agent-final-readiness-"))] | length' "$ARTIFACTS")"
               fi
-              if [ "$MODEL_STAGE_STARTED" = '0' ]; then
-                echo "Ignoring cancelled run $RID because no model-stage job started."
+              if [ "$MODEL_STAGE_STARTED" = '0' ] && [ "$READINESS_ARTIFACT_COUNT" = '0' ]; then
+                echo "Ignoring cancelled carrier run $RID because no model-stage job or readiness artifact started."
                 continue
               fi
-              if [ "$MODEL_STAGE_STARTED" = 'unknown' ]; then
-                echo "Could not verify cancelled run $RID job history; treating it as a paid-relevant failure." >&2
+              if [ "$MODEL_STAGE_STARTED" = 'unknown' ] || [ "$READINESS_ARTIFACT_COUNT" = 'unknown' ]; then
+                echo "Could not verify cancelled carrier run $RID job/artifact history; treating it as a paid-relevant failure." >&2
               else
-                echo "Cancelled run $RID reached a model-stage job; treating it as a paid-relevant failure." >&2
+                echo "Cancelled carrier run $RID may have reached paid readiness work (model_stages=$MODEL_STAGE_STARTED artifacts=$READINESS_ARTIFACT_COUNT); treating it as a paid-relevant failure." >&2
               fi
             fi
             LATEST_EFFECTIVE="$CANDIDATE"
             break
-          done < <(jq -c --argjson current "$CURRENT_RUN_ID" '[.[] | select(.id != $current and .event == "schedule" and .status == "completed")] | sort_by(.created_at) | reverse | .[]' "$RUNS")
+          done < <(tac "$RELEVANT")
 
           if [ -n "$LATEST_EFFECTIVE" ] && [ "$(jq -r '.conclusion' <<<"$LATEST_EFFECTIVE")" != 'success' ]; then
             FAILED_SHA="$(jq -r '.head_sha' <<<"$LATEST_EFFECTIVE")"
@@ -95,7 +176,7 @@ jobs:
             0) SUITE='a' ;;
             1) SUITE='b' ;;
             2) SUITE='c' ;;
-            *) echo 'Unexpected successful-run count.' >&2; exit 1 ;;
+            *) echo 'Unexpected successful evidence count.' >&2; exit 1 ;;
           esac
           echo 'execute=true' >> "$GITHUB_OUTPUT"
           echo "suite=$SUITE" >> "$GITHUB_OUTPUT"
@@ -118,7 +199,7 @@ jobs:
           git cat-file -e "$FAILED_SHA^{commit}"
           CHANGED="$RUNNER_TEMP/changed-after-failure.txt"
           git diff --name-only "$FAILED_SHA" "$CURRENT_SHA" > "$CHANGED"
-          if ! grep -Eq '^(AGENTS\.md|\.github/copilot-instructions\.md|\.github/agents/|\.github/skills/|\.github/workflows/agent-final-readiness-scheduled\.yml$|agent_evals/|tests/test_agent_)' "$CHANGED"; then
+          if ! grep -Eq '^(AGENTS\.md|\.github/copilot-instructions\.md|\.github/agents/|\.github/skills/|\.github/workflows/agent-final-readiness-core\.yml$|\.github/workflows/agent-operator\.yml$|agent_evals/|tests/test_agent_)' "$CHANGED"; then
             echo 'Previous paid run failed and no relevant reviewed hardening/eval change exists; refusing retry.' >&2
             cat "$CHANGED" >&2
             exit 1
@@ -158,8 +239,9 @@ jobs:
           retention-days: 1
 
   blind-pass:
+    name: final-readiness-blind-pass
     needs: prepare
-    if: needs.prepare.outputs.execute == 'true'
+    if: github.run_attempt == 1 && needs.prepare.outputs.execute == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -183,7 +265,7 @@ jobs:
 
       - name: Run blind read-only Agent OS evaluator
         id: blind
-        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81 # pinned; :read-only + drop-sudo blocks filesystem writes and network access
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81 # pinned
         with:
           allow-bots: true
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -218,8 +300,9 @@ jobs:
           retention-days: 1
 
   validate-blind:
+    name: final-readiness-validate-blind
     needs: [prepare, blind-pass]
-    if: needs.blind-pass.result == 'success'
+    if: github.run_attempt == 1 && needs.blind-pass.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -250,8 +333,9 @@ jobs:
           python -m agent_evals.scheduled_readiness validate-blind --suite "$SUITE" --file "$RUNNER_TEMP/frozen-blind/blind.json"
 
   prepare-judge:
+    name: final-readiness-prepare-judge
     needs: [prepare, blind-pass, validate-blind]
-    if: needs.validate-blind.result == 'success'
+    if: github.run_attempt == 1 && needs.validate-blind.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -290,8 +374,9 @@ jobs:
           retention-days: 1
 
   judge-pass:
+    name: final-readiness-judge-pass
     needs: [prepare, blind-pass, validate-blind, prepare-judge]
-    if: needs.prepare-judge.result == 'success'
+    if: github.run_attempt == 1 && needs.prepare-judge.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -324,7 +409,7 @@ jobs:
 
       - name: Run isolated read-only independent judge
         id: judge
-        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81 # pinned; :read-only + drop-sudo blocks filesystem writes and network access
+        uses: openai/codex-action@a8d8be6ee028bea4525bc722d16f36687b408c81 # pinned
         with:
           allow-bots: true
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -362,8 +447,9 @@ jobs:
           retention-days: 1
 
   validate-and-record:
+    name: final-readiness-validate-and-record
     needs: [prepare, blind-pass, validate-blind, prepare-judge, judge-pass]
-    if: needs.judge-pass.result == 'success'
+    if: github.run_attempt == 1 && needs.judge-pass.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -415,11 +501,29 @@ jobs:
           CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          RUN_PAGES="$RUNNER_TEMP/prior-success-pages.json"
-          RUNS="$RUNNER_TEMP/prior-successes.json"
-          gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/workflows/agent-final-readiness-scheduled.yml/runs?event=schedule&status=success&per_page=100" > "$RUN_PAGES"
+          RUN_PAGES="$RUNNER_TEMP/prior-carrier-success-pages.json"
+          RUNS="$RUNNER_TEMP/prior-carrier-successes.json"
+          VALID_IDS="$RUNNER_TEMP/prior-readiness-success-ids.txt"
+          : > "$VALID_IDS"
+          gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/workflows/agent-operator.yml/runs?event=schedule&status=success&per_page=100" > "$RUN_PAGES"
           jq '[.[] | .workflow_runs[]]' "$RUN_PAGES" > "$RUNS"
-          mapfile -t IDS < <(jq -r --argjson current "$CURRENT_RUN_ID" '[.[] | select(.id != $current and .event == "schedule" and .conclusion == "success")] | sort_by(.created_at) | .[-2:][] | .id' "$RUNS")
+
+          while IFS= read -r CANDIDATE; do
+            RID="$(jq -r '.id' <<<"$CANDIDATE")"
+            [ "$RID" != "$CURRENT_RUN_ID" ] || continue
+            ARTIFACTS="$RUNNER_TEMP/prior-artifacts-$RID.json"
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/artifacts?per_page=100" > "$ARTIFACTS"
+            EXPECTED="agent-final-readiness-evidence-$RID"
+            COUNT="$(jq --arg expected "$EXPECTED" '[.artifacts[] | select(.name == $expected and .expired == false)] | length' "$ARTIFACTS")"
+            if [ "$COUNT" = '1' ]; then
+              printf '%s\n' "$RID" >> "$VALID_IDS"
+            elif [ "$COUNT" != '0' ]; then
+              echo "Run $RID has duplicate readiness evidence artifacts; refusing aggregation." >&2
+              exit 1
+            fi
+          done < <(jq -c '[.[] | select(.event == "schedule" and .conclusion == "success")] | sort_by(.created_at) | .[]' "$RUNS")
+
+          mapfile -t IDS < "$VALID_IDS"
           test "${#IDS[@]}" -eq 2
           EXPECTED_SUITES=(a b)
           mkdir -p "$RUNNER_TEMP/prior-a" "$RUNNER_TEMP/prior-b"
@@ -427,7 +531,9 @@ jobs:
             RID="${IDS[$INDEX]}"
             EXPECTED_SUITE="${EXPECTED_SUITES[$INDEX]}"
             DEST="$RUNNER_TEMP/prior-$RID"
+            RUN_META="$RUNNER_TEMP/prior-run-$RID.json"
             mkdir -p "$DEST"
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RID" > "$RUN_META"
             gh run download "$RID" --repo "$GITHUB_REPOSITORY" --name "agent-final-readiness-evidence-$RID" --dir "$DEST"
             test -s "$DEST/hashes.sha256"
             (cd "$DEST" && sha256sum -c hashes.sha256)
@@ -435,12 +541,21 @@ jobs:
             test -s "$DEST/blind.json"
             test -s "$DEST/judge.json"
 
+            test "$(jq -r '.event' "$RUN_META")" = 'schedule'
+            test "$(jq -r '.run_attempt' "$RUN_META")" = '1'
             test "$(jq -r '.event' "$DEST/metadata.json")" = 'schedule'
             test "$(jq -r '.repository' "$DEST/metadata.json")" = "$GITHUB_REPOSITORY"
             test "$(jq -r '.run_id' "$DEST/metadata.json")" = "$RID"
             test "$(jq -r '.run_attempt' "$DEST/metadata.json")" = '1'
+            test "$(jq -r '.commit_sha' "$DEST/metadata.json")" = "$(jq -r '.head_sha' "$RUN_META")"
+            test "$(jq -r '.ref' "$DEST/metadata.json")" = 'refs/heads/main'
             test "$(jq -r '.deterministic_validation' "$DEST/metadata.json")" = 'passed'
             test "$(jq -r '.suite' "$DEST/metadata.json")" = "$EXPECTED_SUITE"
+
+            BLIND_ACTUAL="$(sha256sum "$DEST/blind.json" | cut -d' ' -f1)"
+            JUDGE_ACTUAL="$(sha256sum "$DEST/judge.json" | cut -d' ' -f1)"
+            test "$(jq -r '.blind_sha256' "$DEST/metadata.json")" = "$BLIND_ACTUAL"
+            test "$(jq -r '.judge_sha256' "$DEST/metadata.json")" = "$JUDGE_ACTUAL"
 
             CURRENT_PROMPT_SHA="$(sha256sum "agent_evals/final_suite_${EXPECTED_SUITE}_prompts.json" | cut -d' ' -f1)"
             CURRENT_RUBRIC_SHA="$(sha256sum "agent_evals/final_suite_${EXPECTED_SUITE}_rubric.json" | cut -d' ' -f1)"
@@ -493,6 +608,7 @@ jobs:
             --arg judge_sha256 "$JUDGE_SHA" \
             '{event:$event,repository:$repository,run_id:$run_id,run_attempt:$run_attempt,run_number:$run_number,commit_sha:$commit_sha,ref:$ref,workflow:$workflow,python_version:$python_version,suite:$suite,prompt_sha256:$prompt_sha256,rubric_sha256:$rubric_sha256,blind_sha256:$blind_sha256,judge_sha256:$judge_sha256,deterministic_validation:"passed"}' \
             > "$RUNNER_TEMP/evidence/metadata.json"
+          test "$(jq -r '.event' "$RUNNER_TEMP/evidence/metadata.json")" = 'schedule'
           (cd "$RUNNER_TEMP/evidence" && sha256sum blind.json judge.json suite-report.json metadata.json > hashes.sha256)
           if [ -f "$RUNNER_TEMP/evidence/final-readiness-report.json" ]; then
             (cd "$RUNNER_TEMP/evidence" && sha256sum final-readiness-report.json >> hashes.sha256)
