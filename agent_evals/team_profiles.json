@@ -3,7 +3,7 @@
     "orchestrator": {
       "source": "repo",
       "file": ".github/agents/orchestrator.agent.md",
-      "capabilities": ["planning", "routing", "architecture", "project_context", "risk_triage", "requirements", "documentation"],
+      "capabilities": ["planning", "routing", "architecture", "project_context", "risk_triage", "requirements", "documentation", "readiness", "release_governance"],
       "independent_review": false
     },
     "backend": {
@@ -15,19 +15,19 @@
     "integrations": {
       "source": "repo",
       "file": ".github/agents/integrations.agent.md",
-      "capabilities": ["integrations", "oauth", "api", "data_sync", "reconciliation", "debugging", "testing"],
+      "capabilities": ["integrations", "oauth", "api", "data_sync", "reconciliation", "webhooks", "provider_incident", "untrusted_provider_payload", "debugging", "testing"],
       "independent_review": false
     },
     "qa_critic": {
       "source": "repo",
       "file": ".github/agents/qa-critic.agent.md",
-      "capabilities": ["qa", "testing", "debugging", "release", "requirements", "manual_testing"],
+      "capabilities": ["qa", "testing", "ci", "test_state", "debugging", "release", "requirements", "manual_testing"],
       "independent_review": true
     },
     "security_integrity": {
       "source": "repo",
       "file": ".github/agents/security-integrity.agent.md",
-      "capabilities": ["security", "privacy", "auth", "tenant_isolation", "data_integrity", "agent_governance", "audit", "risk_triage"],
+      "capabilities": ["security", "privacy", "auth", "tenant_isolation", "data_integrity", "agent_governance", "audit", "risk_triage", "supply_chain", "package_provenance"],
       "independent_review": true
     },
     "research_product": {
@@ -45,7 +45,7 @@
     "generalist": {
       "source": "repo",
       "file": ".github/agents/generalist.agent.md",
-      "capabilities": ["unknown_task", "automation", "operations", "documentation", "data_analysis", "research", "debugging", "testing", "incident_response"],
+      "capabilities": ["unknown_task", "automation", "operations", "documentation", "data_analysis", "research", "debugging", "testing", "incident_response", "incident_coordination"],
       "independent_review": false
     },
     "github_producer_reference": {
