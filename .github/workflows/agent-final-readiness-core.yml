@@ -15,7 +15,7 @@ concurrency:
 jobs:
   prepare:
     name: final-readiness-prepare
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' && github.run_attempt == 1
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -241,7 +241,7 @@ jobs:
   blind-pass:
     name: final-readiness-blind-pass
     needs: prepare
-    if: needs.prepare.outputs.execute == 'true'
+    if: github.run_attempt == 1 && needs.prepare.outputs.execute == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -302,7 +302,7 @@ jobs:
   validate-blind:
     name: final-readiness-validate-blind
     needs: [prepare, blind-pass]
-    if: needs.blind-pass.result == 'success'
+    if: github.run_attempt == 1 && needs.blind-pass.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -335,7 +335,7 @@ jobs:
   prepare-judge:
     name: final-readiness-prepare-judge
     needs: [prepare, blind-pass, validate-blind]
-    if: needs.validate-blind.result == 'success'
+    if: github.run_attempt == 1 && needs.validate-blind.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -376,7 +376,7 @@ jobs:
   judge-pass:
     name: final-readiness-judge-pass
     needs: [prepare, blind-pass, validate-blind, prepare-judge]
-    if: needs.prepare-judge.result == 'success'
+    if: github.run_attempt == 1 && needs.prepare-judge.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -449,7 +449,7 @@ jobs:
   validate-and-record:
     name: final-readiness-validate-and-record
     needs: [prepare, blind-pass, validate-blind, prepare-judge, judge-pass]
-    if: needs.judge-pass.result == 'success'
+    if: github.run_attempt == 1 && needs.judge-pass.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
