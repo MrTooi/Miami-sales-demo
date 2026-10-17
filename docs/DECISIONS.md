@@ -32,5 +32,5 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
 - Decided by: Human owner (Issue #88)
 - Context: Leadership transfer must not alter readiness semantics.
 - Decision: Readiness gates, rubrics, scorer thresholds, model configuration, and workflow logic are unchanged. Product implementation remains PAUSED until Issue #11 / Issue #69 readiness is satisfied and the human owner explicitly approves resuming (to be logged as a new decision).
-- Consequences / risks: Only readiness hardening, demo/observability support, and explicitly assigned work proceed.
+- Consequences / risks: Only these proceed: readiness hardening and readiness-infrastructure repair (including audit remediation), owner observability, demo reliability without product/financial logic changes, governance/documentation, and work the owner explicitly assigns. Every merge needs explicit owner approval. The resume decision must name its authorized scope.
 - Evidence / links: Issue #88, Issue #11, Issue #69.
