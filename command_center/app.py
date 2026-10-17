@@ -5,6 +5,7 @@ project/readiness state and never mutates repository, workflow, product, or cust
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -30,8 +31,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Auto-refresh the owner view so repository/workflow changes appear without manual reload.
-# The app remains read-only; this only reloads the page in the browser.
 components.html(
     f"""
     <script>
@@ -57,9 +56,6 @@ st.markdown(
       .cc-value { font-size:1.45rem; font-weight:760; margin-top:.35rem; }
       .cc-note { color:#8fa0b5; font-size:.82rem; margin-top:.35rem; }
       .ok { color:#6ef7b7; } .warn { color:#ffd166; } .bad { color:#ff7b8b; } .info { color:#75c8ff; }
-      .pill {display:inline-block; padding:.22rem .55rem; border:1px solid #2a3b53; border-radius:999px;
-             font-size:.72rem; margin-right:.35rem; color:#b9c7d8; background:#0d141e;}
-      div[data-testid="stMetric"] {background:#0b1017;border:1px solid #1c2737;padding:12px 14px;border-radius:14px;}
       hr { border-color:#17202d !important; }
     </style>
     """,
@@ -92,7 +88,7 @@ def gh(path: str):
         with urllib.request.urlopen(req, timeout=12) as response:
             return json.loads(response.read().decode("utf-8")), None
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")[:500]
+        detail = exc.read().decode("utf-8", errors="ignore")[:300]
         return None, f"GitHub API {exc.code}: {detail or exc.reason}"
     except Exception as exc:
         return None, str(exc)
@@ -100,16 +96,17 @@ def gh(path: str):
 
 @st.cache_data(ttl=30, show_spinner=False)
 def raw_text(path: str, ref: str = "main") -> str | None:
-    url = f"https://raw.githubusercontent.com/{REPO}/{ref}/{path}"
     try:
-        with urllib.request.urlopen(url, timeout=10) as response:
+        with urllib.request.urlopen(
+            f"https://raw.githubusercontent.com/{REPO}/{ref}/{path}", timeout=10
+        ) as response:
             return response.read().decode("utf-8")
     except Exception:
         return None
 
 
 def short_sha(value: str | None) -> str:
-    return value[:8] if value else "unknown"
+    return value[:8] if value else "UNKNOWN"
 
 
 def dt(value: str | None) -> datetime | None:
@@ -132,126 +129,177 @@ def age(value: str | None) -> str:
     return f"{seconds // 86400}d ago"
 
 
-def operator_minutes() -> list[int]:
-    text = raw_text(".github/workflows/agent-operator.yml") or ""
+def operator_minutes() -> list[int] | None:
+    text = raw_text(".github/workflows/agent-operator.yml")
+    if not text:
+        return None
     match = re.search(r"cron:\s*['\"]([0-9,]+)\s+\*\s+\*\s+\*\s+\*['\"]", text)
     if not match:
-        return [17, 47]
-    minutes = []
+        return None
+    values = []
     for part in match.group(1).split(","):
         try:
-            minutes.append(int(part))
+            value = int(part)
         except ValueError:
-            pass
-    return sorted(set(m for m in minutes if 0 <= m <= 59)) or [17, 47]
+            continue
+        if 0 <= value <= 59:
+            values.append(value)
+    return sorted(set(values)) or None
 
 
-def next_operator_slot(now: datetime | None = None) -> datetime:
+def next_operator_slot(now: datetime | None = None) -> datetime | None:
+    minutes = operator_minutes()
+    if not minutes:
+        return None
     now = now or datetime.now(ET)
     for hour_offset in range(0, 3):
         base = (now + timedelta(hours=hour_offset)).replace(second=0, microsecond=0)
-        for minute in operator_minutes():
+        for minute in minutes:
             candidate = base.replace(minute=minute)
             if candidate > now:
                 return candidate
-    return (now + timedelta(hours=1)).replace(minute=operator_minutes()[0], second=0, microsecond=0)
+    return None
 
 
 def card(label: str, value: str, note: str, tone: str = "info"):
+    safe_label = html.escape(str(label))
+    safe_value = html.escape(str(value))
+    safe_note = html.escape(str(note))
     st.markdown(
-        f'<div class="cc-card"><div class="cc-label">{label}</div>'
-        f'<div class="cc-value {tone}">{value}</div><div class="cc-note">{note}</div></div>',
+        f'<div class="cc-card"><div class="cc-label">{safe_label}</div>'
+        f'<div class="cc-value {tone}">{safe_value}</div><div class="cc-note">{safe_note}</div></div>',
         unsafe_allow_html=True,
     )
 
 
-# ---------- Gather live state ----------
+fetched_at = datetime.now(ET)
 branch, branch_err = gh(f"/repos/{REPO}/branches/main")
 main_sha = ((branch or {}).get("commit") or {}).get("sha")
 
-runs, runs_err = gh(f"/repos/{REPO}/actions/runs?branch=main&per_page=40")
+runs, runs_err = gh(f"/repos/{REPO}/actions/runs?branch=main&per_page=60")
 all_runs = (runs or {}).get("workflow_runs", [])
-schedule_runs = [r for r in all_runs if r.get("event") == "schedule" and r.get("path", "").endswith(OPERATOR_WORKFLOW)]
+schedule_runs = [
+    run for run in all_runs
+    if run.get("event") == "schedule" and run.get("path", "").endswith(OPERATOR_WORKFLOW)
+]
 latest_operator = schedule_runs[0] if schedule_runs else None
 
-latest_ci = next((r for r in all_runs if r.get("path") == ".github/workflows/tests.yml"), None)
+latest_ci = next(
+    (
+        run for run in all_runs
+        if run.get("path") == ".github/workflows/tests.yml" and run.get("head_sha") == main_sha
+    ),
+    None,
+)
 
-pulls, pulls_err = gh(f"/repos/{REPO}/pulls?state=open&per_page=12")
-issues, issues_err = gh(f"/repos/{REPO}/issues?state=open&per_page=40")
-open_issues = [i for i in (issues or []) if "pull_request" not in i]
+pulls, pulls_err = gh(f"/repos/{REPO}/pulls?state=open&per_page=20")
+issues, issues_err = gh(f"/repos/{REPO}/issues?state=open&per_page=50")
+open_issues = [issue for issue in (issues or []) if "pull_request" not in issue]
 
-# Only a completed successful readiness carrier can have final evidence.
-evidence_runs = []
+# Artifact-name presence is useful progress telemetry, but is NOT authoritative readiness.
+# The final readiness workflow validates metadata, suite ordering and hashes more deeply.
+evidence_presence_runs = []
+evidence_fetch_errors = []
 for run in schedule_runs[:12]:
     if run.get("run_attempt") != 1 or run.get("conclusion") != "success":
         continue
     artifacts, err = gh(f"/repos/{REPO}/actions/runs/{run['id']}/artifacts?per_page=100")
     if err or not artifacts:
+        evidence_fetch_errors.append(run.get("id"))
         continue
-    names = [a.get("name", "") for a in artifacts.get("artifacts", []) if not a.get("expired")]
-    if any(name == f"{EVIDENCE_PREFIX}{run['id']}" for name in names):
-        evidence_runs.append(run)
+    expected = f"{EVIDENCE_PREFIX}{run['id']}"
+    matches = [
+        artifact for artifact in artifacts.get("artifacts", [])
+        if artifact.get("name") == expected and not artifact.get("expired")
+    ]
+    if len(matches) == 1:
+        evidence_presence_runs.append(run)
 
-evidence_count = min(len(evidence_runs), 3)
-phase_labels = ["Suite A", "Suite B", "Suite C"]
-
-# ---------- Header ----------
 st.markdown('<div class="cc-kicker">LEDGER / OWNER OPERATIONS</div>', unsafe_allow_html=True)
 st.markdown('<div class="cc-title">Command Center</div>', unsafe_allow_html=True)
 st.markdown(
-    f'<div class="cc-sub">Live read-only view of readiness, scheduling, CI, work in progress, blockers and evidence. Auto-refreshes every {AUTO_REFRESH_SECONDS}s.</div>',
+    f'<div class="cc-sub">Live read-only project view · auto-refresh {AUTO_REFRESH_SECONDS}s · data fetched {fetched_at.strftime("%I:%M:%S %p ET").lstrip("0")}</div>',
     unsafe_allow_html=True,
 )
 
-if any([branch_err, runs_err, pulls_err, issues_err]):
-    st.warning("Some live GitHub data is unavailable. Unknown values are shown instead of guessed values.")
+if any([branch_err, runs_err, pulls_err, issues_err]) or evidence_fetch_errors:
+    st.warning("Some GitHub evidence is unavailable. Affected status is shown as CHECK/UNKNOWN rather than guessed.")
 
-# ---------- Top status ----------
 cols = st.columns(4)
 with cols[0]:
-    ci_ok = bool(latest_ci and latest_ci.get("conclusion") == "success")
-    card("Main / CI", "HEALTHY" if ci_ok else "CHECK", f"main {short_sha(main_sha)} · CI {latest_ci.get('status','unknown') if latest_ci else 'unknown'}", "ok" if ci_ok else "warn")
-with cols[1]:
-    if evidence_count >= 3:
-        card("Readiness", "TECHNICAL GATE", "A/B/C evidence complete · human approval still required", "ok")
+    if branch_err or not main_sha:
+        card("Main / CI", "UNKNOWN", "Current main could not be verified.", "warn")
+    elif latest_ci and latest_ci.get("conclusion") == "success":
+        card("Main / CI", "HEALTHY", f"main {short_sha(main_sha)} · CI success on this exact SHA", "ok")
+    elif latest_ci:
+        ci_state = latest_ci.get("conclusion") or latest_ci.get("status") or "unknown"
+        card("Main / CI", "CHECK", f"main {short_sha(main_sha)} · CI {ci_state} on this exact SHA", "warn")
     else:
-        card("Readiness", f"{evidence_count}/3 PASSED", f"Next: {phase_labels[evidence_count]}", "warn" if evidence_count == 0 else "info")
+        card("Main / CI", "UNKNOWN", f"main {short_sha(main_sha)} · no CI result visible for this exact SHA", "warn")
+
+with cols[1]:
+    if runs_err or evidence_fetch_errors:
+        card("Readiness", "UNKNOWN", "Evidence retrieval is incomplete; no pass count inferred.", "warn")
+    else:
+        card(
+            "Readiness",
+            "VALIDATION PENDING",
+            f"{len(evidence_presence_runs)} candidate evidence artifact(s) present; authoritative A/B/C verification remains in the readiness workflow.",
+            "warn",
+        )
+
 with cols[2]:
-    nxt = next_operator_slot()
-    card("Next Operator Slot", nxt.strftime("%I:%M %p ET").lstrip("0"), f"Schedule minutes: {', '.join(f':{m:02d}' for m in operator_minutes())}", "info")
+    next_slot = next_operator_slot()
+    minutes = operator_minutes()
+    if next_slot and minutes:
+        card(
+            "Next Operator Slot",
+            next_slot.strftime("%I:%M %p ET").lstrip("0"),
+            "Schedule minutes: " + ", ".join(f":{minute:02d}" for minute in minutes),
+            "info",
+        )
+    else:
+        card("Next Operator Slot", "UNKNOWN", "Current cron could not be parsed from main; no fallback time is invented.", "warn")
+
 with cols[3]:
     if latest_operator:
-        conclusion = latest_operator.get("conclusion") or latest_operator.get("status", "unknown")
-        card("Latest Scheduled Run", conclusion.upper(), f"#{latest_operator.get('run_number')} · {age(latest_operator.get('created_at'))} · SHA {short_sha(latest_operator.get('head_sha'))}", "ok" if conclusion == "success" else "warn")
+        state = latest_operator.get("conclusion") or latest_operator.get("status") or "unknown"
+        card(
+            "Latest Scheduled Run",
+            state.upper(),
+            f"#{latest_operator.get('run_number')} · {age(latest_operator.get('created_at'))} · SHA {short_sha(latest_operator.get('head_sha'))}",
+            "ok" if state == "success" else "warn",
+        )
     else:
-        card("Latest Scheduled Run", "UNKNOWN", "No Operator schedule run visible in the current API window", "warn")
+        card("Latest Scheduled Run", "UNKNOWN", "No Operator schedule event is visible in the current API window.", "warn")
 
 st.markdown("---")
-
-# ---------- A/B/C ----------
 st.subheader("AI Team Readiness")
-progress_cols = st.columns(3)
-for idx, label in enumerate(phase_labels):
-    with progress_cols[idx]:
-        if idx < evidence_count:
-            card(label, "VERIFIED PASS", "Valid final-readiness evidence artifact found on a successful schedule-originated run.", "ok")
-        elif idx == evidence_count:
-            state = "IN PROGRESS / NEXT" if latest_operator else "WAITING"
-            card(label, state, "Must originate from a genuine GitHub schedule event; manual runs never count.", "warn")
-        else:
-            card(label, "LOCKED", "Previous suite must pass first.", "info")
+st.info(
+    "The Command Center does not self-certify A/B/C. Artifact presence is shown as progress telemetry only. "
+    "A suite becomes truly verified only when the authoritative readiness validation accepts its metadata, hashes, suite order, score and provenance."
+)
+if evidence_fetch_errors:
+    st.warning("Candidate evidence count is UNKNOWN because at least one artifact request failed.")
+elif evidence_presence_runs:
+    for run in evidence_presence_runs[:3]:
+        st.markdown(
+            f"**EVIDENCE PRESENT — UNVERIFIED HERE** · [scheduled run #{run.get('run_number')}]({run.get('html_url')}) · `{short_sha(run.get('head_sha'))}`"
+        )
+else:
+    st.caption("No successful schedule-originated candidate evidence artifact is currently visible.")
 
-st.caption("Dashboard progression is deliberately conservative: a suite counts only when a successful schedule-originated carrier run has a non-expired final readiness evidence artifact.")
-
-# ---------- Work / approvals ----------
 st.markdown("---")
 left, right = st.columns([1.15, 0.85])
 with left:
     st.subheader("Current Work")
     if pulls:
-        for pr in pulls[:8]:
-            st.markdown(f"**PR #{pr['number']}** · {pr['title']}  ")
-            st.caption(f"{pr.get('head',{}).get('ref','')} → {pr.get('base',{}).get('ref','main')} · updated {age(pr.get('updated_at'))}")
+        for pr in pulls[:10]:
+            title = html.escape(str(pr.get("title", "Untitled")))
+            st.markdown(f"**PR #{pr['number']}** · {title}")
+            st.caption(
+                f"{pr.get('head', {}).get('ref', 'unknown')} → {pr.get('base', {}).get('ref', 'main')} · updated {age(pr.get('updated_at'))}"
+            )
     else:
         st.info("No open pull requests visible.")
 
@@ -259,39 +307,39 @@ with right:
     st.subheader("Human Attention")
     attention = []
     for issue in open_issues:
-        title = issue.get("title", "")
-        if any(word in title.lower() for word in ["readiness", "approval", "gate", "block", "risk"]):
+        title = str(issue.get("title", ""))
+        if any(word in title.lower() for word in ["readiness", "approval", "gate", "block", "risk", "demo"]):
             attention.append(issue)
     if attention:
-        for issue in attention[:8]:
-            st.markdown(f"**#{issue['number']}** · {issue['title']}")
+        for issue in attention[:10]:
+            st.markdown(f"**#{issue['number']}** · {html.escape(str(issue.get('title', 'Untitled')))}")
             st.caption(f"updated {age(issue.get('updated_at'))}")
     else:
-        st.success("No obvious approval/blocker issue detected from open issue titles.")
+        st.info("No obvious approval/blocker issue detected from the available issue titles.")
 
-# ---------- Activity ----------
 st.markdown("---")
 st.subheader("Recent System Activity")
 if all_runs:
     for run in all_runs[:12]:
-        event = run.get("event", "unknown")
-        conclusion = run.get("conclusion") or run.get("status", "unknown")
-        icon = "✓" if conclusion == "success" else ("•" if conclusion in {"queued", "in_progress"} else "!")
-        st.markdown(f"`{icon}` **{run.get('name','Workflow')}** · {event} · **{conclusion}** · `{short_sha(run.get('head_sha'))}` · {age(run.get('created_at'))}")
+        event = html.escape(str(run.get("event", "unknown")))
+        state = html.escape(str(run.get("conclusion") or run.get("status") or "unknown"))
+        name = html.escape(str(run.get("name", "Workflow")))
+        st.markdown(
+            f"**{name}** · `{event}` · **{state}** · `{short_sha(run.get('head_sha'))}` · {age(run.get('created_at'))}"
+        )
 else:
     st.info("No Actions activity available.")
 
-# ---------- Guardrails ----------
 st.markdown("---")
 st.subheader("Guardrails")
 g1, g2, g3, g4 = st.columns(4)
 with g1:
-    card("Product Work", "PAUSED", "Remains behind the readiness gate.", "warn")
+    card("Product Work", "PAUSED", "Human approval is still required after the readiness gate.", "warn")
 with g2:
-    card("Command Center", "READ ONLY", "No merge, deploy, delete or financial actions.", "ok")
+    card("Command Center", "READ ONLY", "No merge, deploy, rerun, delete or financial actions.", "ok")
 with g3:
-    card("Customer Data", "NONE", "Dashboard reads repository/project metadata only.", "ok")
+    card("Customer Data", "NONE", "Repository/project metadata only.", "ok")
 with g4:
-    card("Unknown Data", "VISIBLE", "Missing evidence is shown as unknown, never inferred.", "ok")
+    card("Unknown Data", "VISIBLE", "Missing evidence is never converted into a green status.", "ok")
 
-st.caption(f"Ledger Command Center · Internal owner tooling · GitHub is the primary source of operational truth · live refresh {AUTO_REFRESH_SECONDS}s")
+st.caption("Use the Project Map page for live gate/issues status, scheduler late/missed visibility, PRs and evidence-run links.")
