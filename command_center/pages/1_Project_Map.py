@@ -10,7 +10,7 @@ import os
 import re
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -84,11 +84,13 @@ def short_sha(value: str | None) -> str:
     return value[:8] if value else "UNKNOWN"
 
 
-def schedule_minutes() -> list[int]:
-    text = raw_text(".github/workflows/agent-operator.yml") or ""
+def schedule_minutes() -> list[int] | None:
+    text = raw_text(".github/workflows/agent-operator.yml")
+    if not text:
+        return None
     match = re.search(r"cron:\s*['\"]([0-9,]+)\s+\*\s+\*\s+\*\s+\*['\"]", text)
     if not match:
-        return [17, 47]
+        return None
     values = []
     for part in match.group(1).split(","):
         try:
@@ -97,30 +99,35 @@ def schedule_minutes() -> list[int]:
             continue
         if 0 <= value <= 59:
             values.append(value)
-    return sorted(set(values)) or [17, 47]
+    return sorted(set(values)) or None
 
 
-def previous_operator_slot(now: datetime | None = None) -> datetime:
+def previous_operator_slot(now: datetime | None = None) -> datetime | None:
+    minutes = schedule_minutes()
+    if not minutes:
+        return None
     now = now or datetime.now(ET)
     candidates = []
     for hour_offset in range(-2, 1):
         base = (now + timedelta(hours=hour_offset)).replace(second=0, microsecond=0)
-        for minute in schedule_minutes():
+        for minute in minutes:
             candidate = base.replace(minute=minute)
             if candidate <= now:
                 candidates.append(candidate)
-    return max(candidates)
+    return max(candidates) if candidates else None
 
 
 def schedule_state(latest_run: dict | None, now: datetime | None = None) -> tuple[str, str]:
     now = now or datetime.now(ET)
     expected = previous_operator_slot(now)
+    if not expected:
+        return "UNKNOWN", "Current Operator cron could not be parsed from main; no fallback schedule is invented."
     created = parse_dt((latest_run or {}).get("created_at"))
     if created and created.astimezone(ET) >= expected:
-        return "ON TRACK", f"Latest schedule event arrived for/after the {expected.strftime('%I:%M %p').lstrip('0')} slot."
+        return "ON TRACK", f"A genuine schedule event is visible for/after the {expected.strftime('%I:%M %p').lstrip('0')} slot."
     overdue = now - expected
     if overdue > timedelta(minutes=SCHEDULE_GRACE_MINUTES):
-        return "LATE / CHECK", f"No schedule event visible for the {expected.strftime('%I:%M %p').lstrip('0')} slot after {SCHEDULE_GRACE_MINUTES}m grace."
+        return "LATE / CHECK", f"No genuine schedule event is visible for the {expected.strftime('%I:%M %p').lstrip('0')} slot after {SCHEDULE_GRACE_MINUTES}m grace."
     return "WAITING", f"Within the {SCHEDULE_GRACE_MINUTES}m GitHub delivery grace for the {expected.strftime('%I:%M %p').lstrip('0')} slot."
 
 
@@ -135,12 +142,13 @@ def issue_row(number: int, label: str):
     updated = parse_dt(data.get("updated_at"))
     updated_text = updated.astimezone(ET).strftime("%b %d, %I:%M %p ET") if updated else "unknown"
     st.markdown(f"**{label}** · `{state}` · [{title}]({data.get('html_url')})")
-    st.caption(f"Issue #{number} · updated {updated_text}. OPEN/CLOSED is shown as repository state, not a guessed completion percentage.")
+    st.caption(f"Issue #{number} · updated {updated_text}. OPEN/CLOSED is repository state, not a guessed completion percentage.")
 
 
+fetched_at = datetime.now(ET)
 branch, branch_err = gh(f"/repos/{REPO}/branches/main")
 main_sha = ((branch or {}).get("commit") or {}).get("sha")
-runs, runs_err = gh(f"/repos/{REPO}/actions/runs?branch=main&per_page=40")
+runs, runs_err = gh(f"/repos/{REPO}/actions/runs?branch=main&per_page=60")
 all_runs = (runs or {}).get("workflow_runs", [])
 operator_runs = [
     run for run in all_runs
@@ -150,7 +158,9 @@ latest_operator = operator_runs[0] if operator_runs else None
 pulls, pulls_err = gh(f"/repos/{REPO}/pulls?state=open&per_page=50")
 
 st.title("Ledger Project Map")
-st.caption("Live owner view. GitHub-derived facts only; unknown data stays UNKNOWN. Refresh the page for an immediate pull; the main Command Center auto-refreshes every 30 seconds.")
+st.caption(
+    f"Live owner view · data fetched {fetched_at.strftime('%I:%M:%S %p ET').lstrip('0')} · GitHub-derived facts only; unknown data stays UNKNOWN."
+)
 
 if any([branch_err, runs_err, pulls_err]):
     st.warning("Some live GitHub data is unavailable. This page will not guess missing status.")
@@ -169,28 +179,36 @@ for issue_number, label in PROJECT_ISSUES:
     issue_row(issue_number, label)
 
 st.divider()
-st.subheader("Readiness evidence")
-verified = []
+st.subheader("Readiness evidence telemetry")
+candidate_runs = []
+evidence_errors = []
 for run in operator_runs[:12]:
     if run.get("run_attempt") != 1 or run.get("conclusion") != "success":
         continue
     artifacts, err = gh(f"/repos/{REPO}/actions/runs/{run['id']}/artifacts?per_page=100")
     if err or not artifacts:
+        evidence_errors.append(run.get("id"))
         continue
     expected_name = f"{EVIDENCE_PREFIX}{run['id']}"
-    exact = [a for a in artifacts.get("artifacts", []) if a.get("name") == expected_name and not a.get("expired")]
+    exact = [
+        artifact for artifact in artifacts.get("artifacts", [])
+        if artifact.get("name") == expected_name and not artifact.get("expired")
+    ]
     if len(exact) == 1:
-        verified.append(run)
+        candidate_runs.append(run)
 
-if verified:
-    for index, run in enumerate(verified[:3], start=1):
-        suite = ["A", "B", "C"][index - 1]
+st.info(
+    "Artifact-name presence is telemetry only. This page does not assign Suite A/B/C or claim a pass from artifact presence; the authoritative readiness workflow validates suite order, hashes, metadata, score and provenance."
+)
+if evidence_errors:
+    st.warning("Evidence telemetry is UNKNOWN because one or more artifact requests failed.")
+elif candidate_runs:
+    for run in candidate_runs[:3]:
         st.markdown(
-            f"**Suite {suite}: VERIFIED EVIDENCE** · [schedule run #{run.get('run_number')}]({run.get('html_url')}) · "
-            f"`{short_sha(run.get('head_sha'))}`"
+            f"**EVIDENCE PRESENT — UNVERIFIED HERE** · [schedule run #{run.get('run_number')}]({run.get('html_url')}) · `{short_sha(run.get('head_sha'))}`"
         )
 else:
-    st.info("No successful A/B/C readiness evidence is currently verified. Failed or manual runs are intentionally not shown as passes.")
+    st.caption("No successful schedule-originated candidate evidence artifact is currently visible.")
 
 st.divider()
 st.subheader("Current pull requests")
