@@ -20,8 +20,12 @@ class CommandCenterProjectMapTests(unittest.TestCase):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
-            is_request = isinstance(func, ast.Attribute) and func.attr == "Request"
-            is_urlopen = isinstance(func, ast.Attribute) and func.attr == "urlopen"
+            is_request = (
+                isinstance(func, ast.Attribute) and func.attr == "Request"
+            ) or (isinstance(func, ast.Name) and func.id == "Request")
+            is_urlopen = (
+                isinstance(func, ast.Attribute) and func.attr == "urlopen"
+            ) or (isinstance(func, ast.Name) and func.id == "urlopen")
             if is_request:
                 names = {kw.arg for kw in node.keywords if kw.arg}
                 self.assertNotIn("data", names)
@@ -38,14 +42,18 @@ class CommandCenterProjectMapTests(unittest.TestCase):
         self.assertIn('/repos/{REPO}/issues/{number}', self.source)
         self.assertIn('/repos/{REPO}/pulls?state=open', self.source)
 
-    def test_scheduler_health_has_delivery_grace_and_no_invented_fallback(self):
+    def test_scheduler_health_uses_pure_classifier_and_never_triggers_runs(self):
         self.assertIn("SCHEDULE_GRACE_MINUTES = 20", self.source)
         self.assertIn("previous_operator_slot", self.source)
-        self.assertIn("LATE / CHECK", self.source)
-        self.assertIn("no fallback schedule is invented", self.source)
+        self.assertIn("classify_schedule_slot", self.source)
+        self.assertIn("runs_error=bool(runs_err)", self.source)
         self.assertNotIn("workflow_dispatch", self.source)
         self.assertNotIn("/dispatches", self.source)
         self.assertNotIn("/rerun", self.source)
+
+    def test_schedule_parser_has_no_hardcoded_minute_fallback(self):
+        self.assertNotIn("return [17, 47]", self.source)
+        self.assertIn("return None", self.source)
 
     def test_readiness_artifact_is_only_unverified_telemetry(self):
         self.assertIn('run.get("event") == "schedule"', self.source)
@@ -61,10 +69,18 @@ class CommandCenterProjectMapTests(unittest.TestCase):
         self.assertIn("evidence_errors", self.source)
         self.assertIn("Evidence telemetry is UNKNOWN", self.source)
 
+    def test_github_titles_are_escaped(self):
+        self.assertIn("html.escape", self.source)
+
     def test_project_map_does_not_import_product_finance_modules(self):
+        imported = set()
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module)
         for module in ("finance_engine", "ledger_store", "data_pipeline", "app_ledger"):
-            self.assertNotIn(f"import {module}", self.source)
-            self.assertNotIn(f"from {module}", self.source)
+            self.assertNotIn(module, imported)
 
 
 if __name__ == "__main__":
