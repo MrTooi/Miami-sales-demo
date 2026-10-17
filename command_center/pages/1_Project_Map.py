@@ -5,6 +5,7 @@ repository, workflow, product, financial, or customer state.
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -14,6 +15,8 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import streamlit as st
+
+from command_center.status_logic import classify_schedule_slot
 
 REPO = "MrTooi/Miami-sales-demo"
 API = "https://api.github.com"
@@ -117,31 +120,17 @@ def previous_operator_slot(now: datetime | None = None) -> datetime | None:
     return max(candidates) if candidates else None
 
 
-def schedule_state(latest_run: dict | None, now: datetime | None = None) -> tuple[str, str]:
-    now = now or datetime.now(ET)
-    expected = previous_operator_slot(now)
-    if not expected:
-        return "UNKNOWN", "Current Operator cron could not be parsed from main; no fallback schedule is invented."
-    created = parse_dt((latest_run or {}).get("created_at"))
-    if created and created.astimezone(ET) >= expected:
-        return "ON TRACK", f"A genuine schedule event is visible for/after the {expected.strftime('%I:%M %p').lstrip('0')} slot."
-    overdue = now - expected
-    if overdue > timedelta(minutes=SCHEDULE_GRACE_MINUTES):
-        return "LATE / CHECK", f"No genuine schedule event is visible for the {expected.strftime('%I:%M %p').lstrip('0')} slot after {SCHEDULE_GRACE_MINUTES}m grace."
-    return "WAITING", f"Within the {SCHEDULE_GRACE_MINUTES}m GitHub delivery grace for the {expected.strftime('%I:%M %p').lstrip('0')} slot."
-
-
 def issue_row(number: int, label: str):
     data, err = gh(f"/repos/{REPO}/issues/{number}")
     if err or not data:
-        st.markdown(f"**{label}** · `UNKNOWN` · Issue #{number}")
+        st.markdown(f"**{html.escape(label)}** · `UNKNOWN` · Issue #{number}")
         st.caption("GitHub state unavailable; no progress inferred.")
         return
     state = str(data.get("state", "unknown")).upper()
-    title = data.get("title") or label
+    title = html.escape(str(data.get("title") or label))
     updated = parse_dt(data.get("updated_at"))
     updated_text = updated.astimezone(ET).strftime("%b %d, %I:%M %p ET") if updated else "unknown"
-    st.markdown(f"**{label}** · `{state}` · [{title}]({data.get('html_url')})")
+    st.markdown(f"**{html.escape(label)}** · `{state}` · [{title}]({data.get('html_url')})")
     st.caption(f"Issue #{number} · updated {updated_text}. OPEN/CLOSED is repository state, not a guessed completion percentage.")
 
 
@@ -165,7 +154,14 @@ st.caption(
 if any([branch_err, runs_err, pulls_err]):
     st.warning("Some live GitHub data is unavailable. This page will not guess missing status.")
 
-state, state_note = schedule_state(latest_operator)
+expected_slot = previous_operator_slot(fetched_at)
+state, state_note = classify_schedule_slot(
+    now=fetched_at,
+    expected_slot=expected_slot,
+    latest_run=latest_operator,
+    runs_error=bool(runs_err),
+    grace_minutes=SCHEDULE_GRACE_MINUTES,
+)
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Current main", short_sha(main_sha))
 c2.metric("Scheduler", state)
@@ -214,7 +210,8 @@ st.divider()
 st.subheader("Current pull requests")
 if pulls:
     for pr in pulls[:12]:
-        st.markdown(f"**PR #{pr['number']}** · [{pr['title']}]({pr['html_url']})")
+        title = html.escape(str(pr.get("title", "Untitled")))
+        st.markdown(f"**PR #{pr['number']}** · [{title}]({pr['html_url']})")
         st.caption(f"{pr.get('head', {}).get('ref', 'unknown')} → {pr.get('base', {}).get('ref', 'main')}")
 else:
     st.info("No open pull requests visible.")
