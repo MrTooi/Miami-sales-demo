@@ -8,15 +8,26 @@ from __future__ import annotations
 import html
 import json
 import os
-import re
+import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from command_center.status_logic import classify_schedule_slot
+# Pages run with only command_center/ on sys.path; add the repository root so the
+# shared pure helpers import the same way tests import them.
+_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from command_center.status_logic import (  # noqa: E402
+    classify_schedule_slot,
+    parse_cron_minutes,
+    previous_slot,
+)
 
 REPO = "MrTooi/Miami-sales-demo"
 API = "https://api.github.com"
@@ -88,36 +99,12 @@ def short_sha(value: str | None) -> str:
 
 
 def schedule_minutes() -> list[int] | None:
-    text = raw_text(".github/workflows/agent-operator.yml")
-    if not text:
-        return None
-    match = re.search(r"cron:\s*['\"]([0-9,]+)\s+\*\s+\*\s+\*\s+\*['\"]", text)
-    if not match:
-        return None
-    values = []
-    for part in match.group(1).split(","):
-        try:
-            value = int(part)
-        except ValueError:
-            continue
-        if 0 <= value <= 59:
-            values.append(value)
-    return sorted(set(values)) or None
+    # Every cron line counts; any unrecognised shape yields UNKNOWN (None).
+    return parse_cron_minutes(raw_text(".github/workflows/agent-operator.yml"))
 
 
 def previous_operator_slot(now: datetime | None = None) -> datetime | None:
-    minutes = schedule_minutes()
-    if not minutes:
-        return None
-    now = now or datetime.now(ET)
-    candidates = []
-    for hour_offset in range(-2, 1):
-        base = (now + timedelta(hours=hour_offset)).replace(second=0, microsecond=0)
-        for minute in minutes:
-            candidate = base.replace(minute=minute)
-            if candidate <= now:
-                candidates.append(candidate)
-    return max(candidates) if candidates else None
+    return previous_slot(now or datetime.now(ET), schedule_minutes())
 
 
 def issue_row(number: int, label: str):

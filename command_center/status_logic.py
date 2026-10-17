@@ -1,7 +1,70 @@
 """Pure status helpers for the read-only Ledger Command Center."""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
+
+_CRON_LINE = re.compile(r"^\s*-?\s*cron:\s*(.*?)\s*$")
+_HOURLY_MINUTES = re.compile(r"^(\d{1,2}(?:,\d{1,2})*) \* \* \* \*$")
+
+
+def parse_cron_minutes(workflow_text: str | None) -> list[int] | None:
+    """Return every minute-of-hour scheduled by a workflow's ``cron:`` lines.
+
+    Only the shape ``M[,M...] * * * *`` is understood. If there is no cron line, or
+    any cron line has another shape or an out-of-range minute, return ``None`` so the
+    dashboard shows UNKNOWN instead of a partial or invented schedule.
+    """
+    if not workflow_text:
+        return None
+    minutes: set[int] = set()
+    found = False
+    for line in workflow_text.splitlines():
+        match = _CRON_LINE.match(line)
+        if not match:
+            continue
+        found = True
+        expr = match.group(1)
+        if len(expr) >= 2 and expr[0] == expr[-1] and expr[0] in "'\"":
+            expr = expr[1:-1]
+        expr = expr.strip()
+        shape = _HOURLY_MINUTES.match(expr)
+        if not shape:
+            return None
+        for part in shape.group(1).split(","):
+            value = int(part)
+            if not 0 <= value <= 59:
+                return None
+            minutes.add(value)
+    return sorted(minutes) if found and minutes else None
+
+
+def previous_slot(now: datetime, minutes: list[int] | None) -> datetime | None:
+    """Most recent scheduled slot at or before ``now`` (None when the schedule is unknown)."""
+    if not minutes:
+        return None
+    base = now.replace(second=0, microsecond=0)
+    candidates = [
+        (base + timedelta(hours=offset)).replace(minute=minute)
+        for offset in (-1, 0)
+        for minute in minutes
+    ]
+    eligible = [c for c in candidates if c <= now]
+    return max(eligible) if eligible else None
+
+
+def next_slot(now: datetime, minutes: list[int] | None) -> datetime | None:
+    """First scheduled slot strictly after ``now`` (None when the schedule is unknown)."""
+    if not minutes:
+        return None
+    base = now.replace(second=0, microsecond=0)
+    candidates = [
+        (base + timedelta(hours=offset)).replace(minute=minute)
+        for offset in (0, 1)
+        for minute in minutes
+    ]
+    later = [c for c in candidates if c > now]
+    return min(later) if later else None
 
 
 def classify_schedule_slot(
@@ -28,7 +91,10 @@ def classify_schedule_slot(
         status = str(latest_run.get("status") or "").lower()
         conclusion = str(latest_run.get("conclusion") or "").lower()
         if status == "completed" and conclusion == "success":
-            return "ON TRACK", "Scheduled Operator run completed successfully for the current slot."
+            return "ON TRACK", (
+                "A scheduled Operator run created since the last expected slot completed successfully. "
+                "GitHub cron is best-effort: this does not prove exact-time delivery of every slot."
+            )
         if status in {"queued", "in_progress", "waiting", "pending"} or not conclusion:
             return "WAITING", f"Scheduled Operator event is visible for the current slot; run is {status or 'still active'}."
         return "CHECK", f"Scheduled Operator event arrived for the current slot but concluded {conclusion or status or 'unsuccessfully'}."

@@ -8,14 +8,23 @@ from __future__ import annotations
 import html
 import json
 import os
-import re
+import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import streamlit as st
 import streamlit.components.v1 as components
+
+# `streamlit run command_center/app.py` puts only this folder on sys.path; add the
+# repository root so the shared pure helpers import the same way tests import them.
+_REPO_ROOT = str(Path(__file__).resolve().parents[1])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from command_center.status_logic import next_slot, parse_cron_minutes  # noqa: E402
 
 REPO = "MrTooi/Miami-sales-demo"
 API = "https://api.github.com"
@@ -130,35 +139,12 @@ def age(value: str | None) -> str:
 
 
 def operator_minutes() -> list[int] | None:
-    text = raw_text(".github/workflows/agent-operator.yml")
-    if not text:
-        return None
-    match = re.search(r"cron:\s*['\"]([0-9,]+)\s+\*\s+\*\s+\*\s+\*['\"]", text)
-    if not match:
-        return None
-    values = []
-    for part in match.group(1).split(","):
-        try:
-            value = int(part)
-        except ValueError:
-            continue
-        if 0 <= value <= 59:
-            values.append(value)
-    return sorted(set(values)) or None
+    # Every cron line counts; any unrecognised shape yields UNKNOWN (None).
+    return parse_cron_minutes(raw_text(".github/workflows/agent-operator.yml"))
 
 
 def next_operator_slot(now: datetime | None = None) -> datetime | None:
-    minutes = operator_minutes()
-    if not minutes:
-        return None
-    now = now or datetime.now(ET)
-    for hour_offset in range(0, 3):
-        base = (now + timedelta(hours=hour_offset)).replace(second=0, microsecond=0)
-        for minute in minutes:
-            candidate = base.replace(minute=minute)
-            if candidate > now:
-                return candidate
-    return None
+    return next_slot(now or datetime.now(ET), operator_minutes())
 
 
 def card(label: str, value: str, note: str, tone: str = "info"):
