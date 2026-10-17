@@ -18,7 +18,7 @@ Resuming LEDGER / Opportunity Radar product work requires the Issue #11 / Issue 
 | Owner Command Center (internal, read-only) | #79 / PR #80 | Must never self-certify readiness or show a false green. |
 | Oct 17 demo readiness | #81, `docs/DEMO_RUNBOOK_2026-10-17.md` | Existing functionality and fictional data only. |
 | Leadership transfer + context pack | #88, #89 → PR #90 | This operating layer. |
-| Agent evaluation upkeep | `docs/AGENT_EVALUATION.md`, `agent_evals/` | No changes to final-suite prompts/rubrics/thresholds. |
+| Agent evaluation upkeep | `docs/AGENT_EVALUATION.md`, `agent_evals/` | Only when the owner explicitly scopes the task; no final-suite prompt/rubric/threshold changes unless specifically approved. |
 
 ## Next after gate (not started, not authorized)
 
