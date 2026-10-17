@@ -268,7 +268,7 @@ with cols[3]:
             "Latest Scheduled Run",
             state.upper(),
             f"#{latest_operator.get('run_number')} · {age(latest_operator.get('created_at'))} · SHA {short_sha(latest_operator.get('head_sha'))}",
-            "ok" if state == "success" else "warn",
+            "info" if state == "success" else "warn",
         )
     else:
         card("Latest Scheduled Run", "UNKNOWN", "No Operator schedule event is visible in the current API window.", "warn")

@@ -71,6 +71,13 @@ class CommandCenterTests(unittest.TestCase):
         self.assertIn("Evidence retrieval is incomplete; no pass count inferred", self.source)
         self.assertIn("Candidate evidence count is UNKNOWN", self.source)
 
+    def test_stale_scheduled_run_success_cannot_render_green(self):
+        start = self.source.index('"Latest Scheduled Run"')
+        end = self.source.index('"Latest Scheduled Run", "UNKNOWN"')
+        block = self.source[start:end]
+        self.assertIn('"info" if state == "success" else "warn"', block)
+        self.assertNotIn('"ok"', block)
+
     def test_schedule_has_no_invented_fallback_minutes(self):
         self.assertIn("return None", self.source)
         self.assertIn("no fallback time is invented", self.source)
