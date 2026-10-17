@@ -24,6 +24,7 @@ Status: adopted via Issue #88. Governance only; it changes no product, readiness
 - Product implementation is **PAUSED** until Issue #11 / Issue #69 readiness is satisfied and the human explicitly approves resuming.
 - Claude may work only on readiness hardening, demo/observability support, governance/docs, and tasks the human explicitly assigns.
 - Claude does not choose its own product work from the backlog in this mode.
+- Enabling unattended Agent OS scheduling is a separate gate (Issue #35) and is not authorized by this document or by passing #11/#69.
 
 ### Post-readiness (only after readiness passes **and** explicit human approval)
 

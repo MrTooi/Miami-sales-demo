@@ -24,7 +24,7 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
 - Context: The operating model needs a repo-local, GitHub-visible definition so that Claude Code and ChatGPT can work from shared state rather than private conversation history.
 - Decision: Claude Code is the primary technical lead for authorized engineering work. ChatGPT is product/strategy/architecture/independent-review support. The human owner keeps final authority. Claude is never the sole reviewer of its own high-risk changes. Claude Code runs only when triggered by tasks, events, or schedules.
 - Consequences / risks: Documentation and instructions only. Autonomy is limited to what is authorized; see `docs/LEADERSHIP_MODEL.md`.
-- Evidence / links: Issue #88; `CLAUDE.md`; `docs/LEADERSHIP_MODEL.md`.
+- Evidence / links: Issue #88, Issue #89; `CLAUDE.md`; `docs/LEADERSHIP_MODEL.md`.
 
 ### D-002 — Readiness gates unchanged; product stays paused
 - Date: 2026-10-17
