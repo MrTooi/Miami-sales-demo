@@ -89,7 +89,7 @@ jobs:
 
       - name: Run deterministic readiness tests before model spend
         if: steps.select.outputs.execute == 'true'
-        run: python -m unittest tests.test_agent_final_readiness tests.test_agent_scheduled_readiness tests.test_agent_scheduled_readiness_workflow -v
+        run: python -m unittest tests.test_agent_final_readiness tests.test_agent_scheduled_readiness tests.test_agent_scheduled_readiness_workflow tests.test_readiness_history -v
 
       - name: Build blind-only input and freeze current suite hashes
         if: steps.select.outputs.execute == 'true'

@@ -151,6 +151,8 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         self.assertLess(select, gate)
         self.assertLess(gate, tests)
         self.assertLess(tests, bundle)
+        self.assertIn("tests.test_readiness_history", prepare[tests:bundle],
+                      "the history classifier must be tested before any model spend")
 
     def test_prepare_step_names_match_pre_model_infrastructure_classification(self):
         from agent_evals import readiness_history as rh
