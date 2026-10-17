@@ -41,6 +41,33 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+INSTRUCTION_INPUTS = {
+    "agents_md_sha256": "AGENTS.md",
+    "copilot_instructions_sha256": ".github/copilot-instructions.md",
+    "team_profiles_sha256": "agent_evals/team_profiles.json",
+}
+
+
+def instruction_hashes(root: Path = ROOT) -> dict[str, str]:
+    """Hashes of the exact files copied into the blind bundle (see build_blind_bundle)."""
+    return {key: sha256_file(root / rel) for key, rel in INSTRUCTION_INPUTS.items()}
+
+
+def verify_instruction_hashes(metadata: list[dict], allow_mixed: bool = False) -> None:
+    """Fail closed unless every suite's evidence recorded identical instruction hashes."""
+    if not metadata:
+        raise ValueError("no evidence metadata supplied")
+    for entry in metadata:
+        for key in INSTRUCTION_INPUTS:
+            value = entry.get(key) if isinstance(entry, dict) else None
+            if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+                raise ValueError(f"evidence metadata is missing a valid {key}")
+    if not allow_mixed:
+        for key in INSTRUCTION_INPUTS:
+            if len({entry[key] for entry in metadata}) != 1:
+                raise ValueError(f"evidence mixes incompatible instruction versions ({key})")
+
+
 def _suite_path(suite: str, kind: str) -> Path:
     if suite not in SUITES:
         raise ValueError(f"unknown suite: {suite}")
@@ -327,6 +354,11 @@ def main() -> None:
         p = sub.add_parser(command)
         p.add_argument("--suite", choices=SUITES, required=True)
         p.add_argument("--out", type=Path, required=True)
+    p = sub.add_parser("instruction-hashes")
+    p.add_argument("--out", type=Path, required=True)
+    p = sub.add_parser("verify-instruction-hashes")
+    p.add_argument("--metadata", nargs="+", required=True)
+    p.add_argument("--allow-mixed", action="store_true")
     p = sub.add_parser("validate-blind")
     p.add_argument("--suite", choices=SUITES, required=True)
     p.add_argument("--file", required=True)
@@ -347,6 +379,10 @@ def main() -> None:
         build_blind_bundle(args.suite, args.out)
     elif args.command == "build-judge":
         build_judge_bundle(args.suite, args.out)
+    elif args.command == "instruction-hashes":
+        _write_json(args.out, instruction_hashes())
+    elif args.command == "verify-instruction-hashes":
+        verify_instruction_hashes([_load_file(path) for path in args.metadata], args.allow_mixed)
     elif args.command == "validate-blind":
         validate_blind_doc(args.suite, _load_file(args.file))
     elif args.command == "validate-judge":

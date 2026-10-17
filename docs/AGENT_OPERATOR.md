@@ -37,7 +37,7 @@ It can:
 
 It cannot mutate issues, invoke a model, edit code, open a PR, merge, deploy, or perform external actions.
 
-The planner is scheduled twice per hour but only runs scheduled work when `LEDGER_AGENT_OPERATOR_ENABLED=true`.
+The planner workflow carries two cron expressions that together offer a schedule slot every five minutes (`tests/test_readiness_carrier_cadence.py` pins this). It is also the schedule carrier for the final-readiness core, so history scans run at that cadence. Planner work only runs when `LEDGER_AGENT_OPERATOR_ENABLED=true`.
 
 ## Controlled executor
 

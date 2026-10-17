@@ -19,3 +19,11 @@
 
 # Dependency changes can alter execution and supply-chain risk
 /requirements.txt @MrTooi
+
+# Readiness-defining eval/scorer assets and their tests
+/agent_evals/ @MrTooi
+/tests/test_agent_final_readiness.py @MrTooi
+/tests/test_agent_final_suite_*.py @MrTooi
+/tests/test_agent_scheduled_readiness*.py @MrTooi
+/tests/test_readiness_*.py @MrTooi
+/tests/test_suite_a_failure_hardening.py @MrTooi
