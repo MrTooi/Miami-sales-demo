@@ -6,6 +6,8 @@
 /.github/agents/ @MrTooi
 /.github/skills/ @MrTooi
 /.github/instructions/ @MrTooi
+/.github/copilot-instructions.md @MrTooi
+/.github/CODEOWNERS @MrTooi
 /AGENTS.md @MrTooi
 /agent_operator/ @MrTooi
 
