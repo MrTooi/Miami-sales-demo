@@ -24,6 +24,11 @@ Issue #87 changes:
   infrastructure failures.
 - M3: a run whose latest attempt is not 1 can never count as a success; its
   attempt-1 record still decides whether it was a paid failure.
+
+PR #91 review hardening: before Suite B or C spends anything, prior evidence must have
+been produced with today's exact blind instruction inputs (W1); a cancelled run with
+any readiness artifact stays paid-relevant as on main (W2); a failure inside a model
+call is behavioral, never infrastructure (W3); out-of-order history fails closed (W4).
 """
 from __future__ import annotations
 
@@ -32,6 +37,8 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
 EVIDENCE_PREFIX = "agent-final-readiness-evidence-"
@@ -59,6 +66,11 @@ PRE_MODEL_INFRA_STEPS = frozenset({
     "Require reviewed hardening change after a prior failed paid run",
 })
 THRESHOLD_FAILURE_STEP = "Fail closed when suite did not meet readiness threshold"
+# Steps that invoke the model. A failure inside one is never "infrastructure".
+MODEL_CALL_STEPS = frozenset({
+    "Run blind read-only Agent OS evaluator",
+    "Run isolated read-only independent judge",
+})
 
 # The exact instruction files copied into the blind bundle
 # (agent_evals/scheduled_readiness.py build_blind_bundle). Only these can change what
@@ -102,9 +114,11 @@ def failure_kind(jobs: list[dict]) -> str:
     """Classify a paid-relevant failure.
 
     ``infrastructure`` only when a model-runtime job (blind pass, judge preparation,
-    judge pass) failed before deterministic recording ran. Everything else, including
-    a malformed or self-reviewing blind answer caught by ``validate-blind``, a
-    threshold failure, or anything unproven, is ``behavioral`` (the stricter gate).
+    judge pass) failed before deterministic recording ran, *and* its step list proves
+    the failure was in runner plumbing rather than the model call itself. A failure in
+    the model step (refusal, turn/time exhaustion, empty or rejected output), a
+    malformed or self-reviewing blind answer caught by ``validate-blind``, a threshold
+    failure, or anything unproven is ``behavioral`` (the stricter gate).
     """
     for job in _jobs_ending(jobs, "final-readiness-validate-and-record"):
         for step in job.get("steps") or []:
@@ -114,12 +128,22 @@ def failure_kind(jobs: list[dict]) -> str:
         return "behavioral"
     if any(_job_ran(j) for j in _jobs_ending(jobs, "final-readiness-validate-and-record")):
         return "behavioral"
-    runtime_failed = any(
-        j.get("conclusion") in {"failure", "cancelled", "timed_out"}
+    failed_runtime_jobs = [
+        j
         for suffix in ("final-readiness-blind-pass", "final-readiness-prepare-judge", "final-readiness-judge-pass")
         for j in _jobs_ending(jobs, suffix)
-    )
-    return "infrastructure" if runtime_failed else "behavioral"
+        if j.get("conclusion") in {"failure", "cancelled", "timed_out"}
+    ]
+    if not failed_runtime_jobs:
+        return "behavioral"
+    for job in failed_runtime_jobs:
+        steps = job.get("steps")
+        if not isinstance(steps, list) or not steps:
+            return "behavioral"  # cannot prove where it failed
+        failed = [s.get("name") for s in steps if s.get("conclusion") in {"failure", "timed_out", "cancelled"}]
+        if not failed or any(name in MODEL_CALL_STEPS for name in failed):
+            return "behavioral"
+    return "infrastructure"
 
 
 def _prepare_failed_only_in_infra_steps(prepare: dict) -> bool:
@@ -161,16 +185,14 @@ def classify_attempt(run_id: int, conclusion: str | None, jobs: list[dict], arti
     if conclusion not in {"failure", "cancelled", "timed_out", "startup_failure"}:
         raise ReadinessHistoryError(f"carrier run {run_id} has unexpected conclusion {conclusion!r}")
 
-    beyond_blind_input = [
-        a for a in readiness_artifacts if not str(a.get("name", "")).startswith(BLIND_INPUT_PREFIX)
-    ]
+    # As on main: once any readiness artifact exists (even blind input only), the run is
+    # conservatively paid-relevant, so job-name drift can never hide model spend.
     prepare = markers[0]
-    if started == 0 and not beyond_blind_input:
+    if started == 0 and not readiness_artifacts:
         if conclusion == "cancelled" and prepare.get("conclusion") in {"success", "cancelled"}:
             return "pre_model_failure"
         if prepare.get("conclusion") == "failure" and _prepare_failed_only_in_infra_steps(prepare):
-            if not readiness_artifacts:
-                return "pre_model_failure"
+            return "pre_model_failure"
     return "paid_relevant_failure"
 
 
@@ -192,6 +214,9 @@ def classify_run(run: dict, details: dict) -> dict:
         jobs = details.get("attempt1_jobs")
         if not isinstance(jobs, list):
             raise ReadinessHistoryError(f"carrier run {run_id}: attempt 1 jobs could not be verified")
+        # Artifacts are listed per run (all attempts), while jobs come from attempt 1.
+        # Any later-attempt artifact therefore only pushes toward paid_relevant_failure,
+        # which is the conservative direction.
         status = classify_attempt(run_id, first.get("conclusion"), jobs, details["artifacts"])
         if status in {"success", "success_missing_evidence"}:
             # A rerun makes provenance ambiguous: never count it, but it is not a failure.
@@ -219,9 +244,18 @@ def select_suite(
     jobs/artifacts (and attempt-1 data for reruns). Both must raise on API failure.
     """
     successes = 0
+    success_ids: list[int] = []
     latest: dict | None = None
     scanned = 0
+    previous_created: str | None = None
     for run in runs:
+        created = run.get("created_at")
+        if not isinstance(created, str) or not created:
+            raise ReadinessHistoryError(f"carrier run {run.get('id')} has no created_at; refusing ambiguous history")
+        # "Latest failure" and the migration boundary both rely on newest-first order.
+        if previous_created is not None and created > previous_created:
+            raise ReadinessHistoryError("carrier run listing is not newest-first; refusing ambiguous history")
+        previous_created = created
         if run.get("id") == current_run_id or run.get("event") != "schedule" or run.get("status") != "completed":
             continue
         scanned += 1
@@ -246,18 +280,37 @@ def select_suite(
             latest = result
         if status == "success":
             successes += 1
+            success_ids.append(run["id"])
             if successes >= REQUIRED_SUCCESSES:
                 break
 
     if successes >= REQUIRED_SUCCESSES:
         return {"execute": False, "suite": "complete"}
-    selection = {"execute": True, "suite": SUITE_BY_SUCCESS_COUNT[successes]}
+    selection = {"execute": True, "suite": SUITE_BY_SUCCESS_COUNT[successes], "prior_success_ids": success_ids}
     if latest is not None and latest["status"] == "paid_relevant_failure":
         if latest["run"]["head_sha"] == current_sha:
             raise ReadinessHistoryError(SAME_SHA_REFUSAL)
         selection["failed_sha"] = latest["run"]["head_sha"]
         selection["failure_kind"] = latest["kind"]
     return selection
+
+
+def require_matching_instruction_hashes(prior_metadata: list[dict], current: dict[str, str]) -> None:
+    """Before any model spend for Suite B or C, prove prior evidence used today's blind inputs.
+
+    A mismatch (including evidence recorded before hashes existed) would otherwise be
+    discovered only at Suite C aggregation, after a paid run, with no automatic way
+    out. Raising here happens in the pre-model selection step, so no model is called;
+    superseding stale A/B evidence is an explicit owner decision.
+    """
+    for meta in prior_metadata:
+        for key, value in current.items():
+            if not isinstance(meta, dict) or meta.get(key) != value:
+                raise ReadinessHistoryError(
+                    f"prior readiness evidence (run {meta.get('run_id') if isinstance(meta, dict) else '?'}) "
+                    f"was produced with different or unrecorded blind instruction inputs ({key}); refusing "
+                    "model spend. Owner decision required to supersede stale A/B evidence."
+                )
 
 
 def hardening_allows_retry(changed_paths: list[str], kind: str) -> bool:
@@ -339,7 +392,30 @@ def github_select(repo: str, current_run_id: int, current_sha: str) -> dict:
             )
         return info
 
-    return select_suite(_iter_schedule_runs(repo), has_core, details, current_run_id, current_sha)
+    selection = select_suite(_iter_schedule_runs(repo), has_core, details, current_run_id, current_sha)
+    if selection["execute"] and selection["prior_success_ids"]:
+        from agent_evals.scheduled_readiness import instruction_hashes
+
+        prior = [_download_evidence_metadata(repo, rid) for rid in selection["prior_success_ids"]]
+        require_matching_instruction_hashes(prior, instruction_hashes())
+    return selection
+
+
+def _download_evidence_metadata(repo: str, run_id: int) -> dict:
+    with tempfile.TemporaryDirectory() as tmp:
+        proc = subprocess.run(
+            ["gh", "run", "download", str(run_id), "--repo", repo,
+             "--name", f"{EVIDENCE_PREFIX}{run_id}", "--dir", tmp],
+            text=True, capture_output=True,
+        )
+        if proc.returncode != 0:
+            raise ReadinessHistoryError(
+                f"could not download evidence for run {run_id}: {proc.stderr.strip()[:500]}"
+            )
+        path = Path(tmp) / "metadata.json"
+        if not path.is_file():
+            raise ReadinessHistoryError(f"evidence for run {run_id} has no metadata.json")
+        return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _changed_paths(failed_sha: str, current_sha: str) -> list[str]:

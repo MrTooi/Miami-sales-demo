@@ -146,11 +146,16 @@ class ClassifyAttemptTests(unittest.TestCase):
         self.assertEqual(attempt(1, "failure", [prep(), job(BLIND, "failure")]), "paid_relevant_failure")
         self.assertEqual(attempt(1, "cancelled", [prep(), job(BLIND, "cancelled")]), "paid_relevant_failure")
 
-    def test_cancelled_before_model_is_pre_model_even_with_blind_input_only(self):
+    def test_cancelled_is_pre_model_only_without_any_readiness_artifact(self):
+        # W2: same rule as main. Blind input alone keeps a cancelled run paid-relevant,
+        # so job-name drift can never hide model spend.
         self.assertEqual(attempt(1, "cancelled", [prep("cancelled")]), "pre_model_failure")
+        self.assertEqual(attempt(1, "cancelled", [prep(), job(BLIND, "cancelled", started=None)]), "pre_model_failure")
         blind_input = [{"name": f"{rh.BLIND_INPUT_PREFIX}1", "expired": False}]
-        queued_blind = job(BLIND, "cancelled", started=None)
-        self.assertEqual(attempt(1, "cancelled", [prep(), queued_blind], blind_input), "pre_model_failure")
+        self.assertEqual(attempt(1, "cancelled", [prep(), job(BLIND, "cancelled", started=None)], blind_input),
+                         "paid_relevant_failure")
+        renamed = [prep(), job("final-readiness / renamed-model-job", "cancelled")]
+        self.assertEqual(attempt(1, "cancelled", renamed, blind_input), "paid_relevant_failure")
         self.assertEqual(attempt(1, "cancelled", [prep()], evidence(1)), "paid_relevant_failure")
 
     def test_prepare_success_then_run_failure_without_model_is_paid_relevant(self):
@@ -179,10 +184,36 @@ class FailureKindTests(unittest.TestCase):
         jobs = [prep(), job(BLIND), job(VALIDATE_BLIND, "failure")]
         self.assertEqual(rh.failure_kind(jobs), "behavioral")
 
-    def test_model_runtime_failure_before_recording_is_infrastructure(self):
-        self.assertEqual(rh.failure_kind([prep(), job(BLIND, "failure")]), "infrastructure")
-        jobs = [prep(), job(BLIND), job(VALIDATE_BLIND), job(PREP_JUDGE), job(JUDGE, "failure")]
+    def test_runner_plumbing_failure_before_recording_is_infrastructure(self):
+        plumbing = [{"name": "Download only blind inputs on a runner with no repository checkout",
+                     "conclusion": "failure"}]
+        self.assertEqual(rh.failure_kind([prep(), job(BLIND, "failure", steps=plumbing)]), "infrastructure")
+        judge_plumbing = [{"name": "Download frozen blind output", "conclusion": "failure"}]
+        jobs = [prep(), job(BLIND), job(VALIDATE_BLIND), job(PREP_JUDGE),
+                job(JUDGE, "failure", steps=judge_plumbing)]
         self.assertEqual(rh.failure_kind(jobs), "infrastructure")
+
+    def test_w3_model_call_failure_or_unproven_step_is_behavioral(self):
+        for step in sorted(rh.MODEL_CALL_STEPS):
+            with self.subTest(step=step):
+                name = BLIND if "blind" in step else JUDGE
+                failed = job(name, "failure", steps=[{"name": step, "conclusion": "failure"}])
+                self.assertEqual(rh.failure_kind([prep(), failed]), "behavioral")
+        self.assertEqual(rh.failure_kind([prep(), job(BLIND, "failure")]), "behavioral")
+        self.assertEqual(rh.failure_kind([prep(), job(BLIND, "failure", steps=[])]), "behavioral")
+        no_failed_step = job(BLIND, "cancelled", steps=[{"name": "Set up job", "conclusion": "success"}])
+        self.assertEqual(rh.failure_kind([prep(), no_failed_step]), "behavioral")
+
+    def test_model_call_step_names_exist_in_core_workflow(self):
+        core = (Path(__file__).resolve().parents[1] / ".github/workflows/agent-final-readiness-core.yml").read_text(
+            encoding="utf-8")
+        lines = {line.strip() for line in core.splitlines()}
+        for step in rh.MODEL_CALL_STEPS:
+            self.assertIn(f"- name: {step}", lines)
+        for suffix in ("final-readiness-blind-pass", "final-readiness-judge-pass", "final-readiness-prepare",
+                       "final-readiness-validate-blind", "final-readiness-prepare-judge",
+                       "final-readiness-validate-and-record"):
+            self.assertIn(f"name: {suffix}", lines, "classifier job-name suffixes must match the core workflow")
 
     def test_recording_ran_or_unproven_is_behavioral(self):
         jobs = full_success_jobs()
@@ -235,6 +266,8 @@ class SelectSuiteTests(unittest.TestCase):
 
         result = rh.select_suite([r for r, _ in history], core, details, current_run_id=999,
                                  current_sha=current_sha, max_runs=max_runs)
+        result = dict(result)
+        self.last_prior_ids = result.pop("prior_success_ids", None)
         return result, calls
 
     def ok(self, rid, sha="sha-old"):
@@ -251,7 +284,11 @@ class SelectSuiteTests(unittest.TestCase):
 
     def test_progression_and_completion(self):
         self.assertEqual(self.select([self.ok(1)])[0]["suite"], "b")
+        self.assertEqual(self.last_prior_ids, [1])
         self.assertEqual(self.select([self.ok(2), self.ok(1)])[0]["suite"], "c")
+        self.assertEqual(self.last_prior_ids, [2, 1])
+        self.select([])
+        self.assertEqual(self.last_prior_ids, [])
         result, calls = self.select([self.ok(4), self.ok(3), self.ok(2), self.ok(1)])
         self.assertEqual(result, {"execute": False, "suite": "complete"})
         self.assertEqual(calls, [4, 3, 2], "scan must stop after three successes")
@@ -310,6 +347,13 @@ class SelectSuiteTests(unittest.TestCase):
             "attempt1": {"run_attempt": 1, "status": "completed", "conclusion": "success"},
             "attempt1_jobs": full_success_jobs()})
         self.assertEqual(self.select([rerun, self.ok(1)])[0], {"execute": True, "suite": "b"})
+
+    def test_w4_out_of_order_or_undated_listing_fails_closed(self):
+        with self.assertRaisesRegex(rh.ReadinessHistoryError, "not newest-first"):
+            self.select([self.ok(1), self.ok(2)])
+        undated = dict(run(3, "success"), created_at=None)
+        with self.assertRaisesRegex(rh.ReadinessHistoryError, "no created_at"):
+            self.select([(undated, None)])
 
     def test_api_error_propagates(self):
         def boom(_run):
@@ -411,14 +455,47 @@ class CliTests(unittest.TestCase):
                 raise AssertionError(path)
             return mock.Mock(returncode=0, stdout=json.dumps(body), stderr="")
 
-        with mock.patch.object(rh.subprocess, "run", side_effect=fake_run):
+        current = sr.instruction_hashes()
+        with mock.patch.object(rh.subprocess, "run", side_effect=fake_run), \
+                mock.patch.object(rh, "_download_evidence_metadata",
+                                  side_effect=lambda repo, rid: dict(current, run_id=str(rid))) as dl:
             result = rh.github_select("o/r", 999, "s2")
-        self.assertEqual(result, {"execute": True, "suite": "c"})
+        self.assertEqual(result, {"execute": True, "suite": "c", "prior_success_ids": [3, 2]})
+        self.assertEqual([c.args[1] for c in dl.call_args_list], [3, 2])
         for cmd in calls:
             self.assertEqual(cmd[:2], ["gh", "api"])
             for forbidden in ("-X", "--method", "-f", "-F", "--field", "--raw-field", "--input"):
                 self.assertNotIn(forbidden, cmd)
         self.assertEqual(sum(1 for c in calls if "/contents/" in c[-1] and "ref=s1" in c[-1]), 1)
+
+    def test_w1_instruction_mismatch_is_refused_before_model_spend(self):
+        current = sr.instruction_hashes()
+        rh.require_matching_instruction_hashes([dict(current), dict(current)], current)
+        for prior in (
+            {**current, "agents_md_sha256": "0" * 64},
+            {k: v for k, v in current.items() if k != "team_profiles_sha256"},
+            {},
+        ):
+            with self.subTest(prior=sorted(prior)):
+                with self.assertRaisesRegex(rh.ReadinessHistoryError, "refusing model spend"):
+                    rh.require_matching_instruction_hashes([dict(current), prior], current)
+
+    def test_w1_github_select_checks_prior_evidence_and_fails_closed_on_download_error(self):
+        selection = {"execute": True, "suite": "b", "prior_success_ids": [7]}
+        with mock.patch.object(rh, "select_suite", return_value=selection), \
+                mock.patch.object(rh, "_download_evidence_metadata", return_value={"run_id": "7"}):
+            with self.assertRaisesRegex(rh.ReadinessHistoryError, "refusing model spend"):
+                rh.github_select("o/r", 999, "s")
+        with mock.patch.object(rh, "select_suite", return_value=selection), \
+                mock.patch.object(rh.subprocess, "run",
+                                  return_value=mock.Mock(returncode=1, stdout="", stderr="HTTP 410 expired")):
+            with self.assertRaisesRegex(rh.ReadinessHistoryError, "could not download evidence"):
+                rh.github_select("o/r", 999, "s")
+        suite_a = {"execute": True, "suite": "a", "prior_success_ids": []}
+        with mock.patch.object(rh, "select_suite", return_value=suite_a), \
+                mock.patch.object(rh, "_download_evidence_metadata") as dl:
+            self.assertEqual(rh.github_select("o/r", 999, "s"), suite_a)
+        dl.assert_not_called()
 
     def test_github_select_api_failure_fails_closed(self):
         with mock.patch.object(rh.subprocess, "run",
