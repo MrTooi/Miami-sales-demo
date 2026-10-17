@@ -358,7 +358,6 @@ def main() -> None:
     p.add_argument("--out", type=Path, required=True)
     p = sub.add_parser("verify-instruction-hashes")
     p.add_argument("--metadata", nargs="+", required=True)
-    p.add_argument("--allow-mixed", action="store_true")
     p = sub.add_parser("validate-blind")
     p.add_argument("--suite", choices=SUITES, required=True)
     p.add_argument("--file", required=True)
@@ -382,7 +381,8 @@ def main() -> None:
     elif args.command == "instruction-hashes":
         _write_json(args.out, instruction_hashes())
     elif args.command == "verify-instruction-hashes":
-        verify_instruction_hashes([_load_file(path) for path in args.metadata], args.allow_mixed)
+        # No CLI override: mixing instruction versions across A/B/C needs a reviewed code change.
+        verify_instruction_hashes([_load_file(path) for path in args.metadata])
     elif args.command == "validate-blind":
         validate_blind_doc(args.suite, _load_file(args.file))
     elif args.command == "validate-judge":

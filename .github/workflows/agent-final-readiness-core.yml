@@ -26,14 +26,13 @@ jobs:
       suite: ${{ steps.select.outputs.suite }}
       prompt_sha: ${{ steps.bundle.outputs.prompt_sha }}
       rubric_sha: ${{ steps.bundle.outputs.rubric_sha }}
+      agents_md_sha256: ${{ steps.bundle.outputs.agents_md_sha256 }}
+      copilot_instructions_sha256: ${{ steps.bundle.outputs.copilot_instructions_sha256 }}
+      team_profiles_sha256: ${{ steps.bundle.outputs.team_profiles_sha256 }}
     steps:
-      - name: Select next suite from verified carrier history and enforce retry barrier
-        id: select
+      - name: Refuse non-schedule provenance and reruns before any work
         env:
-          GH_TOKEN: ${{ github.token }}
-          CURRENT_RUN_ID: ${{ github.run_id }}
           CURRENT_ATTEMPT: ${{ github.run_attempt }}
-          CURRENT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = 'schedule'
@@ -42,174 +41,51 @@ jobs:
             exit 1
           fi
 
-          RUN_PAGES="$RUNNER_TEMP/carrier-run-pages.json"
-          RUNS="$RUNNER_TEMP/carrier-runs.json"
-          RELEVANT="$RUNNER_TEMP/readiness-carrier-runs.jsonl"
-          : > "$RELEVANT"
-
-          gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/workflows/agent-operator.yml/runs?event=schedule&per_page=100" > "$RUN_PAGES"
-          jq '[.[] | .workflow_runs[]]' "$RUN_PAGES" > "$RUNS"
-
-          # Historical Operator runs predate this carrier migration. A completed run
-          # is readiness-relevant only if its exact commit contains this reusable
-          # core and Actions proves the readiness job surface existed. Job-name
-          # suffixes are used so caller-prefix formatting cannot hide model stages.
-          # A core-bearing run with no readiness jobs/artifacts is ignored only
-          # when there is also no evidence of a non-skipped model stage and the
-          # overall run did not claim success. Any ambiguity fails closed.
-          while IFS= read -r CANDIDATE; do
-            RID="$(jq -r '.id' <<<"$CANDIDATE")"
-            SHA="$(jq -r '.head_sha' <<<"$CANDIDATE")"
-            CONCLUSION="$(jq -r '.conclusion' <<<"$CANDIDATE")"
-            CORE_ERR="$RUNNER_TEMP/core-$RID.err"
-            if ! gh api "/repos/$GITHUB_REPOSITORY/contents/.github/workflows/agent-final-readiness-core.yml?ref=$SHA" >/dev/null 2>"$CORE_ERR"; then
-              if grep -q 'HTTP 404' "$CORE_ERR"; then
-                continue
-              fi
-              echo "Could not verify carrier core presence for run $RID; refusing ambiguous history." >&2
-              cat "$CORE_ERR" >&2
-              exit 1
-            fi
-
-            JOB_PAGES="$RUNNER_TEMP/jobs-$RID-pages.json"
-            JOBS="$RUNNER_TEMP/jobs-$RID.json"
-            ARTIFACTS="$RUNNER_TEMP/history-artifacts-$RID.json"
-            if ! gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/jobs?filter=all&per_page=100" > "$JOB_PAGES"; then
-              echo "Could not verify readiness jobs for carrier run $RID; refusing ambiguous history." >&2
-              exit 1
-            fi
-            if ! gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/artifacts?per_page=100" > "$ARTIFACTS"; then
-              echo "Could not verify readiness artifacts for carrier run $RID; refusing ambiguous history." >&2
-              exit 1
-            fi
-            jq '[.[] | .jobs[]]' "$JOB_PAGES" > "$JOBS"
-            MARKERS="$(jq '[.[] | select(.name | endswith("final-readiness-prepare"))] | length' "$JOBS")"
-            READINESS_JOB_COUNT="$(jq '[.[] | select(.name | contains("final-readiness"))] | length' "$JOBS")"
-            MODEL_STAGE_STARTED="$(jq '[.[] | select((((.name | endswith("final-readiness-blind-pass"))) or ((.name | endswith("final-readiness-judge-pass")))) and .conclusion != "skipped" and .started_at != null)] | length' "$JOBS")"
-            READINESS_ARTIFACT_COUNT="$(jq '[.artifacts[] | select(.name | startswith("agent-final-readiness-"))] | length' "$ARTIFACTS")"
-
-            if [ "$MARKERS" = '0' ] && [ "$READINESS_JOB_COUNT" = '0' ] && [ "$MODEL_STAGE_STARTED" = '0' ] && [ "$READINESS_ARTIFACT_COUNT" = '0' ] && [ "$CONCLUSION" != 'success' ]; then
-              echo "Ignoring no-readiness-work carrier run $RID with conclusion=$CONCLUSION because no readiness job, model stage, or readiness artifact exists."
-              continue
-            fi
-            if [ "$MARKERS" != '1' ]; then
-              echo "Carrier run $RID contains the readiness core but has $MARKERS prepare markers with readiness_job_count=$READINESS_JOB_COUNT readiness_artifact_count=$READINESS_ARTIFACT_COUNT; refusing ambiguous history." >&2
-              exit 1
-            fi
-            printf '%s\n' "$CANDIDATE" >> "$RELEVANT"
-          done < <(jq -c --argjson current "$CURRENT_RUN_ID" '[.[] | select(.id != $current and .event == "schedule" and .status == "completed")] | sort_by(.created_at) | .[]' "$RUNS")
-
-          SUCCESS_COUNT=0
-          MISSING_SUCCESS_EVIDENCE=0
-          while IFS= read -r CANDIDATE; do
-            [ -n "$CANDIDATE" ] || continue
-            CONCLUSION="$(jq -r '.conclusion' <<<"$CANDIDATE")"
-            [ "$CONCLUSION" = 'success' ] || continue
-            RID="$(jq -r '.id' <<<"$CANDIDATE")"
-            ARTIFACTS="$RUNNER_TEMP/artifacts-$RID.json"
-            gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/artifacts?per_page=100" > "$ARTIFACTS"
-            EXPECTED="agent-final-readiness-evidence-$RID"
-            COUNT="$(jq --arg expected "$EXPECTED" '[.artifacts[] | select(.name == $expected and .expired == false)] | length' "$ARTIFACTS")"
-            if [ "$COUNT" = '1' ]; then
-              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-            else
-              MISSING_SUCCESS_EVIDENCE=$((MISSING_SUCCESS_EVIDENCE + 1))
-            fi
-          done < "$RELEVANT"
-
-          if [ "$SUCCESS_COUNT" -lt 3 ] && [ "$MISSING_SUCCESS_EVIDENCE" -ne 0 ]; then
-            echo 'A readiness-relevant successful carrier run lacks exactly one valid evidence artifact; refusing to advance.' >&2
-            exit 1
-          fi
-          if [ "$SUCCESS_COUNT" -ge 3 ]; then
-            echo 'Three successful scheduled evidence runs already exist; refusing further model/evidence work.'
-            echo 'execute=false' >> "$GITHUB_OUTPUT"
-            echo 'suite=complete' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Ignore a cancelled carrier attempt only when Actions proves no
-          # non-skipped model stage started AND no readiness artifact exists.
-          # Once blind input/evidence exists, the run is conservatively treated
-          # as paid-relevant even if job-name formatting changes.
-          LATEST_EFFECTIVE=''
-          while IFS= read -r CANDIDATE; do
-            [ -n "$CANDIDATE" ] || continue
-            CONCLUSION="$(jq -r '.conclusion' <<<"$CANDIDATE")"
-            if [ "$CONCLUSION" = 'cancelled' ]; then
-              RID="$(jq -r '.id' <<<"$CANDIDATE")"
-              JOB_PAGES="$RUNNER_TEMP/cancelled-jobs-$RID-pages.json"
-              JOBS="$RUNNER_TEMP/cancelled-jobs-$RID.json"
-              ARTIFACTS="$RUNNER_TEMP/cancelled-artifacts-$RID.json"
-              MODEL_STAGE_STARTED='unknown'
-              READINESS_ARTIFACT_COUNT='unknown'
-              if gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/jobs?filter=all&per_page=100" > "$JOB_PAGES" \
-                && jq '[.[] | .jobs[]]' "$JOB_PAGES" > "$JOBS" \
-                && gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RID/artifacts?per_page=100" > "$ARTIFACTS"; then
-                MODEL_STAGE_STARTED="$(jq '[.[] | select((((.name | endswith("final-readiness-blind-pass"))) or ((.name | endswith("final-readiness-judge-pass")))) and .conclusion != "skipped" and .started_at != null)] | length' "$JOBS")"
-                READINESS_ARTIFACT_COUNT="$(jq '[.artifacts[] | select(.name | startswith("agent-final-readiness-"))] | length' "$ARTIFACTS")"
-              fi
-              if [ "$MODEL_STAGE_STARTED" = '0' ] && [ "$READINESS_ARTIFACT_COUNT" = '0' ]; then
-                echo "Ignoring cancelled carrier run $RID because no model-stage job or readiness artifact started."
-                continue
-              fi
-              if [ "$MODEL_STAGE_STARTED" = 'unknown' ] || [ "$READINESS_ARTIFACT_COUNT" = 'unknown' ]; then
-                echo "Could not verify cancelled carrier run $RID job/artifact history; treating it as a paid-relevant failure." >&2
-              else
-                echo "Cancelled carrier run $RID may have reached paid readiness work (model_stages=$MODEL_STAGE_STARTED artifacts=$READINESS_ARTIFACT_COUNT); treating it as a paid-relevant failure." >&2
-              fi
-            fi
-            LATEST_EFFECTIVE="$CANDIDATE"
-            break
-          done < <(tac "$RELEVANT")
-
-          if [ -n "$LATEST_EFFECTIVE" ] && [ "$(jq -r '.conclusion' <<<"$LATEST_EFFECTIVE")" != 'success' ]; then
-            FAILED_SHA="$(jq -r '.head_sha' <<<"$LATEST_EFFECTIVE")"
-            if [ "$FAILED_SHA" = "$CURRENT_SHA" ]; then
-              echo 'Most recent paid-relevant scheduled run failed on this exact commit; refusing a blind paid retry.' >&2
-              exit 1
-            fi
-            echo "failed_sha=$FAILED_SHA" >> "$GITHUB_OUTPUT"
-          fi
-
-          case "$SUCCESS_COUNT" in
-            0) SUITE='a' ;;
-            1) SUITE='b' ;;
-            2) SUITE='c' ;;
-            *) echo 'Unexpected successful evidence count.' >&2; exit 1 ;;
-          esac
-          echo 'execute=true' >> "$GITHUB_OUTPUT"
-          echo "suite=$SUITE" >> "$GITHUB_OUTPUT"
-
       - name: Checkout exact scheduled commit without persisted credentials
-        if: steps.select.outputs.execute == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      # History classification lives in agent_evals/readiness_history.py so it is
+      # behavior-tested (tests/test_readiness_history.py). It reads Actions history
+      # newest-first, counts only attempt-1 schedule successes with exactly one
+      # unexpired evidence artifact, ignores pre-model infrastructure failures in
+      # prepare, enforces the same-SHA paid-retry barrier, and fails closed on any
+      # ambiguity or API error.
+      - name: Select next suite from verified carrier history and enforce retry barrier
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python -m agent_evals.readiness_history select \
+            --repo "$GITHUB_REPOSITORY" \
+            --current-run-id "$CURRENT_RUN_ID" \
+            --current-sha "$CURRENT_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+
       - name: Require reviewed hardening change after a prior failed paid run
         if: steps.select.outputs.execute == 'true' && steps.select.outputs.failed_sha != ''
         env:
           FAILED_SHA: ${{ steps.select.outputs.failed_sha }}
+          FAILURE_KIND: ${{ steps.select.outputs.failure_kind }}
           CURRENT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           git cat-file -e "$FAILED_SHA^{commit}"
-          CHANGED="$RUNNER_TEMP/changed-after-failure.txt"
-          git diff --name-only "$FAILED_SHA" "$CURRENT_SHA" > "$CHANGED"
-          if ! grep -Eq '^(AGENTS\.md|\.github/copilot-instructions\.md|\.github/agents/|\.github/skills/|\.github/workflows/agent-final-readiness-core\.yml$|\.github/workflows/agent-operator\.yml$|agent_evals/|tests/test_agent_)' "$CHANGED"; then
-            echo 'Previous paid run failed and no relevant reviewed hardening/eval change exists; refusing retry.' >&2
-            cat "$CHANGED" >&2
-            exit 1
-          fi
-
-      - name: Set up Python
-        if: steps.select.outputs.execute == 'true'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.11'
+          python -m agent_evals.readiness_history hardening-gate \
+            --failed-sha "$FAILED_SHA" \
+            --current-sha "$CURRENT_SHA" \
+            --kind "$FAILURE_KIND"
 
       - name: Run deterministic readiness tests before model spend
         if: steps.select.outputs.execute == 'true'
@@ -228,6 +104,16 @@ jobs:
           RUBRIC_SHA="$(sha256sum "agent_evals/final_suite_${SUITE}_rubric.json" | cut -d' ' -f1)"
           echo "prompt_sha=$PROMPT_SHA" >> "$GITHUB_OUTPUT"
           echo "rubric_sha=$RUBRIC_SHA" >> "$GITHUB_OUTPUT"
+          # Bind evidence to the exact instruction inputs the blind model receives.
+          AGENTS_SHA="$(sha256sum "$RUNNER_TEMP/blind-input/AGENTS.md" | cut -d' ' -f1)"
+          COPILOT_SHA="$(sha256sum "$RUNNER_TEMP/blind-input/copilot-instructions.md" | cut -d' ' -f1)"
+          PROFILES_SHA="$(sha256sum "$RUNNER_TEMP/blind-input/team_profiles.json" | cut -d' ' -f1)"
+          test "$AGENTS_SHA" = "$(sha256sum AGENTS.md | cut -d' ' -f1)"
+          test "$COPILOT_SHA" = "$(sha256sum .github/copilot-instructions.md | cut -d' ' -f1)"
+          test "$PROFILES_SHA" = "$(sha256sum agent_evals/team_profiles.json | cut -d' ' -f1)"
+          echo "agents_md_sha256=$AGENTS_SHA" >> "$GITHUB_OUTPUT"
+          echo "copilot_instructions_sha256=$COPILOT_SHA" >> "$GITHUB_OUTPUT"
+          echo "team_profiles_sha256=$PROFILES_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Upload blind-only model input
         if: steps.select.outputs.execute == 'true'
@@ -499,6 +385,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CURRENT_RUN_ID: ${{ github.run_id }}
+          AGENTS_MD_SHA256: ${{ needs.prepare.outputs.agents_md_sha256 }}
+          COPILOT_INSTRUCTIONS_SHA256: ${{ needs.prepare.outputs.copilot_instructions_sha256 }}
+          TEAM_PROFILES_SHA256: ${{ needs.prepare.outputs.team_profiles_sha256 }}
         run: |
           set -euo pipefail
           RUN_PAGES="$RUNNER_TEMP/prior-carrier-success-pages.json"
@@ -521,7 +410,7 @@ jobs:
               echo "Run $RID has duplicate readiness evidence artifacts; refusing aggregation." >&2
               exit 1
             fi
-          done < <(jq -c '[.[] | select(.event == "schedule" and .conclusion == "success")] | sort_by(.created_at) | .[]' "$RUNS")
+          done < <(jq -c '[.[] | select(.event == "schedule" and .conclusion == "success" and .run_attempt == 1)] | sort_by(.created_at) | .[]' "$RUNS")
 
           mapfile -t IDS < "$VALID_IDS"
           test "${#IDS[@]}" -eq 2
@@ -565,9 +454,19 @@ jobs:
             python -m agent_evals.scheduled_readiness validate-blind --suite "$EXPECTED_SUITE" --file "$DEST/blind.json"
             python -m agent_evals.scheduled_readiness validate-judge --suite "$EXPECTED_SUITE" --blind "$DEST/blind.json" --judge "$DEST/judge.json"
             cp "$DEST/judge.json" "$RUNNER_TEMP/prior-${EXPECTED_SUITE}/judge.json"
+            cp "$DEST/metadata.json" "$RUNNER_TEMP/prior-${EXPECTED_SUITE}/metadata.json"
           done
           test -s "$RUNNER_TEMP/prior-a/judge.json"
           test -s "$RUNNER_TEMP/prior-b/judge.json"
+          # A, B and C must have been judged against identical blind instruction inputs.
+          jq -n \
+            --arg agents_md_sha256 "$AGENTS_MD_SHA256" \
+            --arg copilot_instructions_sha256 "$COPILOT_INSTRUCTIONS_SHA256" \
+            --arg team_profiles_sha256 "$TEAM_PROFILES_SHA256" \
+            '{agents_md_sha256:$agents_md_sha256,copilot_instructions_sha256:$copilot_instructions_sha256,team_profiles_sha256:$team_profiles_sha256}' \
+            > "$RUNNER_TEMP/current-instructions.json"
+          python -m agent_evals.scheduled_readiness verify-instruction-hashes \
+            --metadata "$RUNNER_TEMP/prior-a/metadata.json" "$RUNNER_TEMP/prior-b/metadata.json" "$RUNNER_TEMP/current-instructions.json"
           python -m agent_evals.scheduled_readiness aggregate \
             --a "$RUNNER_TEMP/prior-a/judge.json" \
             --b "$RUNNER_TEMP/prior-b/judge.json" \
@@ -581,6 +480,9 @@ jobs:
           RUBRIC_SHA: ${{ needs.prepare.outputs.rubric_sha }}
           BLIND_SHA: ${{ needs.blind-pass.outputs.blind_sha }}
           JUDGE_SHA: ${{ needs.judge-pass.outputs.judge_sha }}
+          AGENTS_MD_SHA256: ${{ needs.prepare.outputs.agents_md_sha256 }}
+          COPILOT_INSTRUCTIONS_SHA256: ${{ needs.prepare.outputs.copilot_instructions_sha256 }}
+          TEAM_PROFILES_SHA256: ${{ needs.prepare.outputs.team_profiles_sha256 }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/evidence"
@@ -606,9 +508,13 @@ jobs:
             --arg rubric_sha256 "$RUBRIC_SHA" \
             --arg blind_sha256 "$BLIND_SHA" \
             --arg judge_sha256 "$JUDGE_SHA" \
-            '{event:$event,repository:$repository,run_id:$run_id,run_attempt:$run_attempt,run_number:$run_number,commit_sha:$commit_sha,ref:$ref,workflow:$workflow,python_version:$python_version,suite:$suite,prompt_sha256:$prompt_sha256,rubric_sha256:$rubric_sha256,blind_sha256:$blind_sha256,judge_sha256:$judge_sha256,deterministic_validation:"passed"}' \
+            --arg agents_md_sha256 "$AGENTS_MD_SHA256" \
+            --arg copilot_instructions_sha256 "$COPILOT_INSTRUCTIONS_SHA256" \
+            --arg team_profiles_sha256 "$TEAM_PROFILES_SHA256" \
+            '{event:$event,repository:$repository,run_id:$run_id,run_attempt:$run_attempt,run_number:$run_number,commit_sha:$commit_sha,ref:$ref,workflow:$workflow,python_version:$python_version,suite:$suite,prompt_sha256:$prompt_sha256,rubric_sha256:$rubric_sha256,blind_sha256:$blind_sha256,judge_sha256:$judge_sha256,agents_md_sha256:$agents_md_sha256,copilot_instructions_sha256:$copilot_instructions_sha256,team_profiles_sha256:$team_profiles_sha256,deterministic_validation:"passed"}' \
             > "$RUNNER_TEMP/evidence/metadata.json"
           test "$(jq -r '.event' "$RUNNER_TEMP/evidence/metadata.json")" = 'schedule'
+          python -m agent_evals.scheduled_readiness verify-instruction-hashes --metadata "$RUNNER_TEMP/evidence/metadata.json"
           (cd "$RUNNER_TEMP/evidence" && sha256sum blind.json judge.json suite-report.json metadata.json > hashes.sha256)
           if [ -f "$RUNNER_TEMP/evidence/final-readiness-report.json" ]; then
             (cd "$RUNNER_TEMP/evidence" && sha256sum final-readiness-report.json >> hashes.sha256)

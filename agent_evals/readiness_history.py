@@ -1,50 +1,77 @@
-"""Deterministic scheduled-readiness history classification (evaluation infrastructure only).
+"""Deterministic scheduled-readiness history selection (evaluation infrastructure only).
 
-Pure functions over GitHub Actions API-shaped dictionaries. No network, no model
-calls, no repository mutation. Every ambiguity raises ``ReadinessHistoryError`` so
-callers fail closed instead of guessing.
+The final-readiness core calls this module from its ``prepare`` job to decide which
+suite (A, B, C) a genuine scheduled carrier run may attempt, and whether a prior
+paid-relevant failure blocks a blind retry. It reads GitHub Actions history only
+(through ``gh api``); it never calls a model, writes to GitHub, or mutates the repo.
 
-Semantics preserved from Issue #69: three successful attempt-1 evidence runs are
-required (A, B, C in order); a paid-relevant failure blocks a blind retry of the
-same SHA; unverifiable history refuses to advance.
+Semantics preserved from Issue #69:
+- only completed ``event=schedule`` carrier runs count, and only their attempt 1;
+- a run counts as a success only with exactly one unexpired
+  ``agent-final-readiness-evidence-<run_id>`` artifact; three successes stop all work;
+- the most recent paid-relevant failure blocks a blind retry on the same commit, and a
+  retry on a new commit requires a reviewed change of the right kind;
+- any ambiguity raises ``ReadinessHistoryError`` so the caller fails closed.
+
+Issue #87 changes:
+- H1: a prepare-stage failure before any model stage, confined to infrastructure
+  steps, is ``pre_model_failure`` and no longer becomes the latest paid failure.
+- H2: history is scanned newest-first and stops at three successes or at the first
+  run whose commit predates the readiness core; commit lookups are cached; an
+  explicit scan cap fails closed instead of guessing.
+- M1: a behavioral failure may only be unlocked by a change to the exact
+  instruction inputs the blind model sees; infrastructure repairs only unlock
+  infrastructure failures.
+- M3: a run whose latest attempt is not 1 can never count as a success; its
+  attempt-1 record still decides whether it was a paid failure.
 """
 from __future__ import annotations
 
+import argparse
+import json
 import re
-from typing import Callable
+import subprocess
+import sys
+from typing import Callable, Iterable, Iterator
 
 EVIDENCE_PREFIX = "agent-final-readiness-evidence-"
 BLIND_INPUT_PREFIX = "agent-final-readiness-blind-input-"
 READINESS_ARTIFACT_PREFIX = "agent-final-readiness-"
+CORE_PATH = ".github/workflows/agent-final-readiness-core.yml"
+CARRIER_WORKFLOW = "agent-operator.yml"
 REQUIRED_SUCCESSES = 3
 SUITE_BY_SUCCESS_COUNT = {0: "a", 1: "b", 2: "c"}
+MAX_RUNS_SCANNED = 1000
+SAME_SHA_REFUSAL = (
+    "Most recent paid-relevant scheduled run failed on this exact commit; refusing a blind paid retry."
+)
 
-# Prepare-stage steps whose failure proves nothing about agent behavior and
-# happens before any model spend (GitHub/API/runner infrastructure or fail-closed
-# history guards). Deterministic tests and bundle building are deliberately absent:
-# a failure there is a code/content defect, not transient infrastructure.
+# Prepare-job steps whose failure happens before any model spend and proves nothing
+# about agent behavior (runner/API/history plumbing or fail-closed guards).
+# Deterministic tests and blind-bundle building are deliberately absent: a failure
+# there is a content/code defect and stays paid-relevant.
 PRE_MODEL_INFRA_STEPS = frozenset({
     "Set up job",
-    "Select next suite from verified carrier history and enforce retry barrier",
+    "Refuse non-schedule provenance and reruns before any work",
     "Checkout exact scheduled commit without persisted credentials",
-    "Require reviewed hardening change after a prior failed paid run",
     "Set up Python",
-    "Upload blind-only model input",
+    "Select next suite from verified carrier history and enforce retry barrier",
+    "Require reviewed hardening change after a prior failed paid run",
 })
 THRESHOLD_FAILURE_STEP = "Fail closed when suite did not meet readiness threshold"
 
-# Reviewed-hardening gate. A behavioral (paid-relevant, threshold) failure may only
-# be unlocked by changes that can alter blind behavior. Cadence/workflow plumbing and
-# unrelated tests may not. Readiness-infrastructure repair paths unlock only
-# infrastructure-kind failures.
-BEHAVIOR_SHAPING_PATTERN = re.compile(
-    r"^(AGENTS\.md|\.github/copilot-instructions\.md|\.github/agents/|\.github/skills/|agent_evals/)"
+# The exact instruction files copied into the blind bundle
+# (agent_evals/scheduled_readiness.py build_blind_bundle). Only these can change what
+# the blind model sees, so only these unlock a retry after a behavioral failure.
+BLIND_INSTRUCTION_INPUTS = (
+    "AGENTS.md",
+    ".github/copilot-instructions.md",
+    "agent_evals/team_profiles.json",
 )
 INFRASTRUCTURE_REPAIR_PATTERN = re.compile(
-    r"^(\.github/workflows/agent-final-readiness-core\.yml$"
-    r"|\.github/workflows/agent-operator\.yml$"
-    r"|agent_evals/(scheduled_readiness|readiness_history)\.py$"
-    r"|tests/test_(agent_scheduled_readiness|readiness_)[A-Za-z0-9_]*\.py$)"
+    r"^(\.github/workflows/agent-final-readiness-core\.yml"
+    r"|agent_evals/scheduled_readiness\.py"
+    r"|agent_evals/readiness_history\.py)$"
 )
 
 
@@ -56,148 +83,314 @@ def _jobs_ending(jobs: list[dict], suffix: str) -> list[dict]:
     return [j for j in jobs if str(j.get("name", "")).endswith(suffix)]
 
 
+def _job_ran(job: dict) -> bool:
+    return job.get("conclusion") != "skipped" and job.get("started_at") is not None
+
+
 def model_stage_started(jobs: list[dict]) -> int:
-    count = 0
-    for job in jobs:
-        name = str(job.get("name", ""))
-        if (name.endswith("final-readiness-blind-pass") or name.endswith("final-readiness-judge-pass")) \
-                and job.get("conclusion") != "skipped" and job.get("started_at") is not None:
-            count += 1
-    return count
-
-
-def require_first_attempt(run: dict) -> None:
-    """Only attempt 1 may influence suite selection; anything else needs a human."""
-    if run.get("run_attempt") != 1:
-        raise ReadinessHistoryError(
-            f"run {run.get('id')} has run_attempt={run.get('run_attempt')!r}; "
-            "only run_attempt == 1 may influence suite selection (reruns are ambiguous)"
-        )
+    """Count blind/judge model jobs that actually started (skipped jobs never count)."""
+    return sum(
+        1
+        for job in jobs
+        if (str(job.get("name", "")).endswith("final-readiness-blind-pass")
+            or str(job.get("name", "")).endswith("final-readiness-judge-pass"))
+        and _job_ran(job)
+    )
 
 
 def failure_kind(jobs: list[dict]) -> str:
-    """'behavioral' only when the suite ran to threshold scoring and failed it.
+    """Classify a paid-relevant failure.
 
-    Anything unproven is reported as 'behavioral' (the stricter retry gate).
+    ``infrastructure`` only when a model-runtime job (blind pass, judge preparation,
+    judge pass) failed before deterministic recording ran. Everything else, including
+    a malformed or self-reviewing blind answer caught by ``validate-blind``, a
+    threshold failure, or anything unproven, is ``behavioral`` (the stricter gate).
     """
     for job in _jobs_ending(jobs, "final-readiness-validate-and-record"):
         for step in job.get("steps") or []:
             if step.get("name") == THRESHOLD_FAILURE_STEP and step.get("conclusion") == "failure":
                 return "behavioral"
-    record_ran = any(
-        j.get("conclusion") != "skipped" and j.get("started_at") is not None
-        for j in _jobs_ending(jobs, "final-readiness-validate-and-record")
+    if any(j.get("conclusion") == "failure" for j in _jobs_ending(jobs, "final-readiness-validate-blind")):
+        return "behavioral"
+    if any(_job_ran(j) for j in _jobs_ending(jobs, "final-readiness-validate-and-record")):
+        return "behavioral"
+    runtime_failed = any(
+        j.get("conclusion") in {"failure", "cancelled", "timed_out"}
+        for suffix in ("final-readiness-blind-pass", "final-readiness-prepare-judge", "final-readiness-judge-pass")
+        for j in _jobs_ending(jobs, suffix)
     )
-    if model_stage_started(jobs) and not record_ran:
-        return "infrastructure"
-    return "behavioral"
+    return "infrastructure" if runtime_failed else "behavioral"
 
 
 def _prepare_failed_only_in_infra_steps(prepare: dict) -> bool:
-    conclusion = prepare.get("conclusion")
-    if conclusion in {"cancelled", "timed_out"}:
-        return True
-    if conclusion != "failure":
+    if prepare.get("conclusion") != "failure":
         return False
     steps = prepare.get("steps")
     if not isinstance(steps, list) or not steps:
         return False  # cannot prove which step failed
-    failed = [s.get("name") for s in steps if s.get("conclusion") in {"failure", "timed_out"}]
+    failed = [s.get("name") for s in steps if s.get("conclusion") in {"failure", "timed_out", "cancelled"}]
     return bool(failed) and all(name in PRE_MODEL_INFRA_STEPS for name in failed)
 
 
-def classify_run(run: dict, jobs: list[dict], artifacts: list[dict]) -> str:
-    """Classify a completed, core-bearing schedule run.
+def classify_attempt(run_id: int, conclusion: str | None, jobs: list[dict], artifacts: list[dict]) -> str:
+    """Classify one completed attempt of a core-bearing carrier run.
 
-    Returns one of: 'ignore' (no readiness work), 'success', 'pre_model_failure',
-    'paid_relevant_failure'. Raises ReadinessHistoryError on ambiguity.
+    Returns ``ignore``, ``success``, ``success_missing_evidence``,
+    ``pre_model_failure`` or ``paid_relevant_failure``; raises on ambiguity.
     """
-    require_first_attempt(run)
-    rid = run["id"]
-    conclusion = run.get("conclusion")
     markers = _jobs_ending(jobs, "final-readiness-prepare")
     readiness_jobs = [j for j in jobs if "final-readiness" in str(j.get("name", ""))]
     started = model_stage_started(jobs)
-    readiness_artifacts = [a for a in artifacts if str(a.get("name", "")).startswith(READINESS_ARTIFACT_PREFIX)]
+    readiness_artifacts = [
+        a for a in artifacts if str(a.get("name", "")).startswith(READINESS_ARTIFACT_PREFIX)
+    ]
 
     if not markers and not readiness_jobs and not started and not readiness_artifacts and conclusion != "success":
         return "ignore"
     if len(markers) != 1:
-        raise ReadinessHistoryError(f"run {rid}: {len(markers)} prepare markers; ambiguous history")
+        raise ReadinessHistoryError(
+            f"carrier run {run_id} contains the readiness core but has {len(markers)} prepare markers; "
+            "refusing ambiguous history"
+        )
 
     if conclusion == "success":
-        expected = f"{EVIDENCE_PREFIX}{rid}"
+        expected = f"{EVIDENCE_PREFIX}{run_id}"
         valid = [a for a in artifacts if a.get("name") == expected and a.get("expired") is False]
         return "success" if len(valid) == 1 else "success_missing_evidence"
 
-    non_input_artifacts = [a for a in readiness_artifacts if not str(a.get("name", "")).startswith(BLIND_INPUT_PREFIX)]
-    if started == 0 and not non_input_artifacts and conclusion in {"failure", "cancelled", "timed_out"}:
-        if markers[0].get("conclusion") == "success":
-            # Prepare finished but no model stage ever started: only a cancellation is benign.
-            if conclusion == "cancelled":
-                return "pre_model_failure"
-        elif _prepare_failed_only_in_infra_steps(markers[0]):
+    if conclusion not in {"failure", "cancelled", "timed_out", "startup_failure"}:
+        raise ReadinessHistoryError(f"carrier run {run_id} has unexpected conclusion {conclusion!r}")
+
+    beyond_blind_input = [
+        a for a in readiness_artifacts if not str(a.get("name", "")).startswith(BLIND_INPUT_PREFIX)
+    ]
+    prepare = markers[0]
+    if started == 0 and not beyond_blind_input:
+        if conclusion == "cancelled" and prepare.get("conclusion") in {"success", "cancelled"}:
             return "pre_model_failure"
+        if prepare.get("conclusion") == "failure" and _prepare_failed_only_in_infra_steps(prepare):
+            if not readiness_artifacts:
+                return "pre_model_failure"
     return "paid_relevant_failure"
 
 
-def hardening_allows_retry(changed_paths: list[str], kind: str) -> bool:
-    """Deterministic reviewed-hardening decision for a retry after a paid-relevant failure."""
-    if kind not in {"behavioral", "infrastructure"}:
-        raise ReadinessHistoryError(f"unknown failure kind: {kind}")
-    if any(BEHAVIOR_SHAPING_PATTERN.match(p) and not INFRASTRUCTURE_REPAIR_PATTERN.match(p)
-           for p in changed_paths):
-        return True
-    if kind == "infrastructure":
-        return any(INFRASTRUCTURE_REPAIR_PATTERN.match(p) for p in changed_paths)
-    return False
+def classify_run(run: dict, details: dict) -> dict:
+    """Classify a completed, core-bearing schedule run using its attempt-1 record.
+
+    ``details`` holds ``jobs`` and ``artifacts`` for the run, plus ``attempt1`` (the
+    attempt-1 run object) and ``attempt1_jobs`` when the latest attempt is not 1.
+    """
+    run_id = run["id"]
+    attempt = run.get("run_attempt")
+    if attempt == 1:
+        status = classify_attempt(run_id, run.get("conclusion"), details["jobs"], details["artifacts"])
+        jobs = details["jobs"]
+    elif isinstance(attempt, int) and attempt > 1:
+        first = details.get("attempt1")
+        if not isinstance(first, dict) or first.get("run_attempt") != 1 or first.get("status") != "completed":
+            raise ReadinessHistoryError(f"carrier run {run_id}: attempt 1 record could not be verified")
+        jobs = details.get("attempt1_jobs")
+        if not isinstance(jobs, list):
+            raise ReadinessHistoryError(f"carrier run {run_id}: attempt 1 jobs could not be verified")
+        status = classify_attempt(run_id, first.get("conclusion"), jobs, details["artifacts"])
+        if status in {"success", "success_missing_evidence"}:
+            # A rerun makes provenance ambiguous: never count it, but it is not a failure.
+            status = "rerun_not_countable"
+    else:
+        raise ReadinessHistoryError(f"carrier run {run_id} has invalid run_attempt {attempt!r}")
+    result = {"run": run, "status": status}
+    if status == "paid_relevant_failure":
+        result["kind"] = failure_kind(jobs)
+    return result
 
 
 def select_suite(
-    runs: list[dict],
+    runs: Iterable[dict],
+    has_core: Callable[[str], bool],
     details: Callable[[dict], dict],
     current_run_id: int,
     current_sha: str,
-    window_complete: bool,
+    max_runs: int = MAX_RUNS_SCANNED,
 ) -> dict:
-    """Pick the next suite from a newest-first, possibly bounded run window.
+    """Choose the next suite from newest-first carrier history.
 
-    ``details(run)`` returns ``{'has_core': bool, 'jobs': [...], 'artifacts': [...]}``
-    and must raise on any API failure. Scanning stops at three successes, or at the
-    first run predating the readiness core (the migration boundary). If neither is
-    reached and the window was truncated, history is insufficient and we fail closed.
+    ``runs`` yields schedule runs newest-first (it may page lazily). ``has_core(sha)``
+    says whether that commit contains the readiness core. ``details(run)`` returns the
+    jobs/artifacts (and attempt-1 data for reruns). Both must raise on API failure.
     """
-    candidates = [r for r in runs if r.get("id") != current_run_id
-                  and r.get("event") == "schedule" and r.get("status") == "completed"]
-    candidates.sort(key=lambda r: r.get("created_at", ""), reverse=True)
     successes = 0
-    latest_failure: dict | None = None
-    boundary = False
-    for run in candidates:
-        info = details(run)
-        if not info.get("has_core"):
-            boundary = True
-            break
-        kind = classify_run(run, info["jobs"], info["artifacts"])
-        if kind in {"ignore", "pre_model_failure"}:
+    latest: dict | None = None
+    scanned = 0
+    for run in runs:
+        if run.get("id") == current_run_id or run.get("event") != "schedule" or run.get("status") != "completed":
             continue
-        if kind == "success_missing_evidence":
-            raise ReadinessHistoryError(f"run {run['id']}: success lacks exactly one valid evidence artifact")
-        if kind == "success":
+        scanned += 1
+        if scanned > max_runs:
+            raise ReadinessHistoryError(
+                f"scanned {max_runs} carrier runs without reaching three successes or the core migration "
+                "boundary; bounded history is insufficient"
+            )
+        if not has_core(run["head_sha"]):
+            # Migration boundary: this and every older carrier run predate the core.
+            break
+        result = classify_run(run, details(run))
+        status = result["status"]
+        if status in {"ignore", "pre_model_failure", "rerun_not_countable"}:
+            continue
+        if status == "success_missing_evidence":
+            raise ReadinessHistoryError(
+                f"A readiness-relevant successful carrier run {run['id']} lacks exactly one valid evidence "
+                "artifact; refusing to advance."
+            )
+        if latest is None:
+            latest = result
+        if status == "success":
             successes += 1
             if successes >= REQUIRED_SUCCESSES:
                 break
-            continue
-        if latest_failure is None and successes == 0:
-            latest_failure = {"run": run, "kind": failure_kind(info["jobs"])}
+
     if successes >= REQUIRED_SUCCESSES:
         return {"execute": False, "suite": "complete"}
-    if not window_complete and not boundary:
-        raise ReadinessHistoryError("bounded history window is insufficient to prove the A/B/C sequence")
-    if latest_failure is not None and latest_failure["run"]["head_sha"] == current_sha:
-        raise ReadinessHistoryError("most recent paid-relevant run failed on this exact commit; refusing blind retry")
-    result = {"execute": True, "suite": SUITE_BY_SUCCESS_COUNT[successes]}
-    if latest_failure is not None:
-        result["failed_sha"] = latest_failure["run"]["head_sha"]
-        result["failure_kind"] = latest_failure["kind"]
-    return result
+    selection = {"execute": True, "suite": SUITE_BY_SUCCESS_COUNT[successes]}
+    if latest is not None and latest["status"] == "paid_relevant_failure":
+        if latest["run"]["head_sha"] == current_sha:
+            raise ReadinessHistoryError(SAME_SHA_REFUSAL)
+        selection["failed_sha"] = latest["run"]["head_sha"]
+        selection["failure_kind"] = latest["kind"]
+    return selection
+
+
+def hardening_allows_retry(changed_paths: list[str], kind: str) -> bool:
+    """Reviewed-hardening decision for a retry after a paid-relevant failure."""
+    if kind not in {"behavioral", "infrastructure"}:
+        raise ReadinessHistoryError(f"unknown failure kind: {kind!r}")
+    if any(path in BLIND_INSTRUCTION_INPUTS for path in changed_paths):
+        return True
+    if kind == "infrastructure":
+        return any(INFRASTRUCTURE_REPAIR_PATTERN.match(path) for path in changed_paths)
+    return False
+
+
+# --- GitHub access (read-only, via the gh CLI and the job's read-only token) ---
+
+def _gh_json(path: str, paginate: bool = False):
+    cmd = ["gh", "api"]
+    if paginate:
+        cmd += ["--paginate", "--slurp"]
+    cmd.append(path)
+    proc = subprocess.run(cmd, text=True, capture_output=True)
+    if proc.returncode != 0:
+        raise ReadinessHistoryError(f"GitHub API request failed for {path}: {proc.stderr.strip()[:500]}")
+    return json.loads(proc.stdout)
+
+
+def _gh_exists(path: str) -> bool:
+    proc = subprocess.run(["gh", "api", path], text=True, capture_output=True)
+    if proc.returncode == 0:
+        return True
+    if "HTTP 404" in proc.stderr:
+        return False
+    raise ReadinessHistoryError(f"could not verify {path}: {proc.stderr.strip()[:500]}")
+
+
+def _iter_schedule_runs(repo: str) -> Iterator[dict]:
+    page = 1
+    while True:
+        data = _gh_json(f"/repos/{repo}/actions/workflows/{CARRIER_WORKFLOW}/runs?event=schedule&per_page=100&page={page}")
+        runs = data.get("workflow_runs")
+        if not isinstance(runs, list):
+            raise ReadinessHistoryError("carrier run listing is malformed")
+        yield from runs
+        if len(runs) < 100:
+            return
+        page += 1
+
+
+def _flatten(pages, key: str) -> list[dict]:
+    if not isinstance(pages, list):
+        raise ReadinessHistoryError(f"paginated {key} listing is malformed")
+    out: list[dict] = []
+    for page in pages:
+        items = page.get(key) if isinstance(page, dict) else None
+        if not isinstance(items, list):
+            raise ReadinessHistoryError(f"paginated {key} listing is malformed")
+        out.extend(items)
+    return out
+
+
+def github_select(repo: str, current_run_id: int, current_sha: str) -> dict:
+    core_cache: dict[str, bool] = {}
+
+    def has_core(sha: str) -> bool:
+        if sha not in core_cache:
+            core_cache[sha] = _gh_exists(f"/repos/{repo}/contents/{CORE_PATH}?ref={sha}")
+        return core_cache[sha]
+
+    def details(run: dict) -> dict:
+        rid = run["id"]
+        info = {
+            "jobs": _flatten(_gh_json(f"/repos/{repo}/actions/runs/{rid}/jobs?filter=all&per_page=100", paginate=True), "jobs"),
+            "artifacts": _flatten(_gh_json(f"/repos/{repo}/actions/runs/{rid}/artifacts?per_page=100", paginate=True), "artifacts"),
+        }
+        if run.get("run_attempt") != 1:
+            info["attempt1"] = _gh_json(f"/repos/{repo}/actions/runs/{rid}/attempts/1")
+            info["attempt1_jobs"] = _flatten(
+                _gh_json(f"/repos/{repo}/actions/runs/{rid}/attempts/1/jobs?per_page=100", paginate=True), "jobs"
+            )
+        return info
+
+    return select_suite(_iter_schedule_runs(repo), has_core, details, current_run_id, current_sha)
+
+
+def _changed_paths(failed_sha: str, current_sha: str) -> list[str]:
+    proc = subprocess.run(
+        ["git", "diff", "--name-only", failed_sha, current_sha], text=True, capture_output=True
+    )
+    if proc.returncode != 0:
+        raise ReadinessHistoryError(f"could not diff {failed_sha}..{current_sha}: {proc.stderr.strip()[:500]}")
+    return [line for line in proc.stdout.splitlines() if line]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("select")
+    p.add_argument("--repo", required=True)
+    p.add_argument("--current-run-id", type=int, required=True)
+    p.add_argument("--current-sha", required=True)
+    p.add_argument("--github-output", required=True)
+    p = sub.add_parser("hardening-gate")
+    p.add_argument("--failed-sha", required=True)
+    p.add_argument("--current-sha", required=True)
+    p.add_argument("--kind", required=True)
+    args = parser.parse_args(argv)
+
+    try:
+        if args.command == "select":
+            selection = github_select(args.repo, args.current_run_id, args.current_sha)
+            lines = [f"execute={'true' if selection['execute'] else 'false'}", f"suite={selection['suite']}"]
+            if "failed_sha" in selection:
+                lines.append(f"failed_sha={selection['failed_sha']}")
+                lines.append(f"failure_kind={selection['failure_kind']}")
+            with open(args.github_output, "a", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+            print(json.dumps(selection, sort_keys=True))
+        else:
+            changed = _changed_paths(args.failed_sha, args.current_sha)
+            if not hardening_allows_retry(changed, args.kind):
+                print(
+                    f"Previous paid run failed ({args.kind}) and no qualifying reviewed hardening change exists; "
+                    "refusing retry.",
+                    file=sys.stderr,
+                )
+                print("\n".join(changed), file=sys.stderr)
+                return 1
+            print(f"Reviewed {args.kind} hardening change found; retry allowed.")
+    except ReadinessHistoryError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

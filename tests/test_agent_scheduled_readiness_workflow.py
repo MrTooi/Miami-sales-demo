@@ -128,145 +128,47 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(f"name: {name}", data)
 
-    def test_suffix_prepare_marker_jq_filter_does_not_match_prepare_judge(self):
-        jq = shutil.which("jq")
-        self.assertIsNotNone(jq, "jq is required by the readiness workflow and its regression test")
-        expression = '[.[] | select(.name | endswith("final-readiness-prepare"))] | length'
-        for caller_prefix in ("final-readiness / ", "carrier-job / ", ""):
-            with self.subTest(prefix=caller_prefix):
-                jobs = [
-                    {"name": caller_prefix + name, "started_at": "2026-10-16T00:00:00Z", "conclusion": "success"}
-                    for name in (
-                        "final-readiness-prepare",
-                        "final-readiness-blind-pass",
-                        "final-readiness-validate-blind",
-                        "final-readiness-prepare-judge",
-                        "final-readiness-judge-pass",
-                        "final-readiness-validate-and-record",
-                    )
-                ]
-                result = subprocess.run(
-                    [jq, expression],
-                    input=json.dumps(jobs),
-                    text=True,
-                    capture_output=True,
-                    check=True,
-                )
-                self.assertEqual(result.stdout.strip(), "1")
+    def test_history_selection_is_delegated_to_behavior_tested_module(self):
+        # The previous inline shell classifier is now agent_evals/readiness_history.py;
+        # its fixtures are executed in tests/test_readiness_history.py.
         prepare = job_block("prepare", "blind-pass")
-        self.assertIn(expression, prepare)
-        self.assertNotIn('contains("final-readiness-prepare")', prepare)
+        self.assertIn("python -m agent_evals.readiness_history select", prepare)
+        self.assertIn('--current-run-id "$CURRENT_RUN_ID"', prepare)
+        self.assertIn('--current-sha "$CURRENT_SHA"', prepare)
+        self.assertIn('--github-output "$GITHUB_OUTPUT"', prepare)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", prepare)
+        self.assertNotIn("gh api", prepare, "history must not be re-implemented inline")
+        refuse = prepare.index("Refuse non-schedule provenance and reruns before any work")
+        checkout = prepare.index("Checkout exact scheduled commit without persisted credentials")
+        setup = prepare.index("actions/setup-python@")
+        select = prepare.index("Select next suite from verified carrier history and enforce retry barrier")
+        gate = prepare.index("Require reviewed hardening change after a prior failed paid run")
+        tests = prepare.index("Run deterministic readiness tests before model spend")
+        bundle = prepare.index("Build blind-only input and freeze current suite hashes")
+        self.assertLess(refuse, checkout)
+        self.assertLess(checkout, setup)
+        self.assertLess(setup, select)
+        self.assertLess(select, gate)
+        self.assertLess(gate, tests)
+        self.assertLess(tests, bundle)
 
-    def test_zero_marker_case_is_handled_before_marker_fail_closed(self):
+    def test_prepare_step_names_match_pre_model_infrastructure_classification(self):
+        from agent_evals import readiness_history as rh
+
         prepare = job_block("prepare", "blind-pass")
-        zero_marker = (
-            "if [ \"$MARKERS\" = '0' ] && [ \"$READINESS_JOB_COUNT\" = '0' ] && "
-            "[ \"$MODEL_STAGE_STARTED\" = '0' ] && [ \"$READINESS_ARTIFACT_COUNT\" = '0' ] && "
-            "[ \"$CONCLUSION\" != 'success' ]; then"
+        names = re.findall(r"^      - name: (.+)$", prepare, re.M)
+        for step in rh.PRE_MODEL_INFRA_STEPS - {"Set up job"}:
+            self.assertIn(step, names, "pre-model step list must match real prepare step names")
+        for paid in ("Run deterministic readiness tests before model spend",
+                     "Build blind-only input and freeze current suite hashes",
+                     "Upload blind-only model input"):
+            self.assertIn(paid, names)
+            self.assertNotIn(paid, rh.PRE_MODEL_INFRA_STEPS)
+        self.assertEqual(
+            rh.THRESHOLD_FAILURE_STEP,
+            "Fail closed when suite did not meet readiness threshold",
         )
-        marker_fail = "if [ \"$MARKERS\" != '1' ]; then"
-        self.assertIn(zero_marker, prepare)
-        self.assertIn(marker_fail, prepare)
-        self.assertLess(prepare.index(zero_marker), prepare.index(marker_fail))
-        self.assertIn("because no readiness job, model stage, or readiness artifact exists.", prepare)
-        self.assertIn('.conclusion != "skipped"', prepare)
-        self.assertIn('contains("final-readiness")', prepare)
-        self.assertIn('startswith("agent-final-readiness-")', prepare)
-
-    def _classify_history_run(self, conclusion, jobs, artifacts=()):
-        """Run the workflow's real classification shell block against a fixture."""
-        jq = shutil.which("jq")
-        bash = shutil.which("bash")
-        self.assertIsNotNone(jq, "jq is required")
-        self.assertIsNotNone(bash, "bash is required")
-        prepare = job_block("prepare", "blind-pass")
-        start = prepare.index('MARKERS="$(jq')
-        end = prepare.index("printf '%s\\n' \"$CANDIDATE\" >> \"$RELEVANT\"")
-        snippet = "\n".join(line.strip() for line in prepare[start:end].splitlines())
-        script = f'for _ in 1; do\n{snippet}\necho RELEVANT\ndone\n'
-        import os
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            jobs_path = Path(tmp) / "jobs.json"
-            artifacts_path = Path(tmp) / "artifacts.json"
-            jobs_path.write_text(json.dumps(jobs), encoding="utf-8")
-            artifacts_path.write_text(
-                json.dumps({"artifacts": [{"name": n} for n in artifacts]}), encoding="utf-8"
-            )
-            env = dict(
-                os.environ,
-                JOBS=str(jobs_path),
-                ARTIFACTS=str(artifacts_path),
-                CONCLUSION=conclusion,
-                RID="1",
-            )
-            result = subprocess.run(
-                [bash, "-c", script], env=env, text=True, capture_output=True
-            )
-        if result.returncode != 0:
-            return "fail-closed"
-        return "relevant" if "RELEVANT" in result.stdout else "ignored"
-
-    def test_history_classification_fixtures_for_zero_marker_runs(self):
-        started = "2026-10-16T00:00:00Z"
-        for conclusion in ("startup_failure", "failure", "cancelled"):
-            with self.subTest(conclusion=conclusion, case="no jobs, no artifacts"):
-                self.assertEqual(self._classify_history_run(conclusion, []), "ignored")
-        self.assertEqual(self._classify_history_run("success", []), "fail-closed")
-        # Unrelated artifacts do not block ignoring.
-        self.assertEqual(self._classify_history_run("failure", [], ["unrelated"]), "ignored")
-
-        for prefix in ("final-readiness / final-readiness-", "other-caller / final-readiness-"):
-            # A started blind/judge stage fails closed under any caller prefix.
-            for conclusion in ("success", "failure", "cancelled", "startup_failure", "timed_out"):
-                for stage in ("blind-pass", "judge-pass"):
-                    with self.subTest(prefix=prefix, conclusion=conclusion, started=stage):
-                        jobs = [{"name": prefix + stage, "conclusion": "failure", "started_at": started}]
-                        self.assertEqual(self._classify_history_run(conclusion, jobs), "fail-closed")
-
-            # A skipped model stage is not paid-stage evidence, but it is still a
-            # readiness-named job, so a zero-marker run is not ignored either.
-            skipped = [{"name": prefix + "blind-pass", "conclusion": "skipped", "started_at": started}]
-            for conclusion in ("cancelled", "failure", "success"):
-                with self.subTest(prefix=prefix, conclusion=conclusion, case="skipped only"):
-                    self.assertEqual(self._classify_history_run(conclusion, skipped), "fail-closed")
-
-            # Exactly one prepare marker is relevant; duplicates fail closed.
-            one = [{"name": prefix + "prepare", "conclusion": "success", "started_at": started}]
-            self.assertEqual(self._classify_history_run("success", one), "relevant")
-            self.assertEqual(self._classify_history_run("failure", one), "relevant")
-            self.assertEqual(self._classify_history_run("failure", one + one), "fail-closed")
-
-        # A readiness-named job with an unexpected name shape fails closed.
-        odd = [{"name": "weird / final-readiness-prepare-v2", "conclusion": "failure", "started_at": started}]
-        for conclusion in ("startup_failure", "failure", "cancelled"):
-            self.assertEqual(self._classify_history_run(conclusion, odd), "fail-closed")
-
-        # Any readiness artifact, even with no recognised jobs, fails closed.
-        for conclusion in ("startup_failure", "failure", "cancelled"):
-            for artifact in ("agent-final-readiness-blind-input-1", "agent-final-readiness-evidence-1"):
-                with self.subTest(conclusion=conclusion, artifact=artifact):
-                    self.assertEqual(self._classify_history_run(conclusion, [], [artifact]), "fail-closed")
-
-    def test_skipped_model_stage_is_not_counted_as_started(self):
-        jq = shutil.which("jq")
-        self.assertIsNotNone(jq, "jq is required")
-        expression = next(
-            line.split("'")[1]
-            for line in job_block("prepare", "blind-pass").splitlines()
-            if line.strip().startswith("MODEL_STAGE_STARTED=\"$(jq")
-        )
-        for prefix in ("final-readiness / ", "other-caller / "):
-            jobs = [
-                {"name": prefix + "final-readiness-blind-pass", "conclusion": "skipped", "started_at": "2026-10-16T00:00:00Z"},
-                {"name": prefix + "final-readiness-judge-pass", "conclusion": "skipped", "started_at": None},
-            ]
-            out = subprocess.run([jq, expression], input=json.dumps(jobs), text=True, capture_output=True, check=True)
-            self.assertEqual(out.stdout.strip(), "0")
-            jobs[0]["conclusion"] = "failure"
-            out = subprocess.run([jq, expression], input=json.dumps(jobs), text=True, capture_output=True, check=True)
-            self.assertEqual(out.stdout.strip(), "1")
+        self.assertIn(f"name: {rh.THRESHOLD_FAILURE_STEP}", job_block("validate-and-record"))
 
     def test_prepare_creates_only_blind_input_before_validation(self):
         prepare = job_block("prepare", "blind-pass")
@@ -326,54 +228,54 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
         self.assertIn("sha256sum -c hashes.sha256", final)
 
     def test_history_uses_registered_carrier_and_excludes_pre_migration_operator_runs(self):
-        prepare = job_block("prepare", "blind-pass")
-        self.assertIn("/actions/workflows/agent-operator.yml/runs?event=schedule", prepare)
-        self.assertIn("contents/.github/workflows/agent-final-readiness-core.yml?ref=$SHA", prepare)
-        self.assertIn("if grep -q 'HTTP 404'", prepare)
-        self.assertIn("continue", prepare)
-        self.assertIn('select(.name | endswith("final-readiness-prepare"))', prepare)
-        self.assertIn("MARKERS", prepare)
-        self.assertIn("refusing ambiguous history", prepare)
+        from agent_evals import readiness_history as rh
+
+        source = (ROOT / "agent_evals/readiness_history.py").read_text(encoding="utf-8")
+        self.assertEqual(rh.CARRIER_WORKFLOW, "agent-operator.yml")
+        self.assertEqual(rh.CORE_PATH, ".github/workflows/agent-final-readiness-core.yml")
+        self.assertIn("/actions/workflows/{CARRIER_WORKFLOW}/runs?event=schedule", source)
+        self.assertIn("/contents/{CORE_PATH}?ref={sha}", source)
+        self.assertIn('"HTTP 404" in proc.stderr', source)
+        self.assertIn("refusing ambiguous history", source)
 
     def test_success_progression_requires_real_evidence_artifact(self):
-        prepare = job_block("prepare", "blind-pass")
-        self.assertIn("agent-final-readiness-evidence-$RID", prepare)
-        self.assertIn(".expired == false", prepare)
-        self.assertIn("SUCCESS_COUNT", prepare)
-        self.assertIn("MISSING_SUCCESS_EVIDENCE", prepare)
-        self.assertIn("successful carrier run lacks exactly one valid evidence artifact", prepare)
-        self.assertIn("0) SUITE='a' ;;", prepare)
-        self.assertIn("1) SUITE='b' ;;", prepare)
-        self.assertIn("2) SUITE='c' ;;", prepare)
-        self.assertIn("Three successful scheduled evidence runs already exist", prepare)
+        from agent_evals import readiness_history as rh
 
-    def test_cancelled_attempts_are_ignored_only_when_no_model_job_or_artifact_started(self):
-        prepare = job_block("prepare", "blind-pass")
-        self.assertIn("MODEL_STAGE_STARTED='unknown'", prepare)
-        self.assertIn("READINESS_ARTIFACT_COUNT='unknown'", prepare)
-        self.assertIn('endswith("final-readiness-blind-pass")', prepare)
-        self.assertIn('endswith("final-readiness-judge-pass")', prepare)
-        self.assertIn(".started_at != null", prepare)
-        self.assertIn('.conclusion != "skipped"', prepare)
-        ignore = "if [ \"$MODEL_STAGE_STARTED\" = '0' ] && [ \"$READINESS_ARTIFACT_COUNT\" = '0' ]; then"
-        unknown = "if [ \"$MODEL_STAGE_STARTED\" = 'unknown' ] || [ \"$READINESS_ARTIFACT_COUNT\" = 'unknown' ]; then"
-        self.assertIn(ignore, prepare)
-        self.assertIn(unknown, prepare)
-        self.assertLess(prepare.index(ignore), prepare.index(unknown))
-        self.assertIn("Ignoring cancelled carrier run $RID because no model-stage job or readiness artifact started.", prepare)
-        self.assertIn("Could not verify cancelled carrier run $RID job/artifact history; treating it as a paid-relevant failure.", prepare)
-        self.assertIn("may have reached paid readiness work", prepare)
+        self.assertEqual(rh.EVIDENCE_PREFIX, "agent-final-readiness-evidence-")
+        self.assertEqual(rh.REQUIRED_SUCCESSES, 3)
+        self.assertEqual(rh.SUITE_BY_SUCCESS_COUNT, {0: "a", 1: "b", 2: "c"})
+        source = (ROOT / "agent_evals/readiness_history.py").read_text(encoding="utf-8")
+        self.assertIn('a.get("expired") is False', source)
+        self.assertIn("lacks exactly one valid evidence", source)
 
     def test_same_sha_retry_barrier_and_reviewed_change_gate_remain(self):
+        from agent_evals import readiness_history as rh
+
         prepare = job_block("prepare", "blind-pass")
-        self.assertIn("Most recent paid-relevant scheduled run failed on this exact commit; refusing a blind paid retry.", prepare)
+        self.assertEqual(
+            rh.SAME_SHA_REFUSAL,
+            "Most recent paid-relevant scheduled run failed on this exact commit; refusing a blind paid retry.",
+        )
         self.assertIn("Require reviewed hardening change after a prior failed paid run", prepare)
-        self.assertIn("agent-final-readiness-core\\.yml", prepare)
-        self.assertIn("agent-operator\\.yml", prepare)
+        self.assertIn("if: steps.select.outputs.execute == 'true' && steps.select.outputs.failed_sha != ''", prepare)
+        self.assertIn("python -m agent_evals.readiness_history hardening-gate", prepare)
+        self.assertIn('--kind "$FAILURE_KIND"', prepare)
+        self.assertIn("FAILURE_KIND: ${{ steps.select.outputs.failure_kind }}", prepare)
+        self.assertIn('git cat-file -e "$FAILED_SHA^{commit}"', prepare)
+        # Cadence-only carrier edits and unrelated tests can no longer unlock a paid retry.
+        self.assertFalse(rh.hardening_allows_retry([".github/workflows/agent-operator.yml"], "behavioral"))
+        self.assertFalse(rh.hardening_allows_retry([".github/workflows/agent-operator.yml"], "infrastructure"))
 
     def test_suite_c_finds_only_prior_valid_carrier_evidence_and_revalidates_it(self):
         final = job_block("validate-and-record")
         self.assertIn("/actions/workflows/agent-operator.yml/runs?event=schedule&status=success", final)
+        self.assertIn(
+            'select(.event == "schedule" and .conclusion == "success" and .run_attempt == 1)', final,
+            "reruns must never be selected as prior A/B evidence",
+        )
+        self.assertIn("python -m agent_evals.scheduled_readiness verify-instruction-hashes", final)
+        self.assertIn('"$RUNNER_TEMP/prior-a/metadata.json" "$RUNNER_TEMP/prior-b/metadata.json" "$RUNNER_TEMP/current-instructions.json"', final)
+        self.assertNotIn("--allow-mixed", core_text())
         self.assertIn("agent-final-readiness-evidence-$RID", final)
         self.assertIn("mapfile -t IDS", final)
         self.assertIn('test "${#IDS[@]}" -eq 2', final)
@@ -457,10 +359,26 @@ class ScheduledReadinessWorkflowTests(unittest.TestCase):
             "rubric_sha256",
             "blind_sha256",
             "judge_sha256",
+            "agents_md_sha256",
+            "copilot_instructions_sha256",
+            "team_profiles_sha256",
             "deterministic_validation",
         ):
             self.assertIn(key, final)
         self.assertIn("test \"$(jq -r '.event' \"$RUNNER_TEMP/evidence/metadata.json\")\" = 'schedule'", final)
+        self.assertIn('verify-instruction-hashes --metadata "$RUNNER_TEMP/evidence/metadata.json"', final)
+
+    def test_instruction_hashes_are_taken_from_the_exact_blind_bundle_inputs(self):
+        prepare = job_block("prepare", "blind-pass")
+        for out in ("agents_md_sha256", "copilot_instructions_sha256", "team_profiles_sha256"):
+            self.assertIn(f"{out}: ${{{{ steps.bundle.outputs.{out} }}}}", prepare)
+        for bundled, repo in (
+            ("blind-input/AGENTS.md", "AGENTS.md"),
+            ("blind-input/copilot-instructions.md", ".github/copilot-instructions.md"),
+            ("blind-input/team_profiles.json", "agent_evals/team_profiles.json"),
+        ):
+            self.assertIn(f'sha256sum "$RUNNER_TEMP/{bundled}"', prepare)
+            self.assertIn(f"sha256sum {repo} |", prepare)
 
 
 if __name__ == "__main__":
