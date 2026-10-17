@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '17,47 * * * *'
+    - cron: '2,7,12,22,27,32,37,42,52,57 * * * *'
 
 permissions:
   actions: read
