@@ -67,6 +67,27 @@ def next_slot(now: datetime, minutes: list[int] | None) -> datetime | None:
     return min(later) if later else None
 
 
+def latest_run_display(latest_run: dict | None) -> tuple[str, str, str]:
+    """(value, tone, note) for any 'latest scheduled run' status shown to the owner.
+
+    Only an attempt-1 run may show its own conclusion. A rerun (or a run whose attempt
+    is unknown) shows RERUN / CHECK so a manual re-run can never display SUCCESS as
+    schedule health. Tone is never "ok": a historical run says nothing about the
+    current slot.
+    """
+    if not latest_run:
+        return "UNKNOWN", "warn", "No Operator schedule event is visible in the current API window."
+    attempt = latest_run.get("run_attempt")
+    if attempt != 1:
+        return (
+            "RERUN / CHECK",
+            "warn",
+            f"Attempt {attempt!r}: a manual rerun or unknown attempt is not schedule-health evidence.",
+        )
+    state = str(latest_run.get("conclusion") or latest_run.get("status") or "unknown").lower()
+    return state.upper(), ("info" if state == "success" else "warn"), "Attempt 1."
+
+
 def classify_schedule_slot(
     *,
     now: datetime,
@@ -90,8 +111,11 @@ def classify_schedule_slot(
     if created is not None and created >= expected_slot:
         status = str(latest_run.get("status") or "").lower()
         conclusion = str(latest_run.get("conclusion") or "").lower()
-        if latest_run.get("run_attempt", 1) != 1:
-            return "CHECK", "The latest scheduled Operator run was re-run manually; a rerun is not evidence of schedule health."
+        if latest_run.get("run_attempt") != 1:
+            return "CHECK", (
+                f"The latest scheduled Operator run is attempt {latest_run.get('run_attempt')!r}, not an attempt-1 "
+                "schedule delivery; a rerun or unknown attempt is not evidence of schedule health."
+            )
         if status == "completed" and conclusion == "success":
             return "ON TRACK", (
                 "A scheduled Operator run created since the last expected slot completed successfully. "

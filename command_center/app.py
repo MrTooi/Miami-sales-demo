@@ -24,7 +24,7 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[1])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from command_center.status_logic import next_slot, parse_cron_minutes  # noqa: E402
+from command_center.status_logic import latest_run_display, next_slot, parse_cron_minutes  # noqa: E402
 
 REPO = "MrTooi/Miami-sales-demo"
 API = "https://api.github.com"
@@ -248,16 +248,13 @@ with cols[2]:
         card("Next Operator Slot", "UNKNOWN", "Current cron could not be parsed from main; no fallback time is invented.", "warn")
 
 with cols[3]:
+    run_value, run_tone, run_note = latest_run_display(latest_operator)
     if latest_operator:
-        state = latest_operator.get("conclusion") or latest_operator.get("status") or "unknown"
-        card(
-            "Latest Scheduled Run",
-            state.upper(),
-            f"#{latest_operator.get('run_number')} · {age(latest_operator.get('created_at'))} · SHA {short_sha(latest_operator.get('head_sha'))}",
-            "info" if state == "success" else "warn",
+        run_note = (
+            f"#{latest_operator.get('run_number')} · {age(latest_operator.get('created_at'))} · "
+            f"SHA {short_sha(latest_operator.get('head_sha'))} · {run_note}"
         )
-    else:
-        card("Latest Scheduled Run", "UNKNOWN", "No Operator schedule event is visible in the current API window.", "warn")
+    card("Latest Scheduled Run", run_value, run_note, run_tone)
 
 st.markdown("---")
 st.subheader("AI Team Readiness")

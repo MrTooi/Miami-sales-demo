@@ -15,6 +15,7 @@ class CommandCenterStatusLogicTests(unittest.TestCase):
             "created_at": created.isoformat().replace("+00:00", "Z"),
             "status": status,
             "conclusion": conclusion,
+            "run_attempt": 1,
         }
 
     def test_successful_completed_current_slot_is_on_track(self):

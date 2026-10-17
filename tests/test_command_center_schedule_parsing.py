@@ -83,7 +83,51 @@ class RerunIsNotScheduleHealthTests(unittest.TestCase):
         state, note = classify_schedule_slot(now=slot, expected_slot=slot, latest_run=dict(base, run_attempt=2),
                                              runs_error=False)
         self.assertEqual(state, "CHECK")
-        self.assertIn("re-run", note)
+        self.assertIn("rerun", note)
+
+
+class LatestRunDisplayTests(unittest.TestCase):
+    def test_rerun_or_unknown_attempt_never_displays_success(self):
+        from command_center.status_logic import latest_run_display
+
+        base = {"status": "completed", "conclusion": "success"}
+        for attempt in (2, 3, None, "1", 0):
+            with self.subTest(attempt=attempt):
+                value, tone, note = latest_run_display(dict(base, run_attempt=attempt))
+                self.assertEqual(value, "RERUN / CHECK")
+                self.assertEqual(tone, "warn")
+                self.assertIn(repr(attempt), note)
+        value, tone, _ = latest_run_display(dict(base, run_attempt=1))
+        self.assertEqual((value, tone), ("SUCCESS", "info"))
+        value, tone, _ = latest_run_display(dict(base, conclusion="failure", run_attempt=1))
+        self.assertEqual((value, tone), ("FAILURE", "warn"))
+        self.assertEqual(latest_run_display(None)[:2], ("UNKNOWN", "warn"))
+
+    def test_display_tone_is_never_green(self):
+        from command_center.status_logic import latest_run_display
+
+        for run in (None, {"run_attempt": 1, "status": "completed", "conclusion": "success"},
+                    {"run_attempt": 2, "status": "completed", "conclusion": "success"}):
+            self.assertNotEqual(latest_run_display(run)[1], "ok")
+
+    def test_missing_attempt_in_current_slot_is_check(self):
+        from command_center.status_logic import classify_schedule_slot
+
+        slot = datetime(2026, 10, 17, 1, 17, tzinfo=timezone.utc)
+        run = {"created_at": "2026-10-17T01:18:00Z", "status": "completed", "conclusion": "success"}
+        self.assertEqual(classify_schedule_slot(now=slot, expected_slot=slot, latest_run=run, runs_error=False)[0],
+                         "CHECK")
+
+    def test_both_pages_render_latest_run_only_through_the_shared_helper(self):
+        app = (ROOT / "command_center/app.py").read_text(encoding="utf-8")
+        page = (ROOT / "command_center/pages/1_Project_Map.py").read_text(encoding="utf-8")
+        self.assertIn("latest_run_display(latest_operator)", app)
+        self.assertIn('card("Latest Scheduled Run", run_value, run_note, run_tone)', app)
+        self.assertIn("latest_run_display(latest_operator)", page)
+        self.assertIn('c4.metric("Latest schedule", latest_value', page)
+        for source in (app, page):
+            self.assertNotIn('latest_operator.get("conclusion")', source)
+            self.assertNotIn('(latest_operator or {}).get("conclusion")', source)
 
 
 class PagesUseSharedParserTests(unittest.TestCase):
