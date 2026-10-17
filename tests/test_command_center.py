@@ -21,14 +21,15 @@ class CommandCenterTests(unittest.TestCase):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
-            is_request = isinstance(func, ast.Attribute) and func.attr == "Request"
-            is_urlopen = isinstance(func, ast.Attribute) and func.attr == "urlopen"
-            if is_request:
-                keyword_names = {kw.arg for kw in node.keywords if kw.arg}
+            name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else None
+            keyword_names = {kw.arg for kw in node.keywords if kw.arg}
+            if name == "Request":
+                # Request(url, data, ...) or data=/method= would make a write request.
+                self.assertLessEqual(len(node.args), 1, "Request() must not receive a positional body")
                 self.assertNotIn("data", keyword_names)
                 self.assertNotIn("method", keyword_names)
-            if is_urlopen:
-                keyword_names = {kw.arg for kw in node.keywords if kw.arg}
+            if name == "urlopen":
+                self.assertLessEqual(len(node.args), 1, "urlopen() must not receive a positional body")
                 self.assertNotIn("data", keyword_names)
         for method in ("POST", "PUT", "PATCH", "DELETE"):
             self.assertNotIn(method, self.source)

@@ -71,6 +71,21 @@ class SlotTests(unittest.TestCase):
         self.assertIsNone(next_slot(self.at(1, 25), []))
 
 
+class RerunIsNotScheduleHealthTests(unittest.TestCase):
+    def test_successful_rerun_in_current_slot_is_check_not_on_track(self):
+        from command_center.status_logic import classify_schedule_slot
+
+        slot = datetime(2026, 10, 17, 1, 17, tzinfo=timezone.utc)
+        base = {"created_at": "2026-10-17T01:18:00Z", "status": "completed", "conclusion": "success"}
+        state, _ = classify_schedule_slot(now=slot, expected_slot=slot, latest_run=dict(base, run_attempt=1),
+                                          runs_error=False)
+        self.assertEqual(state, "ON TRACK")
+        state, note = classify_schedule_slot(now=slot, expected_slot=slot, latest_run=dict(base, run_attempt=2),
+                                             runs_error=False)
+        self.assertEqual(state, "CHECK")
+        self.assertIn("re-run", note)
+
+
 class PagesUseSharedParserTests(unittest.TestCase):
     def test_no_page_keeps_a_private_first_match_cron_parser(self):
         for rel in ("command_center/app.py", "command_center/pages/1_Project_Map.py"):

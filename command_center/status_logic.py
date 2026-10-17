@@ -90,6 +90,8 @@ def classify_schedule_slot(
     if created is not None and created >= expected_slot:
         status = str(latest_run.get("status") or "").lower()
         conclusion = str(latest_run.get("conclusion") or "").lower()
+        if latest_run.get("run_attempt", 1) != 1:
+            return "CHECK", "The latest scheduled Operator run was re-run manually; a rerun is not evidence of schedule health."
         if status == "completed" and conclusion == "success":
             return "ON TRACK", (
                 "A scheduled Operator run created since the last expected slot completed successfully. "

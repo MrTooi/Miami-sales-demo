@@ -28,10 +28,12 @@ class CommandCenterProjectMapTests(unittest.TestCase):
             ) or (isinstance(func, ast.Name) and func.id == "urlopen")
             if is_request:
                 names = {kw.arg for kw in node.keywords if kw.arg}
+                self.assertLessEqual(len(node.args), 1, "Request() must not receive a positional body")
                 self.assertNotIn("data", names)
                 self.assertNotIn("method", names)
             if is_urlopen:
                 names = {kw.arg for kw in node.keywords if kw.arg}
+                self.assertLessEqual(len(node.args), 1, "urlopen() must not receive a positional body")
                 self.assertNotIn("data", names)
         for method in ("POST", "PUT", "PATCH", "DELETE"):
             self.assertNotIn(method, self.source)
