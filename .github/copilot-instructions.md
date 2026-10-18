@@ -25,6 +25,7 @@ This repository contains two related systems:
 16. Do not claim a test, source lookup, review, deployment, or tool action happened unless it actually happened.
 17. Unknown or unfamiliar work is not permission to guess. Use the Generalist/`general-task-execution` protocol to discover the right source, tool, skill, or specialist.
 18. Cross-source payment-provider settlement and reconciliation work involving provider sales, fees, payouts, transfers, and bank deposits is owned primarily by the **Integrations Engineer**. Backend owns canonical calculation/domain logic, but should review rather than replace Integrations as primary when the core task is source sync, settlement, or reconciliation boundaries.
+19. Route work according to the dominant problem and corrective action. Preserve QA ownership of test evidence, Integrations ownership of external API/provider behavior, Generalist ownership of routine operations, and Security ownership of trust, authorization, privacy, and destructive-action risks. Add independent reviewers for material cross-boundary risks. Financial correctness and customer-facing financial conclusions require appropriate Backend, Security & Data Integrity, and QA review according to their responsibilities. Never bypass human approvals.
 
 ## Current strategic priority
 
