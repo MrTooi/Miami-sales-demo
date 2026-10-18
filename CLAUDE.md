@@ -19,17 +19,27 @@ This file does **not** expand your authority. `AGENTS.md` and `.github/copilot-i
 
 ## Authority model (summary; details in `docs/LEADERSHIP_MODEL.md`)
 
-- **Human owner (MrTooi)** — final authority on product direction, budgets, launches, customers, pricing, production deployment, secrets/credentials, permissions, destructive actions, major scope changes, merging high-risk work, and resuming paused product work. Can override priorities and stop work.
+- **Human owner (MrTooi)** — final authority on product direction, budgets, launches, customers, pricing, production deployment, secrets/credentials, permissions, destructive actions, major scope changes, merging any PR, and expanding product scope beyond D-003. Can override priorities and stop work.
 - **Claude Code** — day-to-day engineering execution once work is authorized: scoped branches/PRs, implementation, tests/CI, fixing its own failures, truthful status/blockers/handoffs in GitHub.
 - **ChatGPT** — product, strategy, architecture, acceptance criteria, and independent review. Does not silently override Claude's code; changes leave a GitHub-visible reason.
 - **GitHub** — the shared source of truth. Never depend on either assistant seeing the other's private conversation.
 
-## Current mode: PRE-READINESS — product implementation is PAUSED
+## Current mode: SUPERVISED BUILD (D-003) — build Ledger; no unattended agents
 
-- LEDGER / Opportunity Radar product implementation stays **PAUSED** until the Issue #11 / Issue #69 readiness gate is satisfied **and** the human owner explicitly approves resuming (to be recorded in `docs/DECISIONS.md`). Passing the gate does not by itself resume anything.
-- Allowed now (same list as D-002 in `docs/DECISIONS.md`): readiness hardening and readiness-infrastructure repair (including audit remediation), owner observability (Command Center), demo reliability without product/financial logic changes, governance/documentation, and tasks the owner explicitly assigns in GitHub.
+- **Ledger product work is authorized in supervised mode** (D-003 in `docs/DECISIONS.md`): the pilot MVP for one target customer type. That covers data import with a "what's missing" report, exact profit by job and customer, a money-leak report, a weekly owner summary, and pilot data-safety minimums. Every change goes branch → tests → CI → independent review (ChatGPT or owner) → explicit owner merge approval.
+- **Still needs a separate owner decision:** live provider integrations with real credentials, production deployment, real customer data before the pilot safety minimums are merged, pricing/launch claims, and anything outside the D-003 scope.
+- **The A/B/C readiness gate (#11/#69) and Issue #35 control unattended agent execution only.** They stay strict and run in the background. Do not enable unattended Agent OS scheduling.
+- Also allowed: readiness hardening, owner observability, demo reliability, governance/docs, and tasks the owner assigns in GitHub.
 - Editing the blind readiness inputs (`AGENTS.md`, `.github/copilot-instructions.md`, `agent_evals/team_profiles.json`) or any `agent_evals/` asset requires a task the owner scoped explicitly for that change.
-- Unattended Agent OS scheduling has its own separate gate (Issue #35); do not enable it.
+
+## Real-product rule (D-003)
+
+Before starting any task, check that it does at least one of these:
+1. Moves a real business closer to using Ledger on its own data.
+2. Fixes something that would break or mislead a customer.
+3. Is the minimum needed for quality or safety.
+
+If none apply, say so and don't do it. Each week, post a plain-English update on the weekly checklist issue: what a business can do now that it couldn't before, what's next and why a customer needs it, and anything stopped as busywork. If there's nothing new for a business that week, flag it as a red flag.
 
 ## Standing rules (full text in `AGENTS.md`)
 

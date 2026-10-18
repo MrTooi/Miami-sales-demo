@@ -4,15 +4,17 @@ Source-of-truth roadmap structure. It references existing GitHub issues instead 
 
 ## Current phase
 
-**Readiness hardening + audit remediation + demo/observability support only. Product implementation is PAUSED.**
+**Supervised build of the Ledger pilot MVP (D-003)**, with readiness hardening in the background. Unattended agents stay disabled until A/B/C and #35 pass and the owner approves.
 
-Resuming LEDGER / Opportunity Radar product work requires the Issue #11 / Issue #69 readiness gate to be satisfied **and** explicit human approval, recorded as a new entry in `docs/DECISIONS.md`.
+Scope and limits: D-003 in `docs/DECISIONS.md`. The weekly plan lives in the current weekly checklist issue (Oct 19–25: #92).
 
 ## Now (authorized)
 
 | Workstream | Issue / PR | Notes |
 |---|---|---|
-| AI team readiness gate | #11 | Umbrella gate. Workbench and plateau criteria recorded there. |
+| **Ledger pilot MVP** | D-003, #92 | Data import + what's-missing report → profit by job/customer → money-leak report → weekly owner summary → pilot data-safety minimums. Small PRs, independent review, owner merge approval. |
+| Customer evidence (partner lane) | #30, #92, #74, #75 | Target customer type, interviews, willingness to pay, first pilot. The partner leads; it shapes MVP priorities. |
+| AI team readiness gate | #11 | Gates **unattended** agents only. Workbench and plateau criteria recorded there. |
 | Final scheduled blind suites A→B→C | #69 | Only genuine `event=schedule`, `run_attempt=1` runs count. No manual substitutes. |
 | Full-system audit and remediation | #86 → #87 → PR #91 | Readiness availability/provenance fixes wired into the core; needs independent review and owner merge approval. |
 | Owner Command Center (internal, read-only) | #79 / PR #80 | Must never self-certify readiness or show a false green. |
@@ -20,18 +22,18 @@ Resuming LEDGER / Opportunity Radar product work requires the Issue #11 / Issue 
 | Leadership transfer + context pack | #88, #89 → PR #90 | This operating layer. |
 | Agent evaluation upkeep | `docs/AGENT_EVALUATION.md`, `agent_evals/` | Only when the owner explicitly scopes the task; no final-suite prompt/rubric/threshold changes unless specifically approved. |
 
-## Next after gate (not started, not authorized)
-
-Requires readiness + explicit owner approval. Order to be confirmed by the owner.
+## Next (not yet authorized; each needs an owner decision)
 
 - Commercial Reality Gate — #74 (is Ledger truthful, useful, and worth paying for?).
 - Real Business Discovery Gate — #75 (can Ledger obtain and verify the data it needs from messy real businesses?).
 - Production-grade exact scheduler design — #84 (GitHub cron is not an exact-time scheduler).
-- Opportunity Radar evidence store / import pipeline — `PROJECT_BRIEF.md` "Immediate technical milestone" (paused product work).
+- Opportunity Radar evidence store / import pipeline (`PROJECT_BRIEF.md` milestone), when the owner assigns it.
+- Live provider integrations (QuickBooks/Square/bank APIs) with real credentials.
+- Unattended agent execution, after A/B/C + #35 + owner approval.
 
 ## Separate gates (do not conflate)
 
-- **#11 / #69** — technical readiness; prerequisite for asking to resume product work.
+- **#11 / #69**: AI-team readiness; gates **unattended** agent execution (with #35). It does not gate supervised product work (D-003).
 - **#35** — Agent OS hardening gate required before *unattended* executor/operator scheduling is enabled. Passing #11/#69 does not enable unattended scheduling.
 - **#74 / #75** — commercial and discovery gates; technical readiness never satisfies them.
 

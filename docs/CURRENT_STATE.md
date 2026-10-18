@@ -6,7 +6,7 @@
 
 ## Governance state
 
-- **Product implementation is PAUSED** until the #11 / #69 readiness gate is satisfied **and** the owner explicitly approves resuming. Nothing resumes automatically.
+- **Supervised Ledger product work is authorized (D-003, 2026-10-17):** the pilot MVP scope only, with independent review and owner merge approval on every PR. The #11/#69 gate (plus #35) now controls **unattended** agents only. Weekly plan: #92.
 - Unattended Agent OS execution is disabled by default (`LEDGER_AGENT_OPERATOR_ENABLED`, `LEDGER_AGENT_EXECUTOR_ENABLED`). Enabling it is governed by the separate Issue #35 gate (`docs/AGENT_OPERATOR.md`).
 - `.github/workflows/claude.yml` runs only for `github.actor == 'MrTooi'` with an `@claude` mention. The Claude GitHub App token cannot push `.github/workflows/` changes. Its own replies on #69 (2026-10-16 22:05 UTC) and #87 report the push refusal ("without workflows permission"). Workflow changes need a person or integration with workflow-write permission.
 

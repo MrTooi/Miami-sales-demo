@@ -46,7 +46,7 @@ Rules and facts have separate authority chains. Never use a lower item to overri
 
 | Ref | Type | Controls |
 |---|---|---|
-| #11 | Issue | AI team readiness gate (umbrella; prerequisite for asking to resume product work) |
+| #11 | Issue | AI team readiness gate (umbrella; gates unattended agents, not supervised product work, per D-003) |
 | #35 | Issue | Agent OS hardening gate before unattended scheduling (separate from #11) |
 | #69 | Issue | Final scheduled blind A→B→C suites |
 | #74 | Issue | Commercial Reality Gate |
@@ -60,3 +60,4 @@ Rules and facts have separate authority chains. Never use a lower item to overri
 | #87 | Issue | Audit remediation scope |
 | #88 | Issue | Leadership transfer to Claude Code |
 | #89 | Issue | Context pack |
+| #92 | Issue | Weekly checklist Oct 19–25 (owner + Claude build lane; partner customer lane) |
