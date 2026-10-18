@@ -27,7 +27,7 @@
     "security_integrity": {
       "source": "repo",
       "file": ".github/agents/security-integrity.agent.md",
-      "capabilities": ["security", "privacy", "auth", "tenant_isolation", "data_integrity", "agent_governance", "audit", "risk_triage", "supply_chain", "package_provenance"],
+      "capabilities": ["security", "privacy", "auth", "tenant_isolation", "data_integrity", "agent_governance", "audit", "risk_triage", "supply_chain", "package_provenance", "financial_integrity"],
       "independent_review": true
     },
     "research_product": {
