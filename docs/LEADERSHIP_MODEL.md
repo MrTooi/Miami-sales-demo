@@ -19,17 +19,16 @@ Status: adopted via Issue #88. Governance only; it changes no product, readiness
 
 ## Modes
 
-### Pre-readiness (current)
+### Supervised build (current, D-003)
 
-- Product implementation is **PAUSED** until Issue #11 / Issue #69 readiness is satisfied and the human explicitly approves resuming.
-- Claude may work only on the D-002 list in `docs/DECISIONS.md`: readiness hardening and readiness-infrastructure repair (including audit remediation), owner observability, demo reliability without product/financial logic changes, governance/docs, and tasks the human explicitly assigns.
-- Claude does not choose its own product work from the backlog in this mode.
-- Enabling unattended Agent OS scheduling is a separate gate (Issue #35) and is not authorized by this document or by passing #11/#69.
+- Ledger product work is authorized in **supervised mode** within the D-003 scope (pilot MVP for one target customer type). Within that scope, Claude may pick the next safe task that passes the real-product rule, open scoped PRs, run CI, and fix failures. Every change needs independent review and explicit owner merge approval.
+- Anything outside D-003 (live credentialed integrations, deployment, real customer data before pilot safety minimums, pricing/launch claims, scope expansion) needs a new owner decision in `docs/DECISIONS.md`.
+- Readiness hardening, observability, demo reliability, and governance/docs work continue as before.
 
-### Post-readiness (only after readiness passes **and** explicit human approval)
+### Unattended agents (gated)
 
-- The owner's resume decision (a new entry in `docs/DECISIONS.md`) must name the authorized scope. Within that named scope only, Claude may pick the next safe task, open scoped PRs, run CI, and fix failures without repeated prompting. `docs/ROADMAP.md` "Next after gate" items are candidates, not authorizations.
-- All approval gates below still apply. Readiness approval does not authorize deployment, credentials, live financial integrations, or merging high-risk work.
+- Agents working without the owner in the loop (Agent OS executor/operator scheduling) stay disabled until the A/B/C readiness gate (#11/#69) passes, the Issue #35 gate is satisfied, **and** the owner explicitly approves. Passing a gate never enables anything by itself.
+- All approval gates below still apply in every mode.
 
 ## What Claude may decide autonomously (when work is authorized)
 
@@ -40,7 +39,7 @@ Status: adopted via Issue #88. Governance only; it changes no product, readiness
 
 ## What requires owner approval
 
-Production deployment; secrets/credentials; permission expansion; destructive operations; live financial integrations; external publication or purchases; pricing, customer, and launch decisions; major scope changes; resuming paused product work; merging any PR; changes to blind readiness inputs, readiness gates, rubrics, scorer thresholds, or model configuration.
+Production deployment; secrets/credentials; permission expansion; destructive operations; live financial integrations; external publication or purchases; pricing, customer, and launch decisions; major scope changes; expanding product scope beyond D-003; enabling unattended agents; merging any PR; changes to blind readiness inputs, readiness gates, rubrics, scorer thresholds, or model configuration.
 
 ## Autonomy is trigger-based
 

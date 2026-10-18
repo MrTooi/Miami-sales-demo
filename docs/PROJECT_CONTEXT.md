@@ -32,7 +32,7 @@ The internal evidence-driven market/opportunity system, built inside this reposi
 
 ## Who decides what
 
-- **Human owner (MrTooi)**: final authority. Required for production deployment, destructive operations, credential-bearing changes, live financial integrations, permission expansion, external publication/purchases, merging high-risk work, and resuming paused product development.
+- **Human owner (MrTooi)**: final authority. Required for production deployment, destructive operations, credential-bearing changes, live financial integrations, permission expansion, external publication/purchases, merging any PR, expanding product scope beyond D-003, and enabling unattended agents.
 - **Claude Code**: primary technical lead for *authorized* engineering work (Issue #88; see `docs/LEADERSHIP_MODEL.md`). Authority comes from the owner and issues/PRs, not from this file.
 - **ChatGPT**: product, strategy, architecture, and independent-review support. It holds no conversation history that Claude can read. GitHub is the shared handoff surface.
 - **Agent OS** (`agent_operator/`, `.github/workflows/agent-*.yml`): the repository's own task-routing and execution layer. Unattended execution is disabled by default and gated separately by Issue #35 (see `docs/AGENT_OPERATOR.md`).
