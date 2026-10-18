@@ -13,7 +13,7 @@ Scope and limits: D-003 in `docs/DECISIONS.md`. The weekly plan lives in the cur
 | Workstream | Issue / PR | Notes |
 |---|---|---|
 | **Ledger pilot MVP** | D-003, #92 | Data import + what's-missing report → profit by job/customer → money-leak report → weekly owner summary → pilot data-safety minimums. Small PRs, independent review, owner merge approval. |
-| Customer evidence (partner lane) | #30, #92, #74, #75 | Target customer type, interviews, willingness to pay, first pilot. The partner leads; it shapes MVP priorities. |
+| Customer evidence (partner lane) | #30, #92 | Target customer type, interviews, willingness to pay, a pilot candidate. The partner leads; evidence shapes MVP priorities. Collecting evidence is authorized now; formal #74/#75 claims are not (see below). |
 | AI team readiness gate | #11 | Gates **unattended** agents only. Workbench and plateau criteria recorded there. |
 | Final scheduled blind suites A→B→C | #69 | Only genuine `event=schedule`, `run_attempt=1` runs count. No manual substitutes. |
 | Full-system audit and remediation | #86 → #87 → PR #91 | Readiness availability/provenance fixes wired into the core; needs independent review and owner merge approval. |
@@ -24,8 +24,8 @@ Scope and limits: D-003 in `docs/DECISIONS.md`. The weekly plan lives in the cur
 
 ## Next (not yet authorized; each needs an owner decision)
 
-- Commercial Reality Gate — #74 (is Ledger truthful, useful, and worth paying for?).
-- Real Business Discovery Gate — #75 (can Ledger obtain and verify the data it needs from messy real businesses?).
+- Commercial Reality Gate — #74. Its acceptance criteria are **not** deferred or waived: no pilot-ready or commercially-validated claim until they are met.
+- Real Business Discovery Gate — #75. Its acceptance criteria are **not** deferred or waived; messy real-data discovery must be proven before a pilot is called ready.
 - Production-grade exact scheduler design — #84 (GitHub cron is not an exact-time scheduler).
 - Opportunity Radar evidence store / import pipeline (`PROJECT_BRIEF.md` milestone), when the owner assigns it.
 - Live provider integrations (QuickBooks/Square/bank APIs) with real credentials.
