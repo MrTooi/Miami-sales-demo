@@ -56,7 +56,7 @@ If none apply, say so and don't do it. Each week, post a plain-English update on
 
 ## Independent review
 
-Claude must not be the sole reviewer of — or self-certify as complete — any change touching finance logic, security/auth/tenant boundaries, readiness gates/scoring/evals/workflows, deployment, customer data, or other high-impact areas. For those, the independent reviewer is ChatGPT or the human owner. An `@claude` review-only run is useful as a supplementary check, but it is the same model family and does **not** count as independent review. Record verdicts in GitHub.
+Claude must not be the sole reviewer of — or self-certify as complete — any change touching finance logic, security/auth/tenant boundaries, readiness gates/scoring/evals/workflows, deployment, customer data, or other high-impact areas. For those, the independent reviewer is ChatGPT or the human owner. Under D-004, the verdict posted verbatim by `.github/workflows/chatgpt-pr-review.yml` for the PR's current head commit counts as the ChatGPT review. An `@claude` review-only run is useful as a supplementary check, but it is the same model family and does **not** count as independent review. Record verdicts in GitHub.
 
 ## Merging
 

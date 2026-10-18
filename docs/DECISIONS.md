@@ -55,3 +55,27 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
   5. **Real-product rule.** Every task must (a) move a real business closer to using Ledger on its own data, (b) fix something that would break or mislead a customer, or (c) be the minimum needed for quality/safety. Otherwise it isn't done. Each week Claude reports what a business can now do that it couldn't before.
 - Consequences / risks: Faster progress to a real pilot, with the same review safeguards. These approvals are a human process, not machine-enforced (branch protection is off), so the owner enforces them manually. Merging the pilot safety minimums is **not** by itself permission to use real customer data: that needs the binding security/privacy requirements, the pilot-readiness criteria (#36, #74/#75 where applicable) and an explicit owner decision. Real customer files never go into the repository. Owner review time is the bottleneck, and the owner accepted that. Readiness for unattended agents may take longer. All finance, security and evidence invariants in `AGENTS.md` still apply in full.
 - Evidence / links: Issue #11, Issue #69, Issue #92 (weekly checklist), PRs #80/#90/#91, `docs/CURRENT_STATE.md`.
+
+### D-004 — Automatic independent ChatGPT review on pull requests
+- Date: 2026-10-18
+- Status: Accepted (takes effect when the PR adding the workflow is merged with the owner's approval)
+- Decided by: Human owner (MrTooi), who wrote "arrroved auto chatgpt review" in a Claude Code session on 2026-10-18. This also authorizes the `.github/workflows/chatgpt-pr-review.yml` change. Recorded on #92.
+- Context: The owner was pasting every review prompt into ChatGPT by hand, which is slow and error-prone.
+- Decision:
+  1. Every non-draft pull request from this repository gets an automatic ChatGPT review. Claude Code may also trigger one by PR number.
+  2. **How it runs:**
+     - The workflow runs base-branch code only.
+     - The PR's code is never checked out or executed.
+     - The diff is sent as untrusted data, with fixed instructions read from `main` (`docs/CHATGPT_REVIEW_INSTRUCTIONS.md`).
+     - The model's verdict is posted to the PR verbatim, with the reviewed commit SHA.
+  3. A verdict posted this way for the PR's current head commit counts as the ChatGPT independent review required by `CLAUDE.md`. Claude cannot edit or filter it. A FAIL or a required change must be fixed and re-reviewed.
+  4. **Not changed:**
+     - Merging still needs the owner's explicit approval for that PR.
+     - The owner may still ask for a manual ChatGPT or owner review at any time.
+- Consequences / risks:
+  - Each review costs a small amount of OpenAI usage on the existing `OPENAI_API_KEY`.
+  - The owner chooses the model in the repository variable `MARGINX_REVIEW_MODEL`. The workflow fails closed until it is set.
+  - Changing the reviewer instructions needs its own owner-approved PR.
+  - The diff can carry prompt-injection text. It is labeled as data, but the owner remains the final check.
+  - Diffs over 150,000 characters are truncated, and the verdict must say so.
+- Evidence / links: Issue #92.
