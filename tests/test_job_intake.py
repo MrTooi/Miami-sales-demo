@@ -188,9 +188,19 @@ class DuplicateTests(unittest.TestCase):
         result = self.run_costs(b"Date,Payee,Amount,Note\n10/01/2026,A,1.00,first\n10/01/2026,A,1.00,second\n")
         self.assertEqual(2, len(result.accepted))
 
-    def test_rows_differing_only_in_whitespace_are_both_kept(self):
+    def test_rows_differing_only_in_whitespace_are_both_kept_with_original_text(self):
         result = self.run_costs(b"Date,Payee,Amount\n10/01/2026,A,1.00\n10/01/2026,A ,1.00\n")
         self.assertEqual(2, len(result.accepted))
+        self.assertEqual(["A", "A "], [r["original"]["vendor"] for r in result.accepted])
+        self.assertEqual(("10/01/2026", "A ", "1.00"), result.accepted[1]["cells"])
+
+    def test_original_identifiers_and_text_are_preserved(self):
+        headers, rows = ji.read_csv(b"Num,Date,Customer,Amount,Job No\n  FIC-1 ,10/01/2026, Acme  Co ,1.00, J-5 \n")
+        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        record = result.accepted[0]
+        self.assertEqual({"invoice_id": "  FIC-1 ", "date": "10/01/2026", "customer": " Acme  Co ",
+                          "amount": "1.00", "job_id": " J-5 "}, record["original"])
+        self.assertEqual(("FIC-1", "J-5"), (record["invoice_id"], record["job_id"]))  # trimmed working values
 
     def test_identical_rows_are_rejected_once(self):
         result = self.run_costs(b"Date,Payee,Amount\n10/01/2026,A,1.00\n10/01/2026,A,1.00\n")
@@ -257,6 +267,15 @@ class ExportSafetyTests(unittest.TestCase):
         headers, rows = ji.read_csv(fixed.getvalue().encode("utf-8"))
         self.assertIn(" Note ", headers)
         self.assertEqual(1, len(rows))
+
+    def test_headers_that_collide_after_formula_protection_still_round_trip(self):
+        exported = self.export(b"Date,Payee,Amount,=Note,'=Note\n10/01/2026,A,-5,x,y\n")
+        self.assertEqual(["marginx_row", "marginx_reasons", "Date", "Payee", "Amount", "'=Note", "'=Note_2"], exported[0])
+        fixed = io.StringIO()
+        csv.writer(fixed).writerows(exported)
+        headers, rows = ji.read_csv(fixed.getvalue().encode("utf-8"))  # re-imports without a duplicate-header error
+        self.assertEqual(7, len(headers))
+        self.assertEqual(("x", "y"), rows[0].cells[5:7])
 
     def test_extra_cell_names_avoid_collisions(self):
         exported = self.export(b"Date,Payee,Amount,extra_cell_1\n10/01/2026,A,1.00,x,OVER\n")

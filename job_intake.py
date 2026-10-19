@@ -229,7 +229,10 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
         if reasons:
             result.rejected.append({"row": number, "cells": rec.cells, "values": values, "reasons": reasons})
             continue
-        record = {**values, "row": number, "date": parsed_date.isoformat(), "amount": amount}
+        # Working values are trimmed (so "J-501 " matches "J-501"); the untouched
+        # original cells are kept alongside for provenance.
+        record = {**values, "row": number, "date": parsed_date.isoformat(), "amount": amount,
+                  "original": {f: rec.cells[i] for f, i in index.items()}, "cells": rec.cells}
         result.accepted.append(record)
     return result
 
@@ -316,22 +319,25 @@ def rejected_rows_csv(result: IntakeResult) -> str:
     be read as formulas get a leading apostrophe (see safe_cell).
     """
     width = max([len(result.headers), *(len(item["cells"]) for item in result.rejected)])
-    taken = {h.strip().lower() for h in result.headers}
+    taken: set[str] = set()
 
     def unique(name: str) -> str:
-        # Export-only column names never collide with the shop's own headers.
+        # Uniqueness is checked on the final, spreadsheet-safe header as read_csv
+        # compares it, so the repair file always re-imports. Original headers stay
+        # in their columns; only a clashing one gets a numeric suffix.
         candidate, n = name, 1
-        while candidate.lower() in taken:
+        while candidate.strip().lower() in taken:
             n += 1
             candidate = f"{name}_{n}"
-        taken.add(candidate.lower())
+        taken.add(candidate.strip().lower())
         return candidate
 
+    shop = [unique(safe_cell(h)) for h in result.headers]
     meta = [unique("marginx_row"), unique("marginx_reasons")]
     extra = [unique(f"extra_cell_{i}") for i in range(1, width - len(result.headers) + 1)]
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow([*meta, *[safe_cell(h) for h in result.headers], *extra])
+    writer.writerow([*meta, *shop, *extra])
     for item in result.rejected:
         cells = list(item["cells"]) + [""] * (width - len(item["cells"]))
         writer.writerow([item["row"], safe_cell(" ".join(item["reasons"])), *[safe_cell(c) for c in cells]])

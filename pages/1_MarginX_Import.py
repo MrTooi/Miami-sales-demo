@@ -55,7 +55,8 @@ except ji.IntakeError as exc:
     st.error(f"This file can't be read: {exc}")
     st.stop()
 
-st.caption(f"{len(records)} data rows, {len(headers)} columns: {', '.join(headers)}")
+# File text is shown with st.text, never st.markdown, so it can't be read as formatting.
+st.text(f"{len(records)} data rows, {len(headers)} columns: {', '.join(headers)}")
 
 # --- 2. Confirm the columns ---------------------------------------------------
 section_header("2. Confirm the columns", "MarginX suggests a match; check each one. Nothing is guessed silently.")
@@ -106,7 +107,8 @@ if not st.checkbox("These columns and the date format are right",
 result = ji.intake(headers, records, mapping, kind, date_format)
 section_header("3. What's missing", "Counts only. Profit by job comes in a later step.")
 for item in ji.missing_report(result):
-    st.markdown(f"**{LEVEL_LABELS[item['level']]}:** {item['text']}")
+    # Report text can quote values from the file (e.g. an invoice number), so it is plain text.
+    st.text(f"{LEVEL_LABELS[item['level']]}: {item['text']}")
 
 if result.rejected:
     st.subheader(f"Rows that couldn't be imported ({len(result.rejected)})")
@@ -121,6 +123,7 @@ if result.rejected:
 if result.accepted:
     with st.expander(f"Imported rows ({len(result.accepted)})"):
         st.dataframe(
-            pd.DataFrame([{**r, "amount": f"{r['amount']:,.2f}"} for r in result.accepted]),
+            pd.DataFrame([{k: v for k, v in r.items() if k not in ("original", "cells")} | {"amount": f"{r['amount']:,.2f}"}
+                          for r in result.accepted]),
             hide_index=True, width="stretch",
         )

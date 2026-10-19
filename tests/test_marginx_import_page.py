@@ -8,7 +8,8 @@ CONFIRM = "These columns and the date format are right"
 
 
 def markdown_text(at):
-    return " | ".join(m.value for m in at.markdown)
+    # Report lines and file details are rendered as plain text (st.text).
+    return " | ".join(t.value for t in at.text)
 
 
 def confirm_box(at):
