@@ -68,8 +68,17 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
      - The PR's code is never checked out or executed.
      - The diff is sent as untrusted data, with fixed instructions read from `main` (`docs/CHATGPT_REVIEW_INSTRUCTIONS.md`).
      - The model's verdict is posted to the PR verbatim, with the reviewed commit SHA.
-  3. A verdict posted this way for the PR's current head commit counts as the ChatGPT independent review required by `CLAUDE.md`. Claude cannot edit or filter it. A FAIL or a required change must be fixed and re-reviewed.
-  4. **Not changed:**
+  3. **When a review qualifies:** the workflow, not the model, decides. Everything else is posted as **REVIEW INCOMPLETE** and does not count.
+     - The answer has exactly one valid verdict and every required section.
+     - It does not contradict itself; for example, a PASS cannot list required changes.
+     - It covers the whole diff, so a truncated diff can only FAIL.
+     - It is for the PR's current head commit.
+
+     Claude cannot edit or filter the answer. A FAIL or a required change must be fixed and re-reviewed.
+  4. **What a qualifying review counts for:**
+     - **Low-risk changes** (docs, copy, UI wording, tests-only, tooling outside the high-risk areas): it counts as the ChatGPT independent review required by `CLAUDE.md`.
+     - **High-risk changes** (finance logic, security/auth/tenant boundaries, readiness gates/evals/workflows, deployment, customer data): it is **screening only**. A separate manual independent review (ChatGPT with full repository and CI access, or the owner) is still required.
+  5. **Not changed:**
      - Merging still needs the owner's explicit approval for that PR.
      - The owner may still ask for a manual ChatGPT or owner review at any time.
 - Consequences / risks:
@@ -77,5 +86,7 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
   - The owner chooses the model in the repository variable `MARGINX_REVIEW_MODEL`. The workflow fails closed until it is set.
   - Changing the reviewer instructions needs its own owner-approved PR.
   - The diff can carry prompt-injection text. It is labeled as data, but the owner remains the final check.
-  - Diffs over 150,000 characters are truncated, and the verdict must say so.
+  - Diffs over 150,000 characters are truncated and cannot produce a qualifying PASS.
+  - Requests are sent with `store: false`.
+  - A diff or description that looks like it contains a credential is never sent.
 - Evidence / links: Issue #92.

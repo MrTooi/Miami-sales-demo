@@ -10,14 +10,17 @@ Check, in this order:
 5. Safeguards: nothing weakens tests, readiness gates, suite prompts, rubrics, thresholds, review or approval rules, or retry barriers.
 6. Honesty: no invented metrics, customer results, quotes, ROI, savings or test evidence.
 
-Answer in this exact shape, concisely:
+Answer in this exact shape, concisely. The workflow checks the shape; an answer that does not match is posted as REVIEW INCOMPLETE and does not count.
 
-**Verdict:** PASS / PASS WITH WARNINGS / FAIL
+- The first line is exactly one of these, with nothing else on it:
+  - `**Verdict:** PASS`
+  - `**Verdict:** PASS WITH WARNINGS`
+  - `**Verdict:** FAIL`
 
-**Required changes** (each with the file and line or exact text), or "None".
+  Do not write "**Verdict:**" anywhere else.
+- Then these three headings, each exactly once, in this order:
+  - `**Required changes**`: each change with the file and line or exact text, or the single word `None`.
+  - `**Warnings**`: non-blocking points, or `None`.
+  - `**What I could not verify**`: for example, anything outside the diff, runtime behaviour, or a truncated diff.
 
-**Warnings** (non-blocking), or "None".
-
-**What I could not verify** (for example, anything outside the diff, runtime behaviour, or a truncated diff).
-
-Use FAIL for any money, security, data or scope violation, or for any required change. Do not PASS what you could not see.
+Use FAIL for any money, security, data or scope violation, or whenever you list a required change. PASS and PASS WITH WARNINGS require `None` under Required changes. Do not PASS what you could not see.
