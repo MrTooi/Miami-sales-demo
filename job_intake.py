@@ -405,16 +405,39 @@ def amount_scope_question(headers: list[str], records: list[Record], mapping: di
 
     Returns {"label": "invoice INV-1", "lines": 2} for the question's example, or None when no
     question is needed: the column is clearly per line ("Line Amount") or per document ("Invoice
-    Total"), or no document's lines all show one amount. Cost lines without a bill number are
-    grouped by vendor and date, since they may be lines of one bill.
+    Total"), or every invoice or bill has one line. The amounts themselves are never taken as
+    proof either way (lines of 40 and 60 may sit beside a 100 summary line). Cost lines without
+    a bill number are grouped by vendor and date, since they may be lines of one bill.
     """
     amount = mapping.get("amount")
     if not amount or _norm(amount) in LINE_AMOUNTS or is_document_total(amount):
         return None
     index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
-    # Each document is judged on its own lines. Exact duplicate rows (rejected anyway)
-    # and amounts that aren't valid money are not evidence either way.
+    # Exact duplicate rows are rejected anyway, so they don't make a document multi-line.
     amounts: dict[tuple[str, ...], list] = {}
+    seen: set[tuple[str, ...]] = set()
+    for r in records:
+        if len(r.cells) != len(headers) or r.cells in seen:
+            continue
+        seen.add(r.cells)
+        values = {f: r.cells[i].strip() for f, i in index.items()}
+        key = _possible_document_key(values, kind)
+        if key:
+            amounts.setdefault(key, []).append(values.get("amount", ""))
+    multi = [(k, v) for k, v in amounts.items() if len(v) > 1]
+    if not multi:
+        return None
+    # The example shown is one whose lines repeat one amount, if any: the clearest case.
+    key, lines = next(((k, v) for k, v in multi if len(set(v)) == 1), multi[0])
+    return {"label": _label(key, kind), "lines": len(lines)}
+
+
+def _subtotal_rows(headers: list[str], records: list[Record], mapping: dict[str, str | None],
+                   kind: str) -> dict[int, tuple[str, ...]]:
+    """Rows of a document with 3+ lines whose amount equals the sum of the document's other lines:
+    a summary line, which counted as a line would double the document. Row -> document."""
+    index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
+    lines: dict[tuple[str, ...], list[tuple[int, object]]] = {}
     seen: set[tuple[str, ...]] = set()
     for r in records:
         if len(r.cells) != len(headers) or r.cells in seen:
@@ -427,14 +450,13 @@ def amount_scope_question(headers: list[str], records: list[Record], mapping: di
         except ValueError:
             continue
         if key:
-            amounts.setdefault(key, []).append(amount)
-    # A document whose lines all show one amount could be showing its total on each
-    # line; one whose lines differ can't be (a repeated total would be the same number).
-    repeated = [(k, v) for k, v in amounts.items() if len(v) > 1 and len(set(v)) == 1]
-    if not repeated:
-        return None
-    key, lines = repeated[0]
-    return {"label": _label(key, kind), "lines": len(lines)}
+            lines.setdefault(key, []).append((r.row, amount))
+    found = {}
+    for key, rows in lines.items():
+        if len(rows) >= 3:
+            total = sum(a for _, a in rows)
+            found.update({row: key for row, a in rows if a == total - a})
+    return found
 
 
 def intake(headers: list[str], records: list[Record], mapping: dict[str, str | None], kind: str,
@@ -471,6 +493,7 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
     per_document = total_header or answered_total
     lines_per_document = _lines_per_document(headers, records, mapping, kind, key_of) if per_document else Counter()
     entity = "Invoice" if kind == "invoices" else "Bill"
+    subtotals = _subtotal_rows(headers, records, mapping, kind) if question and amount_scope == "line" else {}
 
     for rec in records:
         number = rec.row
@@ -500,6 +523,9 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             # checked against the document's other lines.
             reasons.append(f"No {entity.lower()} number, and '{mapping['amount']}' is a whole "
                            f"{entity.lower()}'s total, so it can't be checked against other lines.")
+        if number in subtotals:
+            reasons.append(f"Looks like a subtotal: {values['amount']} is the sum of the other lines of "
+                           f"{_label(subtotals[number], kind)}, so it isn't counted again.")
         if document and lines_per_document[document] > 1:
             reasons.append(f"{_label(document, kind).capitalize()} has {lines_per_document[document]} lines and "
                            f"'{mapping['amount']}' is the whole {entity.lower()}'s total, so it can't be "

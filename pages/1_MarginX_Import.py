@@ -142,8 +142,8 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
             st.info(p)
         return
 
-    # Amount meaning: asked only when an invoice or bill has several lines that all show
-    # the same amount, which could be each line's price or the whole document's total.
+    # Amount meaning: asked when an invoice or bill has several lines and the amount
+    # column's name doesn't say whether it is each line's price or the document's total.
     amount_scope = None
     scope = ji.amount_scope_question(headers, records, mapping, kind)
     if scope:
@@ -152,9 +152,9 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
         # grouped (or which column is the amount) asks again instead of reusing an old answer.
         asked = hashlib.sha256(repr((sorted(mapping.items(), key=str), scope)).encode("utf-8")).hexdigest()[:12]
         amount_scope = st.radio(
-            f"In {name}, {scope['label']} has {scope['lines']} lines that all show the same "
-            f"'{mapping['amount']}'. What is that number?", ji.AMOUNT_SCOPES, index=None,
-            format_func={"line": "Each line's own amount (count every line)",
+            f"In {name}, {scope['label']} has {scope['lines']} lines. What is '{mapping['amount']}' "
+            "on each line?", ji.AMOUNT_SCOPES, index=None,
+            format_func={"line": "That line's own amount (count every line)",
                          "document": f"The whole {what}'s total, repeated on each line"}.get,
             key=f"{key}-{kind}-scope-{asked}")
         if amount_scope is None:

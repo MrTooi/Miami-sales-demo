@@ -6,6 +6,7 @@ from streamlit.testing.v1 import AppTest
 
 PAGE = str(Path(__file__).resolve().parents[1] / "pages" / "1_MarginX_Import.py")
 INVOICE_DATE_QUESTION = "In fictional_invoices.csv, what date is 10/01/2026?"
+SAMPLE_AMOUNT_QUESTION = "In fictional_invoices.csv, invoice FIC-1002 has 2 lines. What is 'Total' on each line?"
 
 
 def page_text(at):
@@ -41,8 +42,17 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertIn("Read as costs / bills, dates as MM/DD/YYYY.", [c.value for c in at.caption])
         self.assertEqual([], [c for c in at.checkbox])  # no confirmation boxes in sample mode
 
+    def test_sample_invoices_ask_what_the_total_means_first(self):
+        at = self.run_page()
+        question = radio(at, SAMPLE_AMOUNT_QUESTION)
+        self.assertEqual(["That line's own amount (count every line)",
+                          "The whole invoice's total, repeated on each line"], question.options)
+        self.assertEqual([], [r for r in at.radio if r.label == INVOICE_DATE_QUESTION])  # one question at a time
+        self.assertNotIn("imported invoice lines", page_text(at))
+
     def test_ambiguous_dates_ask_one_plain_question(self):
         at = self.run_page()
+        radio(at, SAMPLE_AMOUNT_QUESTION).set_value("line").run()
         question = radio(at, INVOICE_DATE_QUESTION)
         self.assertEqual(["October 1, 2026", "January 10, 2026"], question.options)
         self.assertNotIn("of 10 couldn't be imported", page_text(at))  # no invoice report until answered
@@ -50,6 +60,7 @@ class MarginXImportPageTests(unittest.TestCase):
 
     def test_invoice_report_after_answering_the_date_question(self):
         at = self.run_page()
+        radio(at, SAMPLE_AMOUNT_QUESTION).set_value("line").run()
         radio(at, INVOICE_DATE_QUESTION).set_value("MM/DD/YYYY").run()
         self.assertFalse(at.exception, at.exception)
         text = page_text(at)
@@ -272,11 +283,10 @@ class MarginXImportPageTests(unittest.TestCase):
     def test_repeated_generic_total_asks_what_the_number_is(self):
         csv_text = ("Invoice,Date,Customer,Description,Total\n"
                     "INV-1,10/31/2026,X (fictional),Banner,100.00\nINV-1,10/31/2026,X (fictional),Install,100.00\n")
-        label = ("In fictional_invoices.csv, invoice INV-1 has 2 lines that all show the same 'Total'. "
-                 "What is that number?")
+        label = "In fictional_invoices.csv, invoice INV-1 has 2 lines. What is 'Total' on each line?"
         at = self.with_files(csv_text, "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         question = radio(at, label)
-        self.assertEqual(["Each line's own amount (count every line)", "The whole invoice's total, repeated on each line"],
+        self.assertEqual(["That line's own amount (count every line)", "The whole invoice's total, repeated on each line"],
                          question.options)
         self.assertNotIn("invoice line", page_text(at))  # nothing imported until answered
         question.set_value("line").run()
@@ -291,7 +301,7 @@ class MarginXImportPageTests(unittest.TestCase):
         csv_text = ("Invoice,Order,Date,Customer,Description,Total\n"
                     "INV-1,O-7,10/31/2026,X (fictional),Banner,100.00\nINV-1,O-7,10/31/2026,X (fictional),Install,100.00\n")
         at = self.with_files(csv_text, "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
-        first = next(r for r in at.radio if "What is that number?" in r.label)
+        first = next(r for r in at.radio if "on each line?" in r.label)
         first.set_value("line").run()
         self.assertIn("2 invoice lines imported (1 invoice)", page_text(at))
         # The owner says the order column is the invoice number: the question is now about
@@ -306,8 +316,8 @@ class MarginXImportPageTests(unittest.TestCase):
         at = self.with_files("Invoice,Date,Customer,Amount\nA,10/31/2026,X (fictional),1.00\n",
                              "Date,Vendor,Memo,Amount\n10/31/2026,Paper Co (fictional),Vinyl,300.00\n"
                              "10/31/2026,Paper Co (fictional),Ink,300.00\n")
-        question = radio(at, "In fictional_costs.csv, Paper Co (fictional) on 10/31/2026 (no bill number) has 2 lines "
-                             "that all show the same 'Amount'. What is that number?")
+        question = radio(at, "In fictional_costs.csv, Paper Co (fictional) on 10/31/2026 (no bill number) has 2 lines. "
+                             "What is 'Amount' on each line?")
         self.assertNotIn("cost line", page_text(at))
         question.set_value("document").run()
         self.assertFalse(at.exception, at.exception)

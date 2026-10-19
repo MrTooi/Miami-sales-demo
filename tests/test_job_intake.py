@@ -188,7 +188,7 @@ class MappingTests(unittest.TestCase):
         # Invoice credit lines stay ordinary negative amounts (the sample's reprint credit).
         headers, rows, mapping = load("fictional_invoices.csv", "invoices")
         self.assertEqual("invoices", ji.detect_kind(headers))
-        self.assertIn(Decimal("-45.00"), [r["amount"] for r in ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY").accepted])
+        self.assertIn(Decimal("-45.00"), [r["amount"] for r in ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY", "line").accepted])
 
     def test_repeated_invoice_total_is_never_counted_on_each_line(self):
         headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Invoice Total\n"
@@ -237,10 +237,26 @@ class MappingTests(unittest.TestCase):
         self.assertEqual([2, 3], [r["row"] for r in per_invoice.rejected])
         self.assertTrue(all("whole invoice's total" in " ".join(r["reasons"]) for r in per_invoice.rejected))
 
-    def test_no_amount_question_when_the_file_shows_what_the_amount_means(self):
-        # Different amounts on one invoice's lines can't be a repeated invoice total.
+    def test_different_amounts_on_an_invoice_still_ask(self):
+        # Different amounts don't prove per-line meaning: 40 + 60 may sit beside a 100 summary line.
         headers, rows, mapping = load("fictional_invoices.csv", "invoices")
-        self.assertIsNone(ji.amount_scope_question(headers, rows, mapping, "invoices"))
+        self.assertEqual({"label": "invoice FIC-1002", "lines": 2}, ji.amount_scope_question(headers, rows, mapping, "invoices"))
+
+    def test_summary_line_is_never_counted_with_its_detail_lines(self):
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Total\n"
+                                    b"INV-1,10/31/2026,Acme,Banner,40.00\nINV-1,10/31/2026,Acme,Install,60.00\n"
+                                    b"INV-1,10/31/2026,Acme,Invoice total,100.00\n")
+        mapping = ji.suggest_mapping(headers, "invoices")
+        self.assertIsNotNone(ji.amount_scope_question(headers, rows, mapping, "invoices"))
+        result = ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY", "line")
+        self.assertEqual([Decimal("40.00"), Decimal("60.00")], [r["amount"] for r in result.accepted])
+        self.assertEqual([4], [r["row"] for r in result.rejected])
+        self.assertIn("Looks like a subtotal", " ".join(result.rejected[0]["reasons"]))
+        # Two lines can't be told apart from a repeated total this way; the question covers them.
+        two = ji.read_csv(b"Invoice,Date,Customer,Total\nA,10/31/2026,X,100.00\nA,10/31/2026,X,100.00 \n")
+        self.assertEqual(2, len(ji.intake(*two, ji.suggest_mapping(two[0], "invoices"), "invoices", "MM/DD/YYYY", "line").accepted))
+
+    def test_no_amount_question_when_the_file_shows_what_the_amount_means(self):
         # One line per invoice, or a column named per line or per invoice.
         for csv_text in (b"Invoice,Date,Customer,Total\nA,10/31/2026,X,100.00\nB,10/31/2026,X,100.00\n",
                          b"Invoice,Date,Customer,Line Amount\nA,10/31/2026,X,100.00\nA,10/31/2026,X,100.00\n",
@@ -286,7 +302,7 @@ class MappingTests(unittest.TestCase):
         headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Total\n"
                                     b"B,10/31/2026,Y,Banner,100.00\nB,10/31/2026,Y,Install,100.00\n"
                                     b"B,10/31/2026,Y,Note,n/a\n")
-        self.assertEqual({"label": "invoice B", "lines": 2},
+        self.assertEqual({"label": "invoice B", "lines": 3},
                          ji.amount_scope_question(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices"))
 
     def test_cost_lines_without_bill_numbers_are_asked_about_when_amounts_repeat(self):
@@ -302,9 +318,9 @@ class MappingTests(unittest.TestCase):
         whole = ji.intake(headers, rows, mapping, "costs", "MM/DD/YYYY", "document")
         self.assertEqual([4, 5], [r["row"] for r in whole.accepted])  # other day, other vendor: one line each
         self.assertEqual([2, 3], [r["row"] for r in whole.rejected])
-        # Different amounts from one vendor on one day are separate lines: no question.
+        # One line per vendor per day needs no question.
         headers, rows = ji.read_csv(b"Date,Vendor,Memo,Amount\n"
-                                    b"10/31/2026,Paper Co,Vinyl,300.00\n10/31/2026,Paper Co,Ink,45.00\n")
+                                    b"10/31/2026,Paper Co,Vinyl,300.00\n11/01/2026,Paper Co,Ink,45.00\n")
         self.assertIsNone(ji.amount_scope_question(headers, rows, ji.suggest_mapping(headers, "costs"), "costs"))
 
     def test_bill_total_rows_without_a_bill_number_are_not_imported(self):
@@ -405,7 +421,7 @@ class MappingTests(unittest.TestCase):
 class InvoiceIntakeTests(unittest.TestCase):
     def setUp(self):
         headers, rows, mapping = load("fictional_invoices.csv", "invoices")
-        self.result = ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY")
+        self.result = ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY", "line")
 
     def test_every_row_is_accepted_or_rejected_with_a_reason(self):
         r = self.result
@@ -436,7 +452,7 @@ class InvoiceIntakeTests(unittest.TestCase):
     def test_no_job_column_is_a_gap(self):
         headers, rows, mapping = load("fictional_invoices.csv", "invoices")
         mapping["job_id"] = None
-        report = texts(ji.missing_report(ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY")))
+        report = texts(ji.missing_report(ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY", "line")))
         self.assertIn("No job number column was chosen", report)
 
 
