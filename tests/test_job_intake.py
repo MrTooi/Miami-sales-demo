@@ -172,6 +172,24 @@ class MappingTests(unittest.TestCase):
         for header in ("Amount", "Total", "Line Amount", "Invoice Total"):
             self.assertFalse(ji.is_paid_column(header), header)
 
+    def test_bank_credit_columns_are_cash_movements(self):
+        # A file with a Credit column is asked about, never auto-read as costs or sales.
+        for headers in (["Date", "Vendor", "Amount", "Credit"], ["Date", "Vendor", "Debit", "Credit", "Amount"],
+                        ["Invoice", "Date", "Customer", "Amount", "Credit"]):
+            with self.subTest(headers=headers):
+                self.assertIsNone(ji.detect_kind(headers))
+        # A credit column is refused as the amount, even when chosen by hand.
+        for kind, base in (("costs", {"date": "Date", "vendor": "Vendor"}),
+                           ("invoices", {"invoice_id": "Invoice", "date": "Date", "customer": "Customer"})):
+            for header in ("Credit", "Credit Amount", "Credits"):
+                with self.subTest(kind=kind, header=header):
+                    problems = ji.validate_mapping({**base, "amount": header}, [*base.values(), header], kind)
+                    self.assertTrue(any("money paid or received" in p for p in problems), problems)
+        # Invoice credit lines stay ordinary negative amounts (the sample's reprint credit).
+        headers, rows, mapping = load("fictional_invoices.csv", "invoices")
+        self.assertEqual("invoices", ji.detect_kind(headers))
+        self.assertIn(Decimal("-45.00"), [r["amount"] for r in ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY").accepted])
+
     def test_repeated_invoice_total_is_never_counted_on_each_line(self):
         headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Invoice Total\n"
                                     b"INV-1,10/31/2026,Acme,Banner,100.00\nINV-1,10/31/2026,Acme,Install,100.00\n"

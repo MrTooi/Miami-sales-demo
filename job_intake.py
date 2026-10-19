@@ -82,8 +82,8 @@ COST_WORDS = {"vendor", "payee", "supplier", "expense", "expenses", "purchase", 
 # Evidence that a file really is bills/expenses; "payee" alone also fits bank statements.
 STRONG_COST_WORDS = (COST_WORDS - {"payee"}) | {"cost", "costs"}
 # Words typical of bank or card statements, whose rows are cash movements, not costs.
-BANK_WORDS = {"deposit", "deposits", "withdrawal", "withdrawals", "debit", "debits", "transfer", "transfers",
-              "balance", "posted", "statement", "check", "cheque"}
+BANK_WORDS = {"deposit", "deposits", "withdrawal", "withdrawals", "debit", "debits", "credit", "credits",
+              "transfer", "transfers", "balance", "posted", "statement", "check", "cheque"}
 # Words that make an invoice-shaped file plausibly a payments/deposits export, where
 # "Amount" may be money received rather than the amount billed. ("Payment terms" is
 # an ordinary invoice field and is removed before checking.)
@@ -96,7 +96,9 @@ CASH_MOVEMENT_WORDS = PAYMENT_WORDS | BANK_WORDS
 BALANCE_WORDS = {"balance", "due", "outstanding", "owed", "unpaid", "remaining", "open"}
 # Headers describing money paid, received or moved ("Payment Amount", "Amount Paid"),
 # never the amount billed.
-PAID_WORDS = PAYMENT_WORDS | {"paid"}
+# "Credit" columns are bank credits (money in); credit or refund lines on invoices are
+# negative amounts in the ordinary amount column, which stays accepted.
+PAID_WORDS = PAYMENT_WORDS | {"paid", "credit", "credits"}
 # Headers holding a whole invoice's or bill's total. Repeated on every line of a
 # multi-line document, they can't be counted per line.
 # Headers that say the amount belongs to one line of an invoice or bill.

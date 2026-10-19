@@ -313,6 +313,16 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertIn("2 rows of 2 couldn't be imported", page_text(at))
 
+    def test_bank_credit_file_is_asked_about_and_bank_imports_nothing(self):
+        at = self.with_files("Invoice,Date,Customer,Amount\nA,10/31/2026,X (fictional),1.00\n",
+                             "Date,Vendor,Amount,Credit\n10/31/2026,Customer deposit (fictional),500.00,500.00\n")
+        question = radio(at, "What kind of file is fictional_costs.csv?")
+        self.assertNotIn("cost line", page_text(at))
+        question.set_value("bank").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertNotIn("cost line", page_text(at))
+        self.assertTrue(any("payment statements" in i.value for i in at.info))
+
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertTrue(any("no rows" in i.value for i in at.info))
