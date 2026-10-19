@@ -2,14 +2,15 @@
 
 Designed so the owner does as little as possible: MarginX works out the file
 type, the columns and the date format itself, and asks one plain question only
-when it genuinely can't tell. It never guesses money: anything it can't read is
-listed with a reason.
+when it genuinely can't tell. Every automatic choice is shown and can be changed.
+It never guesses money: anything it can't read is listed with a reason.
 
 Pilot preview: made-up files only (D-003). Files are processed in memory for
 this session and are never saved.
 """
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -53,22 +54,37 @@ if not files:
     st.stop()
 
 
-def show_file(name: str, data: bytes) -> None:
+def describe_format(name: str, example: str | None) -> str:
+    """A format label with what the file's first date would mean in it."""
+    if not example:
+        return name
+    parsed = ji._parse_date(example, ji.DATE_FORMATS[name])
+    return f"{name}: {example} = {parsed:%B} {parsed.day}, {parsed.year}" if parsed else f"{name} (doesn't fit {example})"
+
+
+def show_file(position: int, name: str, data: bytes) -> None:
     """Read one file and show its results, asking only what MarginX can't work out."""
     st.header(name)
-    key = ji.confirmation_key(data, "file", {}, "")  # stable per file contents
+    # Each file in the list gets its own widget namespace, even if two files are identical.
+    key = f"f{position}-{hashlib.sha256(name.encode('utf-8') + data).hexdigest()[:12]}"
     try:
         headers, records = ji.read_csv(data)
     except ji.IntakeError as exc:
         st.error(f"This file can't be read: {exc}")
         return
 
-    kind = ji.detect_kind(headers)
-    if kind is None:
+    detected = ji.detect_kind(headers)
+    if detected is None:
         kind = st.radio(f"Is {name} a list of sales or of costs?", list(KIND_LABELS),
-                        format_func=KIND_LABELS.get, index=None, key=f"{key}-kind")
+                        format_func=KIND_LABELS.get, index=None, key=f"{key}-kind-ask")
         if kind is None:
             return
+    else:
+        kind = detected
+    settings = st.expander("How MarginX read this file (change anything that's wrong)")
+    with settings:
+        kind = st.radio("File type", list(KIND_LABELS), index=list(KIND_LABELS).index(kind),
+                        format_func=KIND_LABELS.get, horizontal=True, key=f"{key}-kind-{kind}")
 
     # Columns: suggested automatically; the owner is asked only for required ones MarginX can't find.
     mapping = ji.suggest_mapping(headers, kind)
@@ -78,18 +94,17 @@ def show_file(name: str, data: bytes) -> None:
             mapping[fld] = st.selectbox(f"Which column has the {label.lower()}?", options, index=None,
                                         format_func=lambda h: NOT_MAPPED if h is None else h,
                                         key=f"{key}-{kind}-ask-{fld}")
-    with st.expander("How MarginX read this file (change anything that's wrong)"):
+    with settings:
         cols = st.columns(3)
         for i, (fld, (label, required)) in enumerate(ji.FIELDS[kind].items()):
             with cols[i % 3]:
                 current = mapping.get(fld)
+                at = options.index(current) if current in options else 0
                 # The key includes the current choice, so an answer to a question above
                 # resets this field instead of being overridden by an older value.
                 mapping[fld] = st.selectbox(
-                    f"{label}{' *' if required else ''}", options,
-                    index=options.index(current) if current in options else 0,
-                    format_func=lambda h: NOT_MAPPED if h is None else h,
-                    key=f"{key}-{kind}-map-{fld}-{options.index(current) if current in options else 0}",
+                    f"{label}{' *' if required else ''}", options, index=at,
+                    format_func=lambda h: NOT_MAPPED if h is None else h, key=f"{key}-{kind}-map-{fld}-{at}",
                 )
     problems = ji.validate_mapping(mapping, headers, kind)
     if problems:
@@ -98,17 +113,29 @@ def show_file(name: str, data: bytes) -> None:
         return
 
     # Date format: automatic unless the dates could genuinely mean two different days.
+    # Answers are keyed to the file type and date column, so a changed choice asks again.
     values = ji.column_values(headers, records, mapping["date"])
+    example = next((v.strip() for v in values if v and v.strip()), None)
+    date_key = f"{key}-{kind}-{headers.index(mapping['date'])}"
+    formats = list(ji.DATE_FORMATS)
     date_format = ji.suggest_date_format(values)
     if date_format is None:
         question = ji.date_question(values)
-        if question is None:
-            st.info("MarginX couldn't read any dates in the date column. Check the column choice above.")
-            return
-        date_format = st.radio(f"In {name}, what date is {question['example']}?", list(question["options"]),
-                               format_func=question["options"].get, index=None, key=f"{key}-datefmt")
+        if question:
+            date_format = st.radio(f"In {name}, what date is {question['example']}?", list(question["options"]),
+                                   format_func=question["options"].get, index=None, key=f"{date_key}-ask")
+        else:
+            # Dates use mixed styles, or none could be read: let the owner pick the main
+            # format. Rows it can't read are then listed with reasons, never dropped.
+            date_format = st.radio(f"Which date format does {name} mainly use?", formats,
+                                   format_func=lambda f: describe_format(f, example), index=None,
+                                   key=f"{date_key}-pick")
         if date_format is None:
             return
+    with settings:
+        date_format = st.selectbox("Date format", formats, index=formats.index(date_format),
+                                   format_func=lambda f: describe_format(f, example),
+                                   key=f"{date_key}-override-{date_format}")
 
     result = ji.intake(headers, records, mapping, kind, date_format)
     st.caption(f"Read as {KIND_LABELS[kind]}, dates as {date_format}.")
@@ -128,5 +155,5 @@ def show_file(name: str, data: bytes) -> None:
                                file_name=f"marginx_rows_to_fix_{name}", mime="text/csv", key=f"{key}-download")
 
 
-for file_name, file_data in files:
-    show_file(file_name, file_data)
+for file_position, (file_name, file_data) in enumerate(files):
+    show_file(file_position, file_name, file_data)
