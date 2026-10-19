@@ -391,7 +391,12 @@ def _possible_document_key(values: dict[str, str], kind: str) -> tuple[str, ...]
     key = _document_key(values, kind)
     if key or kind == "invoices":
         return key
-    return (values.get("vendor", ""), values.get("date", ""), "") if values.get("vendor") else None
+    return (values.get("vendor", ""), _day(values.get("date", "")), "") if values.get("vendor") else None
+
+
+def _day(text: str) -> str:
+    """A date's text without leading zeros, so "10/1/2026" and "10/01/2026" group as one day."""
+    return re.sub(r"(?<!\d)0+(?=\d)", "", text.strip())
 
 
 def _label(key: tuple[str, ...], kind: str) -> str:
@@ -404,7 +409,7 @@ def _lines_per_vendor_day(headers: list[str], records: list[Record], mapping: di
     """Cost lines per (vendor, date), numbered or not, without exact duplicate rows."""
     index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
     rows = {r.cells for r in records if len(r.cells) == len(headers) and _is_line(r.cells, headers, mapping)}
-    return Counter((cells[index["vendor"]].strip(), cells[index["date"]].strip()) for cells in rows
+    return Counter((cells[index["vendor"]].strip(), _day(cells[index["date"]])) for cells in rows
                    if "vendor" in index and "date" in index and cells[index["vendor"]].strip())
 
 
@@ -467,9 +472,12 @@ def _type_columns(headers: list[str], mapping: dict[str, str | None]) -> list[in
 
 
 def _cash_movement_type(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
-    """The row's type text when it names a payment, transfer, deposit, payout or settlement."""
+    """The row's type text when it names a payment, transfer, deposit, payout or settlement,
+    or a bank credit ("Credit", "Bank Credit"). Credit memos and notes are ordinary invoice
+    adjustments, and credit card charges are ordinary expenses, so those are not."""
     for i in type_columns:
-        if set(_norm(cells[i]).split()) & ROW_CASH_WORDS:
+        words = set(_norm(cells[i]).split())
+        if words & ROW_CASH_WORDS or ("credit" in words and not words & {"memo", "note", "card"}):
             return cells[i].strip()
     return None
 

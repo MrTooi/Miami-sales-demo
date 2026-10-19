@@ -211,6 +211,26 @@ class MappingTests(unittest.TestCase):
         self.assertEqual([2, 4], [r["row"] for r in result.rejected])
         self.assertTrue(all("not a cost" in " ".join(r["reasons"]) for r in result.rejected))
 
+    def test_bank_credit_rows_are_rejected_but_credit_memos_and_card_charges_stay(self):
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Type,Amount\n"
+                                    b"INV-1,10/31/2026,Demo,Invoice,100.00\nINV-2,10/31/2026,Demo,Bank Credit,100.00\n"
+                                    b"INV-3,10/31/2026,Demo,Credit,50.00\nINV-4,10/31/2026,Demo,Credit Memo,-20.00\n"
+                                    b"INV-5,10/31/2026,Demo,Credit Note,-5.00\n")
+        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        self.assertEqual([2, 5, 6], [r["row"] for r in result.accepted])
+        self.assertEqual([3, 4], [r["row"] for r in result.rejected])
+        headers, rows = ji.read_csv(b"Date,Vendor,Type,Amount\n10/31/2026,Paper Co,Credit Card Charge,80.00\n"
+                                    b"10/31/2026,Bank,Credit,500.00\n")
+        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")
+        self.assertEqual([2], [r["row"] for r in result.accepted])
+        self.assertEqual([3], [r["row"] for r in result.rejected])
+
+    def test_unnumbered_cost_days_group_across_leading_zero_spellings(self):
+        headers, rows = ji.read_csv(b"Date,Vendor,Memo,Amount\n"
+                                    b"10/1/2026,Paper Co,Vinyl,300.00\n10/01/2026,Paper Co,Ink,300.00\n")
+        self.assertEqual({"label": "Paper Co on 10/1/2026 (no bill number)", "lines": 2},
+                         ji.amount_scope_question(headers, rows, ji.suggest_mapping(headers, "costs"), "costs"))
+
     def test_labeled_subtotal_rows_are_never_counted_even_under_a_line_amount_header(self):
         headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Line Amount\n"
                                     b"INV-1,10/31/2026,Acme,Sign,40.00\nINV-1,10/31/2026,Acme,Install,60.00\n"
