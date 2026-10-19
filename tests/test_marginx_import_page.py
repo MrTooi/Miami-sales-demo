@@ -462,6 +462,21 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertEqual("Complete", self.profit_table(at).set_index("Job").loc["J-1", "Status"])
 
+    def test_positive_credit_memo_never_shows_a_complete_figure(self):
+        costs = ("Bill,Date,Vendor,Job,Type,Amount\nB-1,10/31/2026,Crew (fictional),J-1,Labor,20.00\n"
+                 "B-2,10/31/2026,Paper Co (fictional),J-1,Materials,20.00\n")
+        at = self.with_files("Invoice,Date,Customer,Job,Type,Amount\nI-1,10/31/2026,Bakery (fictional),J-1,Invoice,100.00\n"
+                             "I-2,10/31/2026,Bakery (fictional),J-1,Credit Memo,50.00\n", costs)
+        self.assertFalse(at.exception, at.exception)
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("$60.00", "Provisional"), (job["Direct contribution"], job["Status"]))  # never $110
+        self.assertIn("couldn't be imported", job["Why"])
+        at = self.with_files("Invoice,Date,Customer,Job,Type,Amount\nI-1,10/31/2026,Bakery (fictional),J-1,Invoice,100.00\n"
+                             "I-2,10/31/2026,Bakery (fictional),J-1,Credit Memo,-50.00\n", costs)
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("$10.00", "Complete"), (job["Direct contribution"], job["Status"]))
+        self.assertTrue(any("can't tell whether the files cover every cost" in c.value for c in at.caption))
+
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertTrue(any("no rows" in i.value for i in at.info))

@@ -209,7 +209,7 @@ class CompletenessTests(unittest.TestCase):
         self.assertEqual("fees_overhead", jp.cost_category("Merchant fees"))
 
     def test_unknown_type_markers_keep_a_job_provisional(self):
-        for marker in (b"Unknown", b"Uncategorized", b"N/A", b"Ask My Accountant"):
+        for marker in (b"Unknown", b"Uncategorized", b"N/A", b"Not classified", b"Ask My Accountant"):
             with self.subTest(marker=marker):
                 job = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,10.00\n"
                                   b"B-2,10/01/2026,Paper Co,J-1,Materials,10.00\nB-3,10/01/2026,Ink Co,J-1," + marker

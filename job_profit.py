@@ -26,7 +26,8 @@ CATEGORY_LABELS = {"materials": "Materials", "outsourced": "Outsourced work", "l
                    "unknown": "Cost type not given"}
 # Cost types that say the type isn't known: treated like a blank type.
 UNKNOWN_TYPES = {"unknown", "uncategorized", "uncategorised", "n a", "na", "none", "tbd", "to be determined",
-                 "ask my accountant", "unclassified", "not set", "pending"}
+                 "ask my accountant", "unclassified", "not classified", "not categorized", "not categorised",
+                 "no category", "not set", "pending"}
 FEE_OVERHEAD_WORDS = {"fee", "fees", "processing", "merchant", "overhead", "rent", "utilities", "utility",
                       "insurance", "admin", "administrative"}
 MATERIAL_WORDS = {"material", "materials", "supplies", "supply", "inventory", "stock", "substrate", "substrates",

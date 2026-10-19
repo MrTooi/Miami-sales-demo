@@ -252,6 +252,9 @@ def show_profit(results: list[ji.IntakeResult], pending: list[str]) -> None:
     st.caption(f"Imported sales lines are dated {report.invoice_dates[0]} to {report.invoice_dates[1]}; "
                f"imported cost lines {report.cost_dates[0]} to {report.cost_dates[1]}. "
                "Lines that couldn't be imported are listed with each file above.")
+    st.caption("'Complete' means these files have the job's sales, labor and materials or outsourced work, every "
+               "cost typed and nothing failed to import. MarginX can't tell whether the files cover every cost "
+               "of the job, so check that they span the whole job.")
     counts = {s: sum(1 for j in report.jobs if j.status == s) for s in jp.STATUS_ORDER}
     st.text(f"{len(report.jobs)} jobs: {counts['complete']} complete, {counts['provisional']} provisional "
             f"(missing costs, shown with reasons), {counts['unavailable']} without a figure.")
