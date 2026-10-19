@@ -177,6 +177,37 @@ class CompletenessTests(unittest.TestCase):
                              b"I-2,10/01/2026,Bank,J-1,Bank Credit,10.00\n")
         self.assertEqual("complete", report.jobs[0].status)
 
+    def test_failed_lines_naming_another_customer_make_the_job_shared(self):
+        costs = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,10.00\n"
+                 b"B-2,10/01/2026,Paper Co,J-1,Materials,10.00\nB-3,10/01/2026,Paper Co,J-3,Materials,10.00\n")
+        report = self.report(costs, b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,50.00\n"
+                                    b"I-2,10/01/2026,Gym,J-1,oops\nI-3,10/01/2026,Cafe,J-3,oops\n")
+        jobs = {j.job_id: j for j in report.jobs}
+        self.assertEqual(("Bakery", "Gym"), jobs["J-1"].customers)
+        self.assertEqual("provisional", jobs["J-1"].status)
+        customers = {c.customer: c for c in report.customers}
+        for name in ("Bakery", "Gym"):  # J-1 is in neither total, and both say so
+            self.assertIn("Left out, billed to more than one customer: J-1", " ".join(customers[name].reasons))
+            self.assertNotEqual("complete", customers[name].status)
+        # A cost-only job whose failed invoice names its customer is that customer's, with no figure.
+        self.assertEqual(("Cafe",), jobs["J-3"].customers)
+        self.assertEqual("unavailable", customers["Cafe"].status)
+        self.assertIn("J-3", " ".join(customers["Cafe"].reasons))
+
+    def test_fees_and_overhead_recorded_against_a_job_are_shown_and_subtracted(self):
+        report = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,10.00\n"
+                             b"B-2,10/01/2026,Paper Co,J-1,Materials,10.00\n"
+                             b"B-3,10/01/2026,Square,J-1,Processing fees,1.50\nB-4,10/01/2026,Landlord,J-1,Overhead,5.00\n"
+                             b"B-5,10/01/2026,Square,,Merchant fees,9.00\n")
+        job = report.jobs[0]
+        self.assertEqual(Decimal("6.50"), job.costs["fees_overhead"])
+        self.assertEqual(Decimal("473.50"), job.contribution)  # 500 - 10 - 10 - 1.50 - 5
+        notes = " ".join(report.notes)
+        self.assertIn("$6.50 of fees or overhead were recorded against jobs", notes)
+        self.assertIn("1 cost line(s) worth $9.00 aren't linked to a job", notes)
+        self.assertIn("count only when they are recorded against a job", report.basis)
+        self.assertEqual("fees_overhead", jp.cost_category("Merchant fees"))
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))
@@ -198,7 +229,8 @@ class CompletenessTests(unittest.TestCase):
         self.assertEqual("labor", jp.cost_category("Contract labor"))
         self.assertEqual("outsourced", jp.cost_category("Subcontractor"))
         self.assertEqual("materials", jp.cost_category("COGS:Materials"))
-        self.assertEqual("other", jp.cost_category("Non-labor fees"))
+        self.assertEqual("other", jp.cost_category("Delivery"))
+        self.assertEqual("fees_overhead", jp.cost_category("Non-labor fees"))
         self.assertEqual("unknown", jp.cost_category("  "))
 
     def test_wrong_kinds_are_refused(self):

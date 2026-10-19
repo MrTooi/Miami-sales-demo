@@ -20,9 +20,12 @@ from decimal import Decimal
 from job_intake import IntakeResult, is_labor
 
 ZERO = Decimal("0.00")
-CATEGORIES = ("materials", "outsourced", "labor", "other", "unknown")
+CATEGORIES = ("materials", "outsourced", "labor", "fees_overhead", "other", "unknown")
 CATEGORY_LABELS = {"materials": "Materials", "outsourced": "Outsourced work", "labor": "Labor",
-                   "other": "Other job costs", "unknown": "Cost type not given"}
+                   "fees_overhead": "Fees & overhead on this job", "other": "Other job costs",
+                   "unknown": "Cost type not given"}
+FEE_OVERHEAD_WORDS = {"fee", "fees", "processing", "merchant", "overhead", "rent", "utilities", "utility",
+                      "insurance", "admin", "administrative"}
 MATERIAL_WORDS = {"material", "materials", "supplies", "supply", "inventory", "stock", "substrate", "substrates",
                   "blanks", "media", "ink", "vinyl", "paper"}
 OUTSOURCED_WORDS = {"outsourced", "outsource", "outsourcing", "subcontract", "subcontractor", "subcontractors",
@@ -30,9 +33,10 @@ OUTSOURCED_WORDS = {"outsourced", "outsource", "outsourcing", "subcontract", "su
 
 STATUS_ORDER = ("complete", "provisional", "unavailable")
 STATUS_LABELS = {"complete": "Complete", "provisional": "Provisional", "unavailable": "Unavailable"}
-BASIS = ("Direct job contribution: sales billed on each job's invoice lines (credits included) minus the costs "
-         "recorded against that job. Invoice basis (what was billed, not cash received). Not included: "
-         "payment processing fees, overhead, and costs not linked to a job.")
+BASIS = ("Direct job contribution: sales billed on each job's invoice lines (credits included) minus every cost "
+         "recorded against that job, shown by type. Invoice basis (what was billed, not cash received). Payment "
+         "processing fees and overhead count only when they are recorded against a job; those not linked to a "
+         "job are left out of every figure and totalled in the notes. Nothing is estimated or spread over jobs.")
 
 
 def cost_category(cost_type: str | None) -> str:
@@ -45,6 +49,8 @@ def cost_category(cost_type: str | None) -> str:
     words = set(re.sub(r"[^a-z0-9]+", " ", text.lower()).split())
     if words & OUTSOURCED_WORDS:
         return "outsourced"
+    if words & FEE_OVERHEAD_WORDS:
+        return "fees_overhead"
     if words & MATERIAL_WORDS:
         return "materials"
     return "other"
@@ -180,10 +186,15 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
                 else:
                     unknown_customer_lines += 1
 
+    # Customers named on failed sales lines count too: a job billed to Bakery whose failed line
+    # names Gym is a job of two customers, never Bakery's alone.
+    for job, names in failed_customers.items():
+        if job:
+            customers[job] |= names
+
     for job in sorted(set(sales) | set(job_costs) | set(missing)):
         if job not in sales and job not in job_costs:
             # Only failed lines: kept, with no figure, so its customer's total isn't complete.
-            customers[job] = set(failed_customers[job])
             report.jobs.append(JobResult(job, tuple(sorted(customers[job])), ZERO, {c: ZERO for c in CATEGORIES},
                                          0, 0, "unavailable",
                                          [f"Its only lines couldn't be imported ({missing[job]['sales']} sales, "
@@ -266,6 +277,10 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
     if report.unlinked_sales_lines:
         report.notes.append(f"{report.unlinked_sales_lines} invoice line(s) worth {format_money(report.unlinked_sales)} have "
                             "no job number, so they aren't in any job's figure.")
+    linked_fees = sum((j.costs["fees_overhead"] for j in report.jobs), ZERO)
+    if linked_fees:
+        report.notes.append(f"{format_money(linked_fees)} of fees or overhead were recorded against jobs and are "
+                            "subtracted from those jobs (column 'Fees & overhead on this job').")
     if report.unlinked_cost_lines:
         report.notes.append(f"{report.unlinked_cost_lines} cost line(s) worth {format_money(report.unlinked_costs)} aren't "
                             "linked to a job, so they aren't in any job's figure. If some of them belong to "
