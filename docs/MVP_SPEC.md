@@ -17,18 +17,20 @@ The owner renamed the product from Ledger to **MarginX** on 2026-10-18. Code and
 | Labor hours per job | Optional | Time sheet or spreadsheet |
 | Payment processor or bank deposits | Optional | Square, bank |
 
-- **Formats:** CSV and Excel (.xlsx), several files at once.
-- **Columns:** the owner maps any unfamiliar columns once, and MarginX remembers the mapping per shop.
+- **Formats:** CSV first (D-003). Excel (.xlsx), several files at once, and saved per-shop column mappings come in later reviewed steps, once coverage and provenance rules are defined.
+- **Columns:** the owner maps unfamiliar columns to ours, and the mapping is validated before any value is used.
+- **Bank and card exports:** these are never automatically treated as revenue or costs. Provider movements, fees, transfers and genuine expenses are told apart first, so nothing is double-counted (`LAUNCH_RISK_REGISTER.md`).
 
 ## What they see
-1. **"What's missing" report (step 1, this week).** Plain-language gaps with counts, for example:
+1. **"What's missing" report (build step 1, this week).** Plain-language gaps with counts, for example:
    - "40 of 120 jobs have no cost recorded."
    - "No labor hours found."
    - "15 bills aren't linked to a job."
    - "6 rows rejected: missing amount (rows listed)."
-2. **Profit by job and by customer.**
-   - Revenue minus materials, outsourced work and labor.
-   - Any job missing key costs is marked **incomplete** and its profit is withheld, not shown as a number.
+2. **Profit by job and by customer**, for an explicitly stated date range and accounting basis.
+   - **What the number is:** each result is labeled either **direct job contribution** (revenue minus materials, outsourced work and labor) or **fully allocated profit**. Adjustments (discounts, refunds, processor fees, reprints) and allocated overhead are included only with a defensible, stated method.
+   - **When it's withheld:** if materials, labor, fees, refunds or allocation inputs are missing or unverified, the affected result is **unavailable or provisional**, never shown as exact profit. Optional labor hours do not make a result exact when labor is missing.
+   - **Customer totals:** customer rollups inherit the incomplete-job warnings of their jobs.
 3. **"Where you're losing money" list.**
    - Jobs priced below cost.
    - Customers whose margin is shrinking.
@@ -47,18 +49,26 @@ The owner renamed the product from Ledger to **MarginX** on 2026-10-18. Code and
 - **Found something new:** the owner sees at least one job, customer or cost gap they didn't know about, recorded in their own words in the #30 format.
 - **Comes back:** the owner opens the weekly summary on 2 consecutive weeks.
 
-None of these has been measured yet; they are targets, not results.
+None of these has been measured yet; they are targets, not results. Record actual outcomes, including contradicting feedback. Visits alone do not prove the product is financially useful.
 
 ## Build order (each step is one small PR, tested, independently reviewed, owner-approved)
-1. **Upload + "what's missing" report.** CSV/XLSX, column mapping, structure checks, rejected-row list. It reuses `data_pipeline.normalize`, `transaction_integrity.deduplicate` and the Decimal helpers in `finance_engine`.
-2. **Profit by job and customer**, with incomplete jobs flagged. This extends `finance_engine.summarize` (`expenses_complete`).
-3. **"Where you're losing money" list.**
-4. **Weekly summary.**
-5. **Pilot data-safety minimums** (can run alongside 1–4).
+1. **CSV upload + validated mapping + "what's missing" / rejected-row report.**
+   - Build a **new** job/invoice/cost intake adapter, with a validated column mapping and a row-level rejection and coverage report.
+   - Reuse the existing money parser and validators only where their input contracts fit.
+   - Today's helpers are not a job importer. `data_pipeline.normalize` accepts only fixed `sales`/`expenses` schemas and raises on bad input instead of reporting rows. `transaction_integrity.deduplicate` needs canonical source-aware transaction events, so rows are converted to those events before it is applied.
+   - Rows are never silently dropped or guessed.
+2. **Excel (.xlsx) and multiple files**, with saved per-shop mappings, plus coverage and provenance rules.
+3. **Profit by job and customer**, as defined above.
+   - This is a **new** job/customer-keyed calculation on exact Decimal amounts.
+   - `finance_engine.summarize` is a period-total helper with no job or customer grouping, not an existing job-profit engine.
+4. **"Where you're losing money" list.**
+5. **Weekly summary.**
+6. **Pilot data-safety minimums** (can run alongside 1–5).
 
 ## Out of scope for the pilot
 - Live QuickBooks/Square/bank connections (they need credentials and a separate owner decision).
-- Pricing, production deployment, and real customer data before (5).
+- Pricing and production deployment.
+- Real customer data, until independently verified safety requirements are met and the owner explicitly approves it.
 
 ## Open questions (answers come from the partner's conversations)
 - Which software and export layouts are most common locally?
