@@ -135,6 +135,26 @@ class MappingTests(unittest.TestCase):
         self.assertEqual("invoices", ji.detect_kind(["Invoice", "Date", "Customer", "Payment Terms", "Amount"]))
         self.assertEqual("invoices", ji.detect_kind(["Num", "Date", "Customer", "Amount", "Open Balance"]))  # QuickBooks list
 
+    def test_cost_shaped_payout_and_settlement_exports_are_asked_about(self):
+        for headers in (["Date", "Vendor", "Amount", "Payout ID"], ["Date", "Vendor", "Amount", "Settlement Date"],
+                        ["Bill No", "Date", "Vendor", "Payment Amount", "Amount"], ["Date", "Supplier", "Transfer", "Amount"]):
+            with self.subTest(headers=headers):
+                self.assertIsNone(ji.detect_kind(headers))
+        # Real bills stay automatic, including a QuickBooks bill list with Open Balance.
+        self.assertEqual("costs", ji.detect_kind(load("fictional_costs.csv", "costs")[0]))
+        self.assertEqual("costs", ji.detect_kind(["Num", "Date", "Vendor", "Amount", "Open Balance"]))
+
+    def test_line_amount_and_invoice_total_are_never_picked_silently(self):
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Line Amount,Invoice Total\n"
+                                    b"INV-1,10/31/2026,Acme,40.00,100.00\nINV-1,10/31/2026,Acme,60.00,100.00\n")
+        self.assertIsNone(ji.suggest_mapping(headers, "invoices")["amount"])  # the owner is asked
+        mapping = {"invoice_id": "Invoice", "date": "Date", "customer": "Customer", "amount": "Line Amount"}
+        result = ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY")
+        self.assertEqual([Decimal("40.00"), Decimal("60.00")], [r["amount"] for r in result.accepted])
+        # A single clear amount column still needs no question.
+        self.assertEqual("Line Amount", ji.suggest_mapping(["Invoice", "Date", "Customer", "Line Amount"], "invoices")["amount"])
+        self.assertEqual("Total", ji.suggest_mapping(["Invoice", "Date", "Customer", "Total"], "invoices")["amount"])
+
     def test_two_possible_date_columns_are_never_picked_silently(self):
         self.assertIsNone(ji.suggest_mapping(["Invoice", "Date", "Invoice Date", "Customer", "Amount"], "invoices")["date"])
         self.assertEqual("Invoice Date", ji.suggest_mapping(["Invoice", "Invoice Date", "Customer", "Amount"], "invoices")["date"])

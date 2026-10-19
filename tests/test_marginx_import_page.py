@@ -199,6 +199,25 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertNotIn("invoice line", page_text(at))
         self.assertTrue(any("payment statements" in i.value for i in at.info))
 
+    def test_payout_shaped_cost_file_is_asked_about_and_bank_imports_nothing(self):
+        at = self.with_files("Invoice,Date,Customer,Amount\nA,10/31/2026,X (fictional),1.00\n",
+                             "Date,Vendor,Amount,Payout ID\n10/31/2026,Processor (fictional),250.00,PO-1\n")
+        question = radio(at, "What kind of file is fictional_costs.csv?")
+        self.assertNotIn("cost line", page_text(at))
+        question.set_value("bank").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertNotIn("cost line", page_text(at))
+        self.assertTrue(any("payment statements" in i.value for i in at.info))
+
+    def test_itemized_invoice_asks_which_amount_and_keeps_line_values(self):
+        at = self.with_files("Invoice,Date,Customer,Line Amount,Invoice Total\n"
+                             "INV-1,10/31/2026,X (fictional),40.00,100.00\nINV-1,10/31/2026,X (fictional),60.00,100.00\n",
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        self.assertNotIn("invoice line", page_text(at))  # no silent choice of the repeated total
+        next(s for s in at.selectbox if s.label == "Which column has the amount?").set_value("Line Amount").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("2 invoice lines imported (1 invoice)", page_text(at))
+
     def test_identical_files_both_get_reported(self):
         same = "Date,Vendor,Amount\n10/31/2026,A,1.00\n"
         at = self.with_files(same, same)

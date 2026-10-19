@@ -50,7 +50,10 @@ SYNONYMS: dict[str, tuple[str, ...]] = {
     "customer": ("customer", "customer name", "client", "client name", "name", "bill to"),
     "vendor": ("vendor", "vendor name", "payee", "supplier", "name"),
     # Never balances: an open/outstanding balance is what's still owed, not what was billed.
-    "amount": ("amount", "total", "amt", "amount usd", "amt usd", "total amount", "invoice total"),
+    # Line-level and document-level amounts both count, so a file with "Line Amount" and
+    # "Invoice Total" has two candidates and the owner is asked which one each row uses.
+    "amount": ("amount", "total", "amt", "amount usd", "amt usd", "total amount", "invoice total", "bill total",
+               "line amount", "line total", "item amount", "item total", "line amt", "extended amount"),
     "job_id": ("job", "job id", "job no", "job number", "job num", "project", "project id", "work order", "wo"),
     "description": ("description", "memo", "item", "service", "product service"),
     "cost_type": ("cost type", "type", "category", "account", "expense type"),
@@ -86,6 +89,9 @@ BANK_WORDS = {"deposit", "deposits", "withdrawal", "withdrawals", "debit", "debi
 # an ordinary invoice field and is removed before checking.)
 PAYMENT_WORDS = {"deposit", "deposits", "payment", "payments", "payout", "payouts", "settlement", "settlements",
                  "transfer", "transfers", "withdrawal", "withdrawals", "debit", "debits", "received", "receipt"}
+# Any of these in an invoice- or cost-shaped file means it may be a payments, payouts
+# or bank export, so the owner is asked what it is.
+CASH_MOVEMENT_WORDS = PAYMENT_WORDS | BANK_WORDS
 # Headers describing what's still owed, never the amount billed.
 BALANCE_WORDS = {"balance", "due", "outstanding", "owed", "unpaid", "remaining", "open"}
 
@@ -272,7 +278,16 @@ def detect_kind(headers: list[str]) -> str | None:
         mapping = suggest_mapping(headers, kind)
         return all(mapping[f] for f, (_, required) in FIELDS[kind].items() if required)
 
-    tokens = set(" ".join(_norm(h).replace("bill to", "").replace("payment terms", "") for h in headers).split())
+    # Ordinary invoice/bill-list phrases are removed first, so they don't look like
+    # cash-movement or cost signals: "bill to", "payment terms", "open balance".
+    phrases = ("bill to", "payment terms", "open balance")
+    normalized = []
+    for h in headers:
+        text = _norm(h)
+        for phrase in phrases:
+            text = text.replace(phrase, "")
+        normalized.append(text)
+    tokens = set(" ".join(normalized).split())
     score = {"invoices": len(tokens & INVOICE_WORDS), "costs": len(tokens & COST_WORDS)}
     full = [k for k in KINDS if complete(k)]
     if len(full) == 2:
@@ -285,16 +300,14 @@ def detect_kind(headers: list[str]) -> str | None:
         if (len(ranked) > 1 and score[ranked[0]] == score[ranked[1]]) or score[ranked[0]] == 0:
             return None
         found = ranked[0]
-    if found == "costs" and (not tokens & STRONG_COST_WORDS or tokens & BANK_WORDS):
-        # "Date, Payee, Amount" is also what a bank or card statement looks like, where
-        # deposits and transfers aren't costs (MVP spec). Without bill/expense evidence,
-        # or with bank-statement words, the owner is asked.
+    if tokens & CASH_MOVEMENT_WORDS:
+        # One guard for both file types: payouts, payments, deposits, settlements and
+        # transfers are cash movements, not sales or costs (MVP spec), so a file showing
+        # those signs is asked about before anything is imported.
         return None
-    if found == "invoices" and tokens & (PAYMENT_WORDS | (BANK_WORDS - {"balance"})):
-        # An invoice-shaped payments or deposits export: its amounts may be money
-        # received, not amounts billed, so the owner is asked what the file is.
-        # ("Open Balance" is a normal invoice-list column, and is never usable as the
-        # amount anyway, so it doesn't trigger the question.)
+    if found == "costs" and not tokens & STRONG_COST_WORDS:
+        # "Date, Payee, Amount" is also what a bank or card statement looks like.
+        # Without bill/expense evidence, the owner is asked.
         return None
     return found
 
