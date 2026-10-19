@@ -204,6 +204,51 @@ class MappingTests(unittest.TestCase):
                                        ["Date", "Vendor", "Bill Total"], "costs")
         self.assertTrue(any("bill number column" in p for p in problems), problems)
 
+    def test_generic_total_repeated_on_every_line_is_asked_about(self):
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Total\n"
+                                    b"INV-1,10/31/2026,Acme,Banner,100.00\nINV-1,10/31/2026,Acme,Install,100.00\n"
+                                    b"INV-2,10/31/2026,Acme,Decal,25.00\n")
+        mapping = ji.suggest_mapping(headers, "invoices")
+        self.assertEqual({"document": "INV-1", "lines": 2}, ji.amount_scope_question(headers, rows, mapping, "invoices"))
+        with self.assertRaises(ji.IntakeError):  # never imported until the owner answers
+            ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY")
+        per_line = ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY", "line")
+        self.assertEqual([Decimal("100.00"), Decimal("100.00"), Decimal("25.00")], [r["amount"] for r in per_line.accepted])
+        per_invoice = ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY", "document")
+        self.assertEqual([Decimal("25.00")], [r["amount"] for r in per_invoice.accepted])
+        self.assertEqual([2, 3], [r["row"] for r in per_invoice.rejected])
+        self.assertTrue(all("whole invoice's total" in " ".join(r["reasons"]) for r in per_invoice.rejected))
+
+    def test_no_amount_question_when_the_file_shows_what_the_amount_means(self):
+        # Different amounts on one invoice's lines can't be a repeated invoice total.
+        headers, rows, mapping = load("fictional_invoices.csv", "invoices")
+        self.assertIsNone(ji.amount_scope_question(headers, rows, mapping, "invoices"))
+        # One line per invoice, or a column named per line or per invoice.
+        for csv_text in (b"Invoice,Date,Customer,Total\nA,10/31/2026,X,100.00\nB,10/31/2026,X,100.00\n",
+                         b"Invoice,Date,Customer,Line Amount\nA,10/31/2026,X,100.00\nA,10/31/2026,X,100.00\n",
+                         b"Invoice,Date,Customer,Invoice Total\nA,10/31/2026,X,100.00\nA,10/31/2026,X,100.00\n"):
+            with self.subTest(csv=csv_text):
+                headers, rows = ji.read_csv(csv_text)
+                self.assertIsNone(ji.amount_scope_question(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices"))
+        with self.assertRaises(ji.IntakeError):
+            ji.intake(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY", "sometimes")
+
+    def test_bill_numbers_are_grouped_per_vendor(self):
+        # Two vendors can each issue bill B-1; those are two one-line bills, not one two-line bill.
+        headers, rows = ji.read_csv(b"Bill No,Date,Vendor,Bill Total\n"
+                                    b"B-1,10/31/2026,Paper Co,300.00\nB-1,10/31/2026,Ink Co,300.00\n")
+        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")
+        self.assertEqual([Decimal("300.00"), Decimal("300.00")], [r["amount"] for r in result.accepted])
+        self.assertEqual([], result.rejected)
+        headers, rows = ji.read_csv(b"Bill No,Date,Vendor,Amount\n"
+                                    b"B-1,10/31/2026,Paper Co,50.00\nB-1,10/31/2026,Ink Co,50.00\n")
+        self.assertIsNone(ji.amount_scope_question(headers, rows, ji.suggest_mapping(headers, "costs"), "costs"))
+        # The same vendor's bill on two lines with one repeated amount is asked about.
+        headers, rows = ji.read_csv(b"Bill No,Date,Vendor,Amount\n"
+                                    b"B-1,10/31/2026,Paper Co,50.00\nB-1,10/31/2026,Paper Co,50.00\n")
+        self.assertEqual({"document": "B-1", "lines": 2},
+                         ji.amount_scope_question(headers, rows, ji.suggest_mapping(headers, "costs"), "costs"))
+
     def test_competing_customer_and_job_columns_are_never_picked_silently(self):
         headers = ["Invoice", "Date", "Customer", "Client", "Amount", "Job", "Project"]
         mapping = ji.suggest_mapping(headers, "invoices")

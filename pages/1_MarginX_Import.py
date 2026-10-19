@@ -142,6 +142,21 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
             st.info(p)
         return
 
+    # Amount meaning: asked only when an invoice or bill has several lines that all show
+    # the same amount, which could be each line's price or the whole document's total.
+    amount_scope = None
+    scope = ji.amount_scope_question(headers, records, mapping, kind)
+    if scope:
+        what = "invoice" if kind == "invoices" else "bill"
+        amount_scope = st.radio(
+            f"In {name}, {what} {scope['document']} is on {scope['lines']} lines, each showing the same "
+            f"'{mapping['amount']}'. What is that number?", ji.AMOUNT_SCOPES, index=None,
+            format_func={"line": "Each line's own amount (count every line)",
+                         "document": f"The whole {what}'s total, repeated on each line"}.get,
+            key=f"{key}-{kind}-scope-{mapping['amount']}")
+        if amount_scope is None:
+            return
+
     # Date format: automatic unless the dates could genuinely mean two different days.
     # Answers are keyed to the file type and date column, so a changed choice asks again.
     values = ji.column_values(headers, records, mapping["date"])
@@ -167,7 +182,7 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
                                    format_func=lambda f: describe_format(f, example),
                                    key=f"{date_key}-override-{date_format}")
 
-    result = ji.intake(headers, records, mapping, kind, date_format)
+    result = ji.intake(headers, records, mapping, kind, date_format, amount_scope)
     st.caption(f"Read as {KIND_LABELS[kind]}, dates as {date_format}.")
     for item in ji.missing_report(result):
         # Report text can quote values from the file, so it is shown as plain text.

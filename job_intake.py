@@ -99,6 +99,10 @@ BALANCE_WORDS = {"balance", "due", "outstanding", "owed", "unpaid", "remaining",
 PAID_WORDS = PAYMENT_WORDS | {"paid"}
 # Headers holding a whole invoice's or bill's total. Repeated on every line of a
 # multi-line document, they can't be counted per line.
+# Headers that say the amount belongs to one line of an invoice or bill.
+LINE_AMOUNTS = {"line amount", "line total", "item amount", "item total", "line amt", "extended amount"}
+# The owner's answers when an amount column's name doesn't say which it is.
+AMOUNT_SCOPES = ("line", "document")
 DOCUMENT_TOTALS = {"invoice total", "bill total", "invoice amount", "bill amount", "invoice total amount",
                    "bill total amount", "total invoice", "total bill"}
 
@@ -362,9 +366,64 @@ def column_values(headers: list[str], records: list[Record], header: str) -> lis
     return [r.cells[index] for r in records if len(r.cells) == len(headers)]
 
 
+def _document_key(values: dict[str, str], kind: str) -> tuple[str, ...] | None:
+    """Which invoice or bill a line belongs to. Bill numbers are only unique per vendor."""
+    if kind == "invoices":
+        return (values["invoice_id"],) if values.get("invoice_id") else None
+    return (values.get("vendor", ""), values["cost_id"]) if values.get("cost_id") else None
+
+
+def _lines_per_document(headers: list[str], records: list[Record], mapping: dict[str, str | None],
+                        kind: str) -> Counter:
+    index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
+    keys = (_document_key({f: r.cells[i].strip() for f, i in index.items()}, kind)
+            for r in records if len(r.cells) == len(headers))
+    return Counter(k for k in keys if k)
+
+
+def amount_scope_question(headers: list[str], records: list[Record], mapping: dict[str, str | None],
+                          kind: str) -> dict | None:
+    """When invoices or bills have several lines and nothing shows whether the amount column is
+    each line's amount or the whole document's total, the owner is asked.
+
+    Returns {"document": "INV-1", "lines": 2} for the question's example, or None when no question
+    is needed: the column is clearly per line ("Line Amount") or per document ("Invoice Total"),
+    every invoice or bill has one line, or some document's lines have different amounts.
+    """
+    amount = mapping.get("amount")
+    if not amount or _norm(amount) in LINE_AMOUNTS or is_document_total(amount):
+        return None
+    index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
+    amounts: dict[tuple[str, ...], list[str]] = {}
+    for r in records:
+        if len(r.cells) == len(headers):
+            values = {f: r.cells[i].strip() for f, i in index.items()}
+            key = _document_key(values, kind)
+            if key:
+                amounts.setdefault(key, []).append(values.get("amount", ""))
+    multi = {k: v for k, v in amounts.items() if len(v) > 1}
+    if not multi or any(len({_money_or_text(a) for a in v}) > 1 for v in multi.values()):
+        # One line per document, or a document whose lines have different amounts: a
+        # whole-document total would repeat the same number, so these are line amounts.
+        return None
+    key, lines = next(iter(multi.items()))
+    return {"document": key[-1], "lines": len(lines)}
+
+
+def _money_or_text(value: str):
+    try:
+        return money(value)
+    except ValueError:
+        return value
+
+
 def intake(headers: list[str], records: list[Record], mapping: dict[str, str | None], kind: str,
-           date_format: str) -> IntakeResult:
-    """Accept or reject every record with a reason. Raises IntakeError if the mapping is unusable."""
+           date_format: str, amount_scope: str | None = None) -> IntakeResult:
+    """Accept or reject every record with a reason. Raises IntakeError if the mapping is unusable.
+
+    amount_scope is the owner's answer to amount_scope_question: "line" (each line's own
+    amount) or "document" (the whole invoice's or bill's total, repeated on each line).
+    """
     if kind not in KINDS:
         raise IntakeError(f"Unknown file type: {kind}")
     if date_format not in DATE_FORMATS:
@@ -372,16 +431,21 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
     problems = validate_mapping(mapping, headers, kind)
     if problems:
         raise IntakeError(" ".join(problems))
+    if amount_scope not in (None, *AMOUNT_SCOPES):
+        raise IntakeError(f"Unknown amount meaning: {amount_scope}")
+    question = amount_scope_question(headers, records, mapping, kind)
+    if question and amount_scope is None:
+        raise IntakeError(f"Say whether '{mapping['amount']}' is each line's amount or the whole "
+                          f"{'invoice' if kind == 'invoices' else 'bill'}'s total.")
     fmt = DATE_FORMATS[date_format]
     index = {f: headers.index(h) for f, h in mapping.items() if h}
     result = IntakeResult(kind=kind, total_rows=len(records), mapped_fields=tuple(index), headers=tuple(headers))
     seen_rows: dict[tuple[str, ...], int] = {}
     # A whole-document total on a document with several lines would be counted once
     # per line, so those lines are rejected until a line amount column is chosen.
-    id_field = "invoice_id" if kind == "invoices" else "cost_id"
-    lines_per_document: Counter = Counter()
-    if is_document_total(mapping["amount"]) and id_field in index:
-        lines_per_document.update(r.cells[index[id_field]].strip() for r in records if len(r.cells) == len(headers))
+    per_document = is_document_total(mapping["amount"]) or (question is not None and amount_scope == "document")
+    lines_per_document = _lines_per_document(headers, records, mapping, kind) if per_document else Counter()
+    entity = "Invoice" if kind == "invoices" else "Bill"
 
     for rec in records:
         number = rec.row
@@ -405,10 +469,9 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
                 reasons.append(f"Amount '{values['amount']}' isn't a valid dollar amount (max 2 decimals).")
         if kind == "costs" and amount is not None and amount < 0:
             reasons.append("Cost is negative; record refunds or credits separately.")
-        document = values.get(id_field)
+        document = _document_key(values, kind)
         if document and lines_per_document[document] > 1:
-            entity = "Invoice" if kind == "invoices" else "Bill"
-            reasons.append(f"{entity} {document} has {lines_per_document[document]} lines and "
+            reasons.append(f"{entity} {document[-1]} has {lines_per_document[document]} lines and "
                            f"'{mapping['amount']}' is the whole {entity.lower()}'s total, so it can't be "
                            "counted on each line. Choose a line amount column, or export one row per "
                            f"{entity.lower()}.")

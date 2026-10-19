@@ -269,6 +269,24 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertIn("No invoice lines were imported", text)
         self.assertEqual([2, 3], list(at.dataframe[0].value["Row in file"]))
 
+    def test_repeated_generic_total_asks_what_the_number_is(self):
+        csv_text = ("Invoice,Date,Customer,Description,Total\n"
+                    "INV-1,10/31/2026,X (fictional),Banner,100.00\nINV-1,10/31/2026,X (fictional),Install,100.00\n")
+        label = ("In fictional_invoices.csv, invoice INV-1 is on 2 lines, each showing the same 'Total'. "
+                 "What is that number?")
+        at = self.with_files(csv_text, "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        question = radio(at, label)
+        self.assertEqual(["Each line's own amount (count every line)", "The whole invoice's total, repeated on each line"],
+                         question.options)
+        self.assertNotIn("invoice line", page_text(at))  # nothing imported until answered
+        question.set_value("line").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("2 invoice lines imported (1 invoice)", page_text(at))
+        radio(at, label).set_value("document").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("2 rows of 2 couldn't be imported", page_text(at))
+        self.assertIn("No invoice lines were imported", page_text(at))
+
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertTrue(any("no rows" in i.value for i in at.info))
