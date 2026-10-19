@@ -92,8 +92,9 @@ class Record:
 
 
 def _is_blank_line(cells: list[str]) -> bool:
-    # An empty line, or one holding only spaces. A line of separators (",,") is a record.
-    return not cells or (len(cells) == 1 and not cells[0].strip())
+    # Only a truly empty line parses to no cells. Anything else, including "",
+    # spaces or a line of separators (",,"), is a record and gets validated.
+    return not cells
 
 
 def read_csv(data: bytes) -> tuple[list[str], list[Record]]:
@@ -115,12 +116,12 @@ def read_csv(data: bytes) -> tuple[list[str], list[Record]]:
         raise IntakeError(f"File isn't valid CSV ({exc}). Check for unbalanced quotes.") from exc
     if not table:
         raise IntakeError("File is empty.")
-    headers = [h.strip() for h in table[0][1]]
+    headers = list(table[0][1])  # kept exactly as written, so exports round-trip
     if len(headers) < 2:
         raise IntakeError("Only one column was found. The file may use a separator other than commas.")
-    if any(not h for h in headers):
+    if any(not h.strip() for h in headers):
         raise IntakeError("A column has no header name. Every column needs a header.")
-    if len({h.lower() for h in headers}) != len(headers):
+    if len({h.strip().lower() for h in headers}) != len(headers):
         raise IntakeError("Two columns have the same header name.")
     return headers, [Record(number, tuple(cells)) for number, cells in table[1:]]
 
@@ -300,10 +301,22 @@ def rejected_rows_csv(result: IntakeResult) -> str:
     a formula character get a leading apostrophe so spreadsheets show them as text.
     """
     width = max([len(result.headers), *(len(item["cells"]) for item in result.rejected)])
-    extra = [f"extra_cell_{i}" for i in range(1, width - len(result.headers) + 1)]
+    taken = {h.strip().lower() for h in result.headers}
+
+    def unique(name: str) -> str:
+        # Export-only column names never collide with the shop's own headers.
+        candidate, n = name, 1
+        while candidate.lower() in taken:
+            n += 1
+            candidate = f"{name}_{n}"
+        taken.add(candidate.lower())
+        return candidate
+
+    meta = [unique("marginx_row"), unique("marginx_reasons")]
+    extra = [unique(f"extra_cell_{i}") for i in range(1, width - len(result.headers) + 1)]
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(["marginx_row", "marginx_reasons", *result.headers, *extra])
+    writer.writerow([*meta, *[safe_cell(h) for h in result.headers], *extra])
     for item in result.rejected:
         cells = list(item["cells"]) + [""] * (width - len(item["cells"]))
         writer.writerow([item["row"], safe_cell(" ".join(item["reasons"])), *[safe_cell(c) for c in cells]])

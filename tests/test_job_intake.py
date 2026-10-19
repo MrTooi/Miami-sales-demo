@@ -44,13 +44,16 @@ class ReadCsvTests(unittest.TestCase):
                 self.assertIn(phrase, str(ctx.exception))
 
     def test_row_numbers_match_the_file_and_separator_only_lines_are_reported(self):
-        headers, rows = ji.read_csv(b"Date,Payee,Amount\n\n10/01/2026,A,1.00\n,,\n   \n10/02/2026,,2.00\n")
+        headers, rows = ji.read_csv(b'Date,Payee,Amount\n\n10/01/2026,A,1.00\n,,\n   \n""\n10/02/2026,,2.00\n')
         result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")
         self.assertEqual(3, result.accepted[0]["row"])
-        # ",," is a record with blank cells: counted and rejected, never silently skipped.
-        self.assertEqual([4, 6], [r["row"] for r in result.rejected])
-        self.assertEqual(3, result.total_rows)
+        # Only the truly empty line 2 is skipped. ",,", a spaces-only line and a quoted
+        # empty "" are records: counted and rejected, never silently skipped.
+        self.assertEqual([4, 5, 6, 7], [r["row"] for r in result.rejected])
+        self.assertEqual(5, result.total_rows)
         self.assertIn("Date is blank", " ".join(result.rejected[0]["reasons"]))
+        self.assertIn("1 cells", " ".join(result.rejected[1]["reasons"]))
+        self.assertIn("1 cells", " ".join(result.rejected[2]["reasons"]))
 
     def test_wrong_cell_count_is_reported_per_row_not_dropped(self):
         headers, rows = ji.read_csv(b"Date,Payee,Amount\n10/01/2026,A,1.00\n10/02/2026,B\n")
@@ -198,6 +201,33 @@ class UploadGateTests(unittest.TestCase):
 
 
 class ExportSafetyTests(unittest.TestCase):
+    MAP = {"date": "Date", "vendor": "Payee", "amount": "Amount"}
+
+    def export(self, data):
+        headers, rows = ji.read_csv(data)
+        result = ji.intake(headers, rows, self.MAP, "costs", "MM/DD/YYYY")
+        return list(csv.reader(io.StringIO(ji.rejected_rows_csv(result))))
+
+    def test_formula_headers_are_neutralized_in_the_export(self):
+        exported = self.export(b'Date,Payee,Amount,"=HYPERLINK(""http://x.invalid"")"\n10/01/2026,A,-5,n\n')
+        self.assertEqual("'=HYPERLINK(\"http://x.invalid\")", exported[0][-1])
+
+    def test_original_headers_round_trip_and_export_names_never_collide(self):
+        data = b"Date,Payee,Amount,marginx_row,marginx_reasons, Note \n10/01/2026,A,-5,a,b,c\n"
+        exported = self.export(data)
+        self.assertEqual(["marginx_row_2", "marginx_reasons_2", "Date", "Payee", "Amount", "marginx_row",
+                          "marginx_reasons", " Note "], exported[0])
+        # Re-uploading the fix file works: headers are unique and readable.
+        fixed = io.StringIO()
+        csv.writer(fixed).writerows(exported)
+        headers, rows = ji.read_csv(fixed.getvalue().encode("utf-8"))
+        self.assertIn(" Note ", headers)
+        self.assertEqual(1, len(rows))
+
+    def test_extra_cell_names_avoid_collisions(self):
+        exported = self.export(b"Date,Payee,Amount,extra_cell_1\n10/01/2026,A,1.00,x,OVER\n")
+        self.assertEqual("extra_cell_1_2", exported[0][-1])
+
     def test_rows_to_fix_export_is_lossless(self):
         headers, rows = ji.read_csv(
             b"Date,Payee,Note,Amount\n10/01/2026,A,keep me,-5\n10/02/2026,B\n10/03/2026,C,x,1.00,EXTRA\n")
