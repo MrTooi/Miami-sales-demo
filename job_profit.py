@@ -31,10 +31,17 @@ CATEGORY_LABELS = {"materials": "Materials", "outsourced": "Outsourced work", "l
 UNKNOWN_TYPES = {"unknown", "uncategorized", "uncategorised", "n a", "na", "none", "tbd", "to be determined",
                  "ask my accountant", "unclassified", "not classified", "not categorized", "not categorised",
                  "no category", "not set", "pending"}
-# Only costs that clearly aren't tied to one job: a plain "fee" (delivery fee, installation
-# fee) may well be a job's cost, so it is not here and stays "other".
-FEE_OVERHEAD_WORDS = {"processing", "merchant", "overhead", "rent", "utilities", "utility",
-                      "insurance", "admin", "administrative"}
+# Cost types that clearly aren't tied to one job, matched as the WHOLE type, never as a word
+# inside it: "Rent" is overhead, but "Equipment rent", "Job processing" or "Installation
+# insurance" may be a job's own cost and stay "other". Unlinked, only these are left out.
+FEE_OVERHEAD_TYPES = {
+    "overhead", "general overhead", "shop overhead", "rent", "office rent", "shop rent", "building rent",
+    "utilities", "utility", "electric", "electricity", "insurance", "business insurance", "general liability insurance",
+    "admin", "administrative", "office", "office expense", "office expenses",
+    "merchant fee", "merchant fees", "processing fee", "processing fees", "payment processing",
+    "payment processing fee", "payment processing fees", "credit card processing", "credit card fees",
+    "card processing fees", "bank fee", "bank fees", "bank charges",
+}
 MATERIAL_WORDS = {"material", "materials", "supplies", "supply", "inventory", "stock", "substrate", "substrates",
                   "blanks", "media", "ink", "vinyl", "paper"}
 OUTSOURCED_WORDS = {"outsourced", "outsource", "outsourcing", "subcontract", "subcontractor", "subcontractors",
@@ -52,20 +59,22 @@ def cost_category(cost_type: str | None) -> str:
     """Materials, outsourced, labor, fees/overhead, other, or unknown (blank or a "not known"
     marker), from the cost type text.
 
-    Direct-cost words win over fee words ("Materials processing" is materials), because a cost
-    typed as fees or overhead is treated as outside the job when it has no job number.
+    Direct-cost words win ("Materials processing" is materials), and fees/overhead must be the
+    whole type from a short list ("Rent", "Merchant fees"), because a cost typed as fees or
+    overhead is treated as outside the job when it has no job number.
     """
     text = (cost_type or "").strip()
     if not text or re.sub(r"[^a-z0-9]+", " ", text.lower()).strip() in UNKNOWN_TYPES:
         return "unknown"
     if is_labor(text):
         return "labor"
-    words = set(re.sub(r"[^a-z0-9]+", " ", text.lower()).split())
+    words_in_order = re.sub(r"[^a-z0-9]+", " ", text.lower()).split()
+    words = set(words_in_order)
     if words & OUTSOURCED_WORDS:
         return "outsourced"
     if words & MATERIAL_WORDS:
         return "materials"
-    if words & FEE_OVERHEAD_WORDS:
+    if " ".join(words_in_order) in FEE_OVERHEAD_TYPES:
         return "fees_overhead"
     return "other"
 

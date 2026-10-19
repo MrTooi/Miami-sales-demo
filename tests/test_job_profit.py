@@ -273,6 +273,27 @@ class CompletenessTests(unittest.TestCase):
                 self.assertEqual(("provisional", Decimal("50.00")),
                                  (report.jobs[0].status, report.jobs[0].contribution))
 
+    def test_only_whole_overhead_types_are_exempt(self):
+        for text in ("Rent", "Utilities", "Insurance", "Overhead", "Merchant fees", "Payment processing fees",
+                     "Bank fees", "Office rent"):
+            self.assertEqual("fees_overhead", jp.cost_category(text), text)
+        for text in ("Equipment rent", "Job processing", "Installation insurance", "Rental", "Overhead crane"):
+            self.assertEqual("other", jp.cost_category(text), text)
+        costs = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                 b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n")
+        invoices = b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n"
+        for text in (b"Equipment rent", b"Job processing", b"Installation insurance"):
+            with self.subTest(text=text):
+                report = self.report(costs + b"B-3,10/02/2026,Lift Co,," + text + b",40.00\n", invoices)
+                self.assertEqual(("provisional", Decimal("50.00")),
+                                 (report.jobs[0].status, report.jobs[0].contribution))
+                self.assertEqual(("provisional", Decimal("50.00")),
+                                 (report.customers[0].status, report.customers[0].contribution))
+                self.assertEqual(Decimal("40.00"), report.unlinked_costs)  # kept whole, never allocated
+        # Clear overhead with no job number is outside the basis: the job can be complete.
+        report = self.report(costs + b"B-3,10/31/2026,Landlord,,Rent,40.00\n", invoices)
+        self.assertEqual(("complete", "complete"), (report.jobs[0].status, report.customers[0].status))
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))
