@@ -69,6 +69,13 @@ _LABOR = re.compile(r"\b(?<!non[- ])(?<!non)(" + "|".join(LABOR_WORDS) + r")\b",
 def is_labor(cost_type: str) -> bool:
     """A whole-word labor category; "Non-labor" or "nonlabor" doesn't count."""
     return bool(_LABOR.search(cost_type or ""))
+
+
+# Header words that point to one kind of file. "bill to" (an invoice field) is
+# removed before looking for the cost word "bill".
+INVOICE_WORDS = {"invoice", "invoices", "customer", "client", "sales", "sold"}
+COST_WORDS = {"vendor", "payee", "supplier", "expense", "expenses", "purchase", "bill", "bills"}
+
 FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 MAX_FILE_BYTES = 5_000_000
 
@@ -170,10 +177,60 @@ def validate_mapping(mapping: dict[str, str | None], headers: list[str], kind: s
 
 
 def suggest_date_format(values: list[str]) -> str | None:
-    """The single format every non-blank value parses with, else None (owner must choose)."""
+    """The format that reads the most dates, if no other format reads as many; else None.
+
+    For example, a file with "10/31/2026" can only be month-first. When two formats
+    read the dates equally well (every date is like "10/01/2026"), the meaning is
+    truly ambiguous and the owner is asked. Dates the chosen format can't read are
+    rejected with a reason, never reinterpreted.
+    """
     values = [v.strip() for v in values if v and v.strip()]
-    fits = [name for name, fmt in DATE_FORMATS.items() if values and all(_parse_date(v, fmt) for v in values)]
-    return fits[0] if len(fits) == 1 else None
+    counts = {name: sum(1 for v in values if _parse_date(v, fmt)) for name, fmt in DATE_FORMATS.items()}
+    best = max(counts.values(), default=0)
+    winners = [name for name, n in counts.items() if n == best]
+    return winners[0] if best > 0 and len(winners) == 1 else None
+
+
+def date_question(values: list[str]) -> dict | None:
+    """When the date format is ambiguous: one example date and what it means in each format.
+
+    Returns {"example": "10/01/2026", "options": {"MM/DD/YYYY": "October 1, 2026", ...}}.
+    """
+    values = [v.strip() for v in values if v and v.strip()]
+    counts = {name: sum(1 for v in values if _parse_date(v, fmt)) for name, fmt in DATE_FORMATS.items()}
+    best = max(counts.values(), default=0)
+    tied = [name for name, n in counts.items() if n == best and n > 0]
+    example = next((v for v in values if sum(1 for n in tied if _parse_date(v, DATE_FORMATS[n])) > 1), None)
+    if example is None:
+        return None
+    options = {}
+    for name in tied:
+        d = _parse_date(example, DATE_FORMATS[name])
+        if d:
+            options[name] = f"{d:%B} {d.day}, {d.year}"
+    return {"example": example, "options": options}
+
+
+def detect_kind(headers: list[str]) -> str | None:
+    """Invoices or costs, worked out from the headers; None when it can't be told apart.
+
+    A kind whose required columns are all recognised wins. If both or neither are
+    complete, distinctive header words decide, and a tie returns None.
+    """
+    def complete(kind: str) -> bool:
+        mapping = suggest_mapping(headers, kind)
+        return all(mapping[f] for f, (_, required) in FIELDS[kind].items() if required)
+
+    tokens = set(" ".join(_norm(h).replace("bill to", "") for h in headers).split())
+    score = {"invoices": len(tokens & INVOICE_WORDS), "costs": len(tokens & COST_WORDS)}
+    full = [k for k in KINDS if complete(k)]
+    if len(full) == 1 and score[full[0]] >= max(score.values()):
+        return full[0]
+    candidates = full or list(KINDS)
+    ranked = sorted(candidates, key=lambda k: score[k], reverse=True)
+    if len(ranked) > 1 and score[ranked[0]] == score[ranked[1]]:
+        return None
+    return ranked[0] if score[ranked[0]] > 0 else None
 
 
 def _parse_date(value: str, fmt: str) -> date | None:

@@ -86,6 +86,18 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(("Payee", "Bill No", "Job", "Type"),
                          (cost_map["vendor"], cost_map["cost_id"], cost_map["job_id"], cost_map["cost_type"]))
 
+    def test_file_type_is_detected_from_headers(self):
+        self.assertEqual("invoices", ji.detect_kind(load("fictional_invoices.csv", "invoices")[0]))
+        self.assertEqual("costs", ji.detect_kind(load("fictional_costs.csv", "costs")[0]))
+        self.assertEqual("invoices", ji.detect_kind(["Invoice", "Date", "Customer", "Amount"]))
+        self.assertEqual("invoices", ji.detect_kind(["Num", "Date", "Bill To", "Amount", "Customer"]))  # "bill to" isn't a cost word
+        self.assertEqual("costs", ji.detect_kind(["Date", "Vendor", "Amount"]))
+        self.assertEqual("costs", ji.detect_kind(["Bill No", "Date", "Supplier", "Total"]))
+
+    def test_undecidable_file_type_returns_none(self):
+        self.assertIsNone(ji.detect_kind(["Num", "Date", "Name", "Amount"]))  # reads as either
+        self.assertIsNone(ji.detect_kind(["A", "B"]))
+
     def test_open_balance_is_never_suggested_as_the_amount(self):
         mapping = ji.suggest_mapping(["Num", "Date", "Customer", "Open Balance"], "invoices")
         self.assertIsNone(mapping["amount"])
@@ -107,11 +119,21 @@ class MappingTests(unittest.TestCase):
         with self.assertRaises(ji.IntakeError):
             ji.intake(headers, [], {"date": "Date"}, "costs", "MM/DD/YYYY")
 
-    def test_date_format_is_suggested_only_when_unambiguous(self):
+    def test_date_format_is_chosen_only_when_one_format_reads_the_most_dates(self):
         self.assertEqual("MM/DD/YYYY", ji.suggest_date_format(["10/01/2026", "12/31/2026"]))
-        self.assertIsNone(ji.suggest_date_format(["10/01/2026", "01/02/2026"]))  # fits MM/DD and DD/MM
-        self.assertIsNone(ji.suggest_date_format(["10/01/2026", "2026-10-06"]))  # mixed
+        self.assertEqual("MM/DD/YYYY", ji.suggest_date_format(["10/01/2026", "10/31/2026", "2026-10-06"]))
+        self.assertEqual("YYYY-MM-DD", ji.suggest_date_format(["2026-10-01", "2026-10-02"]))
+        self.assertIsNone(ji.suggest_date_format(["10/01/2026", "01/02/2026"]))  # fits MM/DD and DD/MM equally
+        self.assertIsNone(ji.suggest_date_format(["10/01/2026", "2026-10-06"]))  # three-way tie
+        self.assertIsNone(ji.suggest_date_format(["not a date"]))
         self.assertIsNone(ji.suggest_date_format([]))
+
+    def test_date_question_shows_what_each_reading_means(self):
+        q = ji.date_question(["10/01/2026", "10/02/2026"])
+        self.assertEqual("10/01/2026", q["example"])
+        self.assertEqual({"MM/DD/YYYY": "October 1, 2026", "DD/MM/YYYY": "January 10, 2026"}, q["options"])
+        self.assertIsNone(ji.date_question(["10/31/2026"]))  # not ambiguous
+        self.assertIsNone(ji.date_question(["nope"]))
         with self.assertRaises(ji.IntakeError):
             ji.intake(["Date"], [], {}, "costs", "guess")
 
