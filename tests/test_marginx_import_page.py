@@ -218,10 +218,44 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertIn("2 invoice lines imported (1 invoice)", page_text(at))
 
-    def test_identical_files_both_get_reported(self):
+    def test_identical_files_both_get_reported_and_the_repeat_is_flagged(self):
         same = "Date,Vendor,Amount\n10/31/2026,A,1.00\n"
         at = self.with_files(same, same)
         self.assertEqual(2, page_text(at).count("1 cost line imported"))
+        self.assertEqual(["fictional_costs.csv is identical to fictional_invoices.csv. Its rows are the same rows, "
+                          "not new ones; upload it only once."], [w.value for w in at.warning[1:]])
+
+    def test_different_files_are_not_flagged_as_identical(self):
+        self.assertEqual(1, len(self.run_page().warning))  # only the pilot warning
+
+    def test_competing_customer_columns_ask_before_importing(self):
+        at = self.with_files("Invoice,Date,Customer,Client,Amount\nA,10/31/2026,Shop (fictional),Agency (fictional),1.00\n",
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        self.assertNotIn("invoice line", page_text(at))
+        next(s for s in at.selectbox if s.label == "Which column has the customer?").set_value("Client").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("1 invoice line imported (1 invoice)", page_text(at))
+        self.assertIn("Client", [s.value for s in at.selectbox if s.label == "Customer *"])
+
+    def test_competing_optional_job_columns_ask_and_neither_is_an_answer(self):
+        csv_text = "Invoice,Date,Customer,Amount,Job,Project\nA,10/31/2026,X (fictional),1.00,J-1,P-9\n"
+        at = self.with_files(csv_text, "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        question = radio(at, "Which column has the job number?")
+        self.assertEqual(["Job", "Project", "Neither of these"], question.options)
+        self.assertNotIn("invoice line", page_text(at))  # no report until answered
+        question.set_value(1).run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("Project", [s.value for s in at.selectbox if s.label == "Job number"])
+        self.assertIn("1 invoice line imported (1 invoice)", page_text(at))
+        radio(at, "Which column has the job number?").set_value(2).run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("No job number column was chosen", page_text(at))
+
+    def test_header_only_file_needs_no_questions(self):
+        at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        self.assertTrue(any("no rows" in i.value for i in at.info))
+        self.assertEqual([], [r.label for r in at.radio if "fictional_invoices.csv" in r.label])
+        self.assertEqual(1, page_text(at).count("imported"))
 
 
 if __name__ == "__main__":

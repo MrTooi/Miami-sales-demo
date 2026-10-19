@@ -42,7 +42,7 @@ FIELDS: dict[str, dict[str, tuple[str, bool]]] = {
 }
 
 # Normalized header words that suggest a field. A unique match is applied (and shown,
-# and changeable); two plausible money or date columns are always asked about.
+# and changeable); two plausible columns for the same field are always asked about.
 SYNONYMS: dict[str, tuple[str, ...]] = {
     "invoice_id": ("invoice id", "invoice", "invoice no", "invoice number", "invoice num", "num", "no", "number", "doc number"),
     "cost_id": ("bill id", "bill", "bill no", "bill number", "reference", "ref", "ref no", "num", "number"),
@@ -161,26 +161,36 @@ def read_csv(data: bytes) -> tuple[list[str], list[Record]]:
     return headers, [Record(number, tuple(cells)) for number, cells in table[1:]]
 
 
-def suggest_mapping(headers: list[str], kind: str) -> dict[str, str | None]:
-    """Field -> header where exactly one column fits; None where none or (for money and dates) several do."""
+def _suggest(headers: list[str], kind: str) -> tuple[dict[str, str | None], dict[str, list[str]]]:
     if kind not in KINDS:
         raise ValueError(f"Unknown file type: {kind}")
     normalized = {h: _norm(h) for h in headers}
     used: set[str] = set()
     mapping: dict[str, str | None] = {}
+    ambiguous: dict[str, list[str]] = {}
     for fld in FIELDS[kind]:
         candidates = [_norm(fld.replace("_", " ")), *SYNONYMS.get(fld, ())]
         matches = [h for h, n in normalized.items() if n in candidates and h not in used]
-        if fld in ("amount", "date") and len(matches) > 1:
-            # Two plausible money or date columns (e.g. "Amount" and "Total", or "Date"
-            # and "Invoice Date"): never pick one silently; the owner is asked.
+        if len(matches) > 1:
+            # Two plausible columns for any field (e.g. "Customer" and "Client", "Job" and
+            # "Project", "Amount" and "Total"): never pick one silently; the owner is asked.
             mapping[fld] = None
+            ambiguous[fld] = matches
             continue
-        choice = next((h for c in candidates for h, n in normalized.items() if n == c and h not in used), None)
-        mapping[fld] = choice
-        if choice:
-            used.add(choice)
-    return mapping
+        mapping[fld] = matches[0] if matches else None
+        if matches:
+            used.add(matches[0])
+    return mapping, ambiguous
+
+
+def suggest_mapping(headers: list[str], kind: str) -> dict[str, str | None]:
+    """Field -> header where exactly one column fits; None where none or several do."""
+    return _suggest(headers, kind)[0]
+
+
+def ambiguous_columns(headers: list[str], kind: str) -> dict[str, list[str]]:
+    """Field -> the competing columns, for every field left unmapped because several columns fit."""
+    return _suggest(headers, kind)[1]
 
 
 def validate_mapping(mapping: dict[str, str | None], headers: list[str], kind: str) -> list[str]:

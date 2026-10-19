@@ -155,6 +155,27 @@ class MappingTests(unittest.TestCase):
         self.assertEqual("Line Amount", ji.suggest_mapping(["Invoice", "Date", "Customer", "Line Amount"], "invoices")["amount"])
         self.assertEqual("Total", ji.suggest_mapping(["Invoice", "Date", "Customer", "Total"], "invoices")["amount"])
 
+    def test_competing_customer_and_job_columns_are_never_picked_silently(self):
+        headers = ["Invoice", "Date", "Customer", "Client", "Amount", "Job", "Project"]
+        mapping = ji.suggest_mapping(headers, "invoices")
+        self.assertIsNone(mapping["customer"])  # required: the owner is asked
+        self.assertIsNone(mapping["job_id"])  # optional, but still never guessed
+        self.assertEqual({"customer": ["Customer", "Client"], "job_id": ["Job", "Project"]},
+                         ji.ambiguous_columns(headers, "invoices"))
+        self.assertEqual(("Invoice", "Date", "Amount"), (mapping["invoice_id"], mapping["date"], mapping["amount"]))
+        # Every field, not only money and dates: vendor, bill number, cost type and memo too.
+        cost_headers = ["Date", "Vendor", "Name", "Bill", "Ref", "Amount", "Type", "Category", "Memo", "Notes"]
+        self.assertEqual({"vendor": ["Vendor", "Name"], "cost_id": ["Bill", "Ref"], "cost_type": ["Type", "Category"],
+                          "memo": ["Memo", "Notes"]}, ji.ambiguous_columns(cost_headers, "costs"))
+        self.assertTrue(all(ji.suggest_mapping(cost_headers, "costs")[f] is None
+                            for f in ("vendor", "cost_id", "cost_type", "memo")))
+
+    def test_one_clear_column_per_field_needs_no_question(self):
+        headers, _, _ = load("fictional_invoices.csv", "invoices")
+        self.assertEqual({}, ji.ambiguous_columns(headers, "invoices"))
+        headers, _, _ = load("fictional_costs.csv", "costs")
+        self.assertEqual({}, ji.ambiguous_columns(headers, "costs"))
+
     def test_two_possible_date_columns_are_never_picked_silently(self):
         self.assertIsNone(ji.suggest_mapping(["Invoice", "Date", "Invoice Date", "Customer", "Amount"], "invoices")["date"])
         self.assertEqual("Invoice Date", ji.suggest_mapping(["Invoice", "Invoice Date", "Customer", "Amount"], "invoices")["date"])

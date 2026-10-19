@@ -65,15 +65,23 @@ def describe_format(name: str, example: str | None) -> str:
     return f"{name}: {example} = {parsed:%B} {parsed.day}, {parsed.year}" if parsed else f"{name} (doesn't fit {example})"
 
 
-def show_file(position: int, name: str, data: bytes) -> None:
+def show_file(position: int, name: str, data: bytes, same_as: str | None = None) -> None:
     """Read one file and show its results, asking only what MarginX can't work out."""
     st.header(name)
+    if same_as:
+        # Each file is checked on its own and nothing is added up across files yet,
+        # but a repeated upload is pointed out rather than reported as if it were new.
+        st.warning(f"{name} is identical to {same_as}. Its rows are the same rows, not new ones; "
+                   "upload it only once.")
     # Each file in the list gets its own widget namespace, even if two files are identical.
     key = f"f{position}-{hashlib.sha256(name.encode('utf-8') + data).hexdigest()[:12]}"
     try:
         headers, records = ji.read_csv(data)
     except ji.IntakeError as exc:
         st.error(f"This file can't be read: {exc}")
+        return
+    if not records:
+        st.info("This file has column headers but no rows, so there is nothing to import.")
         return
 
     detected = ji.detect_kind(headers)
@@ -97,14 +105,25 @@ def show_file(position: int, name: str, data: bytes) -> None:
         st.info(BANK_MESSAGE)
         return
 
-    # Columns: suggested automatically; the owner is asked only for required ones MarginX can't find.
+    # Columns: suggested automatically; the owner is asked for required ones MarginX can't
+    # find, and for optional ones where two columns could fit (e.g. "Job" and "Project").
     mapping = ji.suggest_mapping(headers, kind)
+    ambiguous = ji.ambiguous_columns(headers, kind)
     options: list[str | None] = [None, *headers]
     for fld, (label, required) in ji.FIELDS[kind].items():
         if required and not mapping[fld]:
             mapping[fld] = st.selectbox(f"Which column has the {label.lower()}?", options, index=None,
                                         format_func=lambda h: NOT_MAPPED if h is None else h,
                                         key=f"{key}-{kind}-ask-{fld}")
+        elif fld in ambiguous:
+            # Answers are positions, so "neither" can't be confused with "not answered yet".
+            candidates = ambiguous[fld]
+            pick = st.radio(f"Which column has the {label.lower()}?", range(len(candidates) + 1), index=None,
+                            format_func=lambda i, c=candidates: c[i] if i < len(c) else "Neither of these",
+                            key=f"{key}-{kind}-which-{fld}")
+            if pick is None:
+                return
+            mapping[fld] = candidates[pick] if pick < len(candidates) else None
     with settings:
         cols = st.columns(3)
         for i, (fld, (label, required)) in enumerate(ji.FIELDS[kind].items()):
@@ -164,5 +183,8 @@ def show_file(position: int, name: str, data: bytes) -> None:
             )
 
 
+seen_files: dict[bytes, str] = {}
 for file_position, (file_name, file_data) in enumerate(files):
-    show_file(file_position, file_name, file_data)
+    digest = hashlib.sha256(file_data).digest()
+    show_file(file_position, file_name, file_data, seen_files.get(digest))
+    seen_files.setdefault(digest, file_name)
