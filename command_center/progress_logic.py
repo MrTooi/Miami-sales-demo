@@ -11,7 +11,7 @@ import re
 CHECKBOX = re.compile(r"^\s*[-*]\s+\[( |x|X)\]\s+(.*\S)\s*$")
 HEADING = re.compile(r"^##\s+(.*\S)\s*$")
 BOLD_LINE = re.compile(r"^\*\*(.+?)\*\*\s*$")
-STEP_TITLE = re.compile(r"^marginx step (\d+)\b", re.IGNORECASE)
+STEP_TITLE = re.compile(r"^marginx step (\d+):", re.IGNORECASE)
 BUILD_STEP = re.compile(r"^(\d+)\.\s+\*\*(.+?)\*\*")
 
 # Automated D-004 reviews are posted by the workflow's bot account with a fixed shape.
@@ -22,7 +22,9 @@ AUTOMATED_QUALIFYING = re.compile(r"^\*\*Status: qualifying automated review —
 AUTOMATED_INCOMPLETE = "**Status: REVIEW INCOMPLETE"
 # Manual reviews (ChatGPT via the owner's account) open with a heading naming the reviewed commit.
 MANUAL_HEADER = re.compile(r"^## Independent\b[^\n`]*\bChatGPT\b[^\n`]*\breview\b[^\n`]*`([0-9a-f]{7,40})`", re.IGNORECASE)
-MANUAL_VERDICT = re.compile(r"\*\*Verdict:(?:\*\*)?\s*\**\s*(PASS WITH WARNINGS|PASS|FAIL)\b")
+# The verdict must open the first non-empty line under the heading; quotes, examples
+# and later prose are never read as the verdict.
+MANUAL_VERDICT = re.compile(r"^\*\*Verdict:(?:\*\*)?\s*\**\s*(PASS WITH WARNINGS|PASS|FAIL)\b")
 
 REQUIRED_CHECKS = ("unit-tests",)
 UNIT_STEP_LABEL = "STEP PR MERGED — completion unverified"
@@ -88,6 +90,19 @@ def step_status(step_number: int, pulls: list[dict], complete: bool = True) -> t
     return ("NOT STARTED" if complete else "UNKNOWN"), None
 
 
+def recent_merges(pulls: list[dict], cutoff_iso: str, complete: bool) -> tuple[list[dict], str]:
+    """Merged PRs since the cutoff, newest first, plus OK / NONE / PARTIAL.
+
+    With an incomplete list the answer is PARTIAL even when nothing was found:
+    missing pages may hold recent merges.
+    """
+    rows = sorted((p for p in pulls if p.get("merged_at") and p["merged_at"] >= cutoff_iso),
+                  key=lambda p: p["merged_at"], reverse=True)
+    if not complete:
+        return rows, "PARTIAL"
+    return rows, "OK" if rows else "NONE"
+
+
 def _same_commit(reviewed: str, head_sha: str, *, full: bool) -> bool:
     """Automated reviews must name the full SHA; manual ones may use a 7+ character prefix."""
     reviewed, head_sha = reviewed.lower(), head_sha.lower()
@@ -101,10 +116,12 @@ def _normalized(body: str | None) -> str:
 
 
 def _header_verdict(body: str) -> str | None:
-    """The single verdict stated before any fenced block; None if absent or conflicting."""
-    before_fence = body.split("```", 1)[0]
-    verdicts = {m.group(1) for m in MANUAL_VERDICT.finditer(before_fence)}
-    return verdicts.pop() if len(verdicts) == 1 else None
+    """The verdict opening the first non-empty line after the heading, else None."""
+    lines = [line.strip() for line in body.splitlines()[1:] if line.strip()]
+    if not lines:
+        return None
+    m = MANUAL_VERDICT.match(lines[0])
+    return m.group(1) if m else None
 
 
 def classify_review(comment: dict) -> dict | None:
@@ -128,14 +145,11 @@ def classify_review(comment: dict) -> dict | None:
         if AUTOMATED_INCOMPLETE in body:
             return {**base, "kind": "automated", "sha": sha.group(1), "verdict": "INCOMPLETE"}
         verdict = AUTOMATED_QUALIFYING.search(body)
-        if not verdict:
-            return None
-        return {**base, "kind": "automated", "sha": sha.group(1), "verdict": verdict.group(1)}
+        return {**base, "kind": "automated", "sha": sha.group(1), "verdict": verdict.group(1) if verdict else "UNCLEAR"}
     if header := MANUAL_HEADER.match(body.splitlines()[0]):
-        verdict = _header_verdict(body)
-        if not verdict:
-            return None
-        return {**base, "kind": "manual", "sha": header.group(1), "verdict": verdict}
+        # A recognised review whose verdict can't be read is UNCLEAR, which blocks
+        # "ready" rather than letting an older PASS stand.
+        return {**base, "kind": "manual", "sha": header.group(1), "verdict": _header_verdict(body) or "UNCLEAR"}
     return None
 
 
@@ -172,6 +186,8 @@ def next_action(review: dict | None, ci: str) -> str:
         return "Claude: fix failing tests"
     if review is None:
         return "Needs ChatGPT review of the current commit"
+    if review["verdict"] == "UNCLEAR":
+        return "Check reviews: the newest review's verdict can't be read"
     if review["verdict"] in ("FAIL", "INCOMPLETE"):
         return "Claude: fix review findings"
     if ci != "PASSING":

@@ -29,6 +29,7 @@ from command_center.progress_logic import (  # noqa: E402
     parse_build_steps,
     parse_checklist,
     progress,
+    recent_merges,
     review_for_head,
     step_status,
 )
@@ -195,14 +196,13 @@ else:
 
 # --- Recently merged -------------------------------------------------------
 st.header("Merged in the last 7 days")
-cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-recent = sorted(
-    (p for p in (pulls_closed or []) if p.get("merged_at") and p["merged_at"] >= cutoff),
-    key=lambda p: p["merged_at"], reverse=True,
-)
+cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+recent, merged_state = recent_merges(pulls_closed or [], cutoff, closed_complete)
 if pulls_closed is None:
     st.warning(f"UNKNOWN: could not read merged PRs ({err_closed}).")
-elif not recent:
+elif merged_state == "PARTIAL":
+    st.warning("PARTIAL: not every closed PR could be read, so this list may be missing recent merges.")
+elif merged_state == "NONE":
     st.info("Nothing merged in the last 7 days.")
 for pr in recent[:10]:
     st.markdown(f"- {when(pr['merged_at'])} · [PR #{pr['number']}]({pr['html_url']}) {pr['title']}")

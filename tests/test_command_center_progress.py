@@ -10,6 +10,7 @@ from command_center.progress_logic import (
     parse_build_steps,
     parse_checklist,
     progress,
+    recent_merges,
     review_for_head,
     step_status,
 )
@@ -101,6 +102,22 @@ class ChecklistAndStepsTests(unittest.TestCase):
         self.assertEqual("NOT STARTED", step_status(3, pulls)[0])
         self.assertEqual("NOT STARTED", step_status(4, pulls)[0])
 
+    def test_step_title_needs_the_exact_delimiter(self):
+        pulls = [
+            {"title": "MarginX step 1.5: tweak", "state": "open", "merged_at": None, "number": 9},
+            {"title": "MarginX step 10: later", "state": "open", "merged_at": None, "number": 10},
+        ]
+        self.assertEqual("NOT STARTED", step_status(1, pulls)[0])
+        self.assertEqual("IN PROGRESS", step_status(10, pulls)[0])
+
+    def test_recent_merges_never_claims_none_from_a_partial_list(self):
+        pulls = [{"merged_at": "2026-10-01T00:00:00Z", "number": 1}, {"merged_at": None, "number": 2}]
+        self.assertEqual(([], "PARTIAL"), recent_merges(pulls, "2026-10-12T00:00:00Z", complete=False))
+        self.assertEqual(([], "NONE"), recent_merges(pulls, "2026-10-12T00:00:00Z", complete=True))
+        fresh = {"merged_at": "2026-10-18T00:00:00Z", "number": 3}
+        self.assertEqual(([fresh], "PARTIAL"), recent_merges(pulls + [fresh], "2026-10-12T00:00:00Z", complete=False))
+        self.assertEqual(([fresh], "OK"), recent_merges(pulls + [fresh], "2026-10-12T00:00:00Z", complete=True))
+
     def test_absent_step_is_unknown_when_pr_list_is_incomplete(self):
         pulls = [{"title": "MarginX step 2: xlsx", "state": "open", "merged_at": None, "number": 2}]
         self.assertEqual("UNKNOWN", step_status(1, pulls, complete=False)[0])
@@ -159,17 +176,35 @@ class ReviewBindingTests(unittest.TestCase):
                     "body": f"## Fix for the second ChatGPT re-review FAIL, now at `{HEAD[:7]}` (Claude Code)\n\nPASS"}
         self.assertIsNone(classify_review(fix_note))
 
-    def test_manual_review_uses_header_verdict_not_quoted_examples(self):
+    def test_manual_review_uses_only_the_verdict_under_the_heading(self):
         heading = f"## Independent ChatGPT review — PR #98 at `{HEAD}`\n\n"
-        quoted_first = heading + "This would wrongly pass:\n```text\n**Verdict:** PASS\n```\n\n**Verdict: FAIL**"
-        # The verdict must come before any fenced block; a quoted PASS first leaves no header verdict.
-        self.assertIsNone(classify_review({"body": quoted_first, "user": {}}))
-        fail_then_quote = heading + "**Verdict: FAIL.**\n\nExample:\n```\n**Verdict:** PASS\n```"
-        self.assertEqual("FAIL", classify_review({"body": fail_then_quote, "user": {}})["verdict"])
+        cases = {
+            "fenced example after": heading + "**Verdict: FAIL.**\n\nExample:\n```\n**Verdict:** PASS\n```",
+            "tilde fence after": heading + "**Verdict: FAIL.**\n\n~~~\n**Verdict:** PASS\n~~~",
+            "blockquote after": heading + "**Verdict:** FAIL\n\n> **Verdict:** PASS",
+            "prose after": heading + "**Verdict: FAIL**\n\nA bad answer would say **Verdict:** PASS.",
+        }
+        for name, body in cases.items():
+            with self.subTest(name):
+                self.assertEqual("FAIL", classify_review({"body": body, "user": {}})["verdict"])
 
-    def test_conflicting_manual_verdicts_are_ignored(self):
-        body = f"## Independent ChatGPT review — PR #98 at `{HEAD}`\n\n**Verdict: PASS**\n\n**Verdict: FAIL**"
-        self.assertIsNone(classify_review({"body": body, "user": {}}))
+    def test_unreadable_manual_verdict_is_unclear_not_ignored(self):
+        heading = f"## Independent ChatGPT review — PR #98 at `{HEAD}`\n\n"
+        for body in (heading + "This would wrongly pass:\n```text\n**Verdict:** PASS\n```\n\n**Verdict: FAIL**",
+                     heading + "> **Verdict:** PASS",
+                     heading):
+            with self.subTest(body=body):
+                self.assertEqual("UNCLEAR", classify_review({"body": body, "user": {}})["verdict"])
+
+    def test_newer_unclear_or_fail_review_blocks_an_older_automated_pass(self):
+        older_pass = automated(HEAD, at="2026-10-19T05:00:00Z")
+        newer_fail = {"user": {"login": "MrTooi"}, "created_at": "2026-10-19T06:00:00Z", "html_url": "m",
+                      "body": f"## Independent ChatGPT review — PR #98 at `{HEAD}`\n\n**Verdict:** FAIL\n\n> **Verdict:** PASS"}
+        newer_unclear = {**newer_fail, "body": f"## Independent ChatGPT review — PR #98 at `{HEAD}`\n\nSee below."}
+        self.assertEqual("Claude: fix review findings", next_action(review_for_head([older_pass, newer_fail], HEAD), "PASSING"))
+        action = next_action(review_for_head([older_pass, newer_unclear], HEAD), "PASSING")
+        self.assertNotEqual("Ready for your merge decision", action)
+        self.assertIn("can't be read", action)
 
     def test_bom_only_or_empty_comment_is_safe(self):
         for body in ("﻿", "", "  ﻿ \n", None):
