@@ -390,6 +390,14 @@ def _label(key: tuple[str, ...], kind: str) -> str:
     return f"bill {key[1]} from {key[0]}" if len(key) == 2 else f"{key[0]} on {key[1]} (no bill number)"
 
 
+def _lines_per_vendor_day(headers: list[str], records: list[Record], mapping: dict[str, str | None]) -> Counter:
+    """Cost lines per (vendor, date), numbered or not, without exact duplicate rows."""
+    index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
+    rows = {r.cells for r in records if len(r.cells) == len(headers)}
+    return Counter((cells[index["vendor"]].strip(), cells[index["date"]].strip()) for cells in rows
+                   if "vendor" in index and "date" in index and cells[index["vendor"]].strip())
+
+
 def _lines_per_document(headers: list[str], records: list[Record], mapping: dict[str, str | None],
                         kind: str, key_of=_document_key) -> Counter:
     index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
@@ -425,6 +433,14 @@ def amount_scope_question(headers: list[str], records: list[Record], mapping: di
         if key:
             amounts.setdefault(key, []).append(values.get("amount", ""))
     multi = [(k, v) for k, v in amounts.items() if len(v) > 1]
+    if not multi and kind == "costs":
+        # A line without a bill number, beside other lines from the same vendor on the same
+        # day, may belong to one of their bills: still unresolved, so still asked.
+        per_day = _lines_per_vendor_day(headers, records, mapping)
+        unresolved = [(k, per_day[k[:2]]) for k in amounts if len(k) == 3 and per_day[k[:2]] > 1]
+        if unresolved:
+            (vendor, day, _), lines = unresolved[0]
+            return {"label": f"{vendor} on {day} (some lines have no bill number)", "lines": lines}
     if not multi:
         return None
     # The example shown is one whose lines repeat one amount, if any: the clearest case.
@@ -505,6 +521,7 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
     key_of = _possible_document_key if answered_total and not total_header else _document_key
     per_document = total_header or answered_total
     lines_per_document = _lines_per_document(headers, records, mapping, kind, key_of) if per_document else Counter()
+    per_day = _lines_per_vendor_day(headers, records, mapping) if answered_total and kind == "costs" else Counter()
     entity = "Invoice" if kind == "invoices" else "Bill"
     candidates = _subtotal_rows(headers, records, mapping, kind) if question and amount_scope == "line" else {}
     subtotals = subtotals or {}
@@ -543,6 +560,11 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
         if number in candidates and subtotals[number]:
             reasons.append(f"Subtotal of {_label(candidates[number][0], kind)} (the owner said so); "
                            "its lines are already counted.")
+        unnumbered = document is not None and len(document) == 3
+        if unnumbered and lines_per_document[document] <= 1 and per_day[document[:2]] > 1:
+            reasons.append(f"No bill number, and {document[0]} has other lines on {document[1]}; with "
+                           f"'{mapping['amount']}' being a whole bill's total, this line may repeat one of "
+                           "those bills, so it isn't counted. Add the bill number and export again.")
         if document and lines_per_document[document] > 1:
             reasons.append(f"{_label(document, kind).capitalize()} has {lines_per_document[document]} lines and "
                            f"'{mapping['amount']}' is the whole {entity.lower()}'s total, so it can't be "

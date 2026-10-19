@@ -348,6 +348,17 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertIn("1 row of 3 couldn't be imported", page_text(at))
 
+    def test_partly_numbered_bills_ask_before_importing(self):
+        at = self.with_files("Invoice,Date,Customer,Amount\nA,10/31/2026,X (fictional),1.00\n",
+                             "Bill No,Date,Vendor,Memo,Amount\nB-1,10/31/2026,Paper Co (fictional),Vinyl,100.00\n"
+                             ",10/31/2026,Paper Co (fictional),Ink,100.00\n")
+        question = radio(at, "In fictional_costs.csv, Paper Co (fictional) on 10/31/2026 (some lines have no bill "
+                             "number) has 2 lines. What is 'Amount' on each line?")
+        self.assertNotIn("cost line", page_text(at))
+        question.set_value("document").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("1 row of 2 couldn't be imported", page_text(at))
+
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertTrue(any("no rows" in i.value for i in at.info))

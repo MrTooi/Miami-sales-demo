@@ -338,6 +338,25 @@ class MappingTests(unittest.TestCase):
                                     b"10/31/2026,Paper Co,Vinyl,300.00\n11/01/2026,Paper Co,Ink,45.00\n")
         self.assertIsNone(ji.amount_scope_question(headers, rows, ji.suggest_mapping(headers, "costs"), "costs"))
 
+    def test_partly_numbered_bills_from_one_vendor_and_day_are_asked_about(self):
+        headers, rows = ji.read_csv(b"Bill No,Date,Vendor,Memo,Amount\n"
+                                    b"B-1,10/31/2026,Paper Co,Vinyl,100.00\n,10/31/2026,Paper Co,Ink,100.00\n"
+                                    b"B-2,11/01/2026,Ink Co,Toner,40.00\n")
+        mapping = ji.suggest_mapping(headers, "costs")
+        self.assertEqual({"label": "Paper Co on 10/31/2026 (some lines have no bill number)", "lines": 2},
+                         ji.amount_scope_question(headers, rows, mapping, "costs"))
+        with self.assertRaises(ji.IntakeError):
+            ji.intake(headers, rows, mapping, "costs", "MM/DD/YYYY")
+        self.assertEqual(3, len(ji.intake(headers, rows, mapping, "costs", "MM/DD/YYYY", "line").accepted))
+        whole = ji.intake(headers, rows, mapping, "costs", "MM/DD/YYYY", "document")
+        self.assertEqual([2, 4], [r["row"] for r in whole.accepted])  # numbered bills, one line each
+        self.assertEqual([3], [r["row"] for r in whole.rejected])
+        self.assertIn("No bill number", " ".join(whole.rejected[0]["reasons"]))
+        # Every line numbered, one line per bill: no question.
+        headers, rows = ji.read_csv(b"Bill No,Date,Vendor,Amount\nB-1,10/31/2026,Paper Co,100.00\n"
+                                    b"B-2,10/31/2026,Paper Co,100.00\n")
+        self.assertIsNone(ji.amount_scope_question(headers, rows, ji.suggest_mapping(headers, "costs"), "costs"))
+
     def test_bill_total_rows_without_a_bill_number_are_not_imported(self):
         headers, rows = ji.read_csv(b"Bill No,Date,Vendor,Memo,Bill Total\n"
                                     b",10/31/2026,Paper Co,Vinyl,300.00\n,10/31/2026,Paper Co,Ink,300.00\n"
