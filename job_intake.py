@@ -151,6 +151,11 @@ def suggest_mapping(headers: list[str], kind: str) -> dict[str, str | None]:
     mapping: dict[str, str | None] = {}
     for fld in FIELDS[kind]:
         candidates = [_norm(fld.replace("_", " ")), *SYNONYMS.get(fld, ())]
+        matches = [h for h, n in normalized.items() if n in candidates and h not in used]
+        if fld == "amount" and len(matches) > 1:
+            # Two plausible money columns (e.g. "Amount" and "Total"): never pick one silently.
+            mapping[fld] = None
+            continue
         choice = next((h for c in candidates for h, n in normalized.items() if n == c and h not in used), None)
         mapping[fld] = choice
         if choice:
@@ -238,6 +243,8 @@ def detect_kind(headers: list[str]) -> str | None:
     tokens = set(" ".join(_norm(h).replace("bill to", "") for h in headers).split())
     score = {"invoices": len(tokens & INVOICE_WORDS), "costs": len(tokens & COST_WORDS)}
     full = [k for k in KINDS if complete(k)]
+    if len(full) == 2:
+        return None  # the headers fit both kinds of file: ask, never guess
     if len(full) == 1 and score[full[0]] >= max(score.values()):
         return full[0]
     candidates = full or list(KINDS)
@@ -323,7 +330,9 @@ def missing_report(result: IntakeResult) -> list[dict]:
     """Plain-language gaps: [{"level": "problem"|"gap"|"info", "text": ...}]. Counts only, no profit."""
     items: list[dict] = []
     total, accepted = result.total_rows, result.accepted
-    noun = "invoice" if result.kind == "invoices" else "cost"
+    # Each accepted record is one line of a file; one invoice or bill can span several lines.
+    noun = "invoice line" if result.kind == "invoices" else "cost line"
+    entity = "invoice" if result.kind == "invoices" else "bill"
     if result.rejected:
         items.append({"level": "problem", "text": f"{_count(len(result.rejected), 'row')} of {total} couldn't be imported. "
                       "Each one is listed below with the reason. Fix them where the data comes from "
@@ -343,7 +352,8 @@ def missing_report(result: IntakeResult) -> list[dict]:
     counts = Counter(r.get(id_field) for r in accepted if r.get(id_field))
     multi = {i for i, n in counts.items() if n > 1}
     if multi:
-        items.append({"level": "info", "text": f"{_count(len(multi), noun)} span more than one line "
+        verb = "spans" if len(multi) == 1 else "span"
+        items.append({"level": "info", "text": f"{_count(len(multi), entity)} {verb} more than one line "
                       f"(for example {sorted(multi)[0]}); each line was imported once."})
     if result.kind == "invoices":
         credits = sum(1 for r in accepted if r["amount"] < 0)
@@ -357,7 +367,7 @@ def missing_report(result: IntakeResult) -> list[dict]:
         else:
             untyped = sum(1 for r in accepted if not r.get("cost_type"))
             if untyped:
-                items.append({"level": "gap", "text": f"{untyped} of {len(accepted)} imported costs have no cost type."})
+                items.append({"level": "gap", "text": f"{untyped} of {len(accepted)} imported cost lines have no cost type."})
             if not any(is_labor(r.get("cost_type", "")) for r in accepted):
                 items.append({"level": "gap", "text": "No labor costs were found. If staff time goes into jobs, "
                               "profit will look higher than it really is until labor is added."})
@@ -368,7 +378,8 @@ def missing_report(result: IntakeResult) -> list[dict]:
         items.append({"level": "info", "text": f"{_count(len(spaced), 'value')} had extra spaces at the start or end, "
                       f"which MarginX ignores (for example row {r['row']}: {r['original'][f]!r})."})
     dates = sorted(r["date"] for r in accepted)
-    items.append({"level": "info", "text": f"{_count(len(accepted), noun)} imported, dated {dates[0]} to {dates[-1]}."})
+    distinct = f" ({_count(len(counts), entity)})" if counts and all(r.get(id_field) for r in accepted) else ""
+    items.append({"level": "info", "text": f"{_count(len(accepted), noun)} imported{distinct}, dated {dates[0]} to {dates[-1]}."})
     return items
 
 

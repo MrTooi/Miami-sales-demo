@@ -36,7 +36,7 @@ class MarginXImportPageTests(unittest.TestCase):
     def test_costs_sample_needs_no_input_at_all(self):
         at = self.run_page()
         text = page_text(at)
-        self.assertIn("3 of 8 imported costs aren't linked to a job", text)
+        self.assertIn("3 of 8 imported cost lines aren't linked to a job", text)
         self.assertIn("No labor costs were found", text)
         self.assertIn("Read as costs / bills, dates as MM/DD/YYYY.", [c.value for c in at.caption])
         self.assertEqual([], [c for c in at.checkbox])  # no confirmation boxes in sample mode
@@ -46,7 +46,7 @@ class MarginXImportPageTests(unittest.TestCase):
         question = radio(at, INVOICE_DATE_QUESTION)
         self.assertEqual(["October 1, 2026", "January 10, 2026"], question.options)
         self.assertNotIn("of 10 couldn't be imported", page_text(at))  # no invoice report until answered
-        self.assertNotIn("imported invoices", page_text(at))
+        self.assertNotIn("imported invoice lines", page_text(at))
 
     def test_invoice_report_after_answering_the_date_question(self):
         at = self.run_page()
@@ -54,7 +54,7 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         text = page_text(at)
         self.assertIn("4 rows of 10 couldn't be imported", text)
-        self.assertIn("1 of 6 imported invoices have no job number", text)
+        self.assertIn("1 of 6 imported invoice lines have no job number", text)
         rejected_table = at.dataframe[0].value
         self.assertEqual([7, 8, 10, 11], list(rejected_table["Row in file"]))
         self.assertTrue(all(rejected_table["Why"].str.len() > 0))
@@ -88,7 +88,7 @@ class MarginXImportPageTests(unittest.TestCase):
         ask = next(s for s in at.selectbox if s.label == "Which column has the customer?")
         ask.select_index(ask.options.index("(not in this file)", 1)).run()
         self.assertFalse(at.exception, at.exception)
-        self.assertIn("1 invoice imported", page_text(at))
+        self.assertIn("1 invoice line imported (1 invoice)", page_text(at))
 
     def test_mixed_date_styles_fall_back_to_picking_the_main_format(self):
         at = self.with_files("Invoice,Date,Customer,Amount\nA,2026-10-06,X,1.00\nB,10/31/2026,Y,2.00\n",
@@ -98,7 +98,7 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         text = page_text(at)
         self.assertIn("1 row of 2 couldn't be imported", text)
-        self.assertIn("1 invoice imported", text)
+        self.assertIn("1 invoice line imported (1 invoice)", text)
 
     def test_unreadable_dates_are_still_accounted_for(self):
         at = self.with_files("Invoice,Date,Customer,Amount\nA,someday,X,1.00\nB,,Y,2.00\n",
@@ -106,7 +106,7 @@ class MarginXImportPageTests(unittest.TestCase):
         radio(at, "Which date format does fictional_invoices.csv mainly use?").set_value("MM/DD/YYYY").run()
         self.assertFalse(at.exception, at.exception)
         self.assertIn("2 rows of 2 couldn't be imported", page_text(at))
-        self.assertIn("No invoices were imported", page_text(at))
+        self.assertIn("No invoice lines were imported", page_text(at))
         self.assertEqual([2, 3], list(at.dataframe[0].value["Row in file"]))  # every row listed with its reason
         self.assertEqual(0, len(at.get("download_button")))  # no repair-file download (removed on purpose)
 
@@ -127,12 +127,28 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         labels = [s.label for s in at.selectbox]
         self.assertIn("Which column has the invoice number?", labels)
-        self.assertNotIn("imported costs", page_text(at))
+        self.assertNotIn("imported cost lines", page_text(at))
+
+    def test_two_amount_columns_ask_which_one_before_importing(self):
+        at = self.with_files("Invoice,Date,Customer,Amount,Total\nA,10/31/2026,X,40.00,100.00\n",
+                             "Date,Payee,Amount\n10/31/2026,A,1.00\n")
+        self.assertNotIn("imported invoice lines", page_text(at))
+        ask = next(s for s in at.selectbox if s.label == "Which column has the amount?")
+        ask.set_value("Total").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("1 invoice line imported (1 invoice)", page_text(at))
+
+    def test_file_that_fits_both_kinds_asks_before_importing(self):
+        at = self.with_files("Invoice,Date,Customer,Vendor,Amount\nA,10/31/2026,X,Y,1.00\n",
+                             "Date,Payee,Amount\n10/31/2026,A,1.00\n")
+        question = radio(at, "Is fictional_invoices.csv a list of sales or of costs?")
+        self.assertIsNone(question.value)
+        self.assertEqual(1, page_text(at).count("imported"))  # only the costs file has a report so far
 
     def test_identical_files_both_get_reported(self):
         same = "Date,Payee,Amount\n10/31/2026,A,1.00\n"
         at = self.with_files(same, same)
-        self.assertEqual(2, page_text(at).count("1 cost imported"))
+        self.assertEqual(2, page_text(at).count("1 cost line imported"))
 
 
 if __name__ == "__main__":

@@ -96,7 +96,14 @@ class MappingTests(unittest.TestCase):
 
     def test_undecidable_file_type_returns_none(self):
         self.assertIsNone(ji.detect_kind(["Num", "Date", "Name", "Amount"]))  # reads as either
+        self.assertIsNone(ji.detect_kind(["Invoice", "Date", "Customer", "Vendor", "Amount"]))  # complete for both
         self.assertIsNone(ji.detect_kind(["A", "B"]))
+
+    def test_two_possible_amount_columns_are_never_picked_silently(self):
+        for headers in (["Invoice", "Date", "Customer", "Amount", "Total"], ["Invoice", "Date", "Customer", "Amt", "Total Amount"]):
+            with self.subTest(headers=headers):
+                self.assertIsNone(ji.suggest_mapping(headers, "invoices")["amount"])
+        self.assertEqual("Total", ji.suggest_mapping(["Invoice", "Date", "Customer", "Total"], "invoices")["amount"])
 
     def test_open_balance_is_never_suggested_as_the_amount(self):
         mapping = ji.suggest_mapping(["Num", "Date", "Customer", "Open Balance"], "invoices")
@@ -172,10 +179,10 @@ class InvoiceIntakeTests(unittest.TestCase):
     def test_whats_missing_report(self):
         report = texts(ji.missing_report(self.result))
         self.assertIn("4 rows of 10 couldn't be imported", report)
-        self.assertIn("1 of 6 imported invoices have no job number", report)
+        self.assertIn("1 of 6 imported invoice lines have no job number", report)
         self.assertIn("1 credit or refund line were imported", report)
-        self.assertIn("span more than one line (for example FIC-1002)", report)
-        self.assertIn("6 invoices imported, dated 2026-10-01 to 2026-10-07", report)
+        self.assertIn("1 invoice spans more than one line (for example FIC-1002)", report)
+        self.assertIn("6 invoice lines imported (5 invoices), dated 2026-10-01 to 2026-10-07", report)
         self.assertNotIn("profit is", report.lower())
 
     def test_no_job_column_is_a_gap(self):
@@ -199,8 +206,8 @@ class CostIntakeTests(unittest.TestCase):
 
     def test_whats_missing_report(self):
         report = texts(ji.missing_report(self.result))
-        self.assertIn("3 of 8 imported costs aren't linked to a job", report)
-        self.assertIn("1 of 8 imported costs have no cost type", report)
+        self.assertIn("3 of 8 imported cost lines aren't linked to a job", report)
+        self.assertIn("1 of 8 imported cost lines have no cost type", report)
         self.assertIn("No labor costs were found", report)
 
     def test_labor_detection_is_whole_word_and_not_negated(self):
@@ -305,7 +312,7 @@ class FormulaSafetyTests(unittest.TestCase):
         headers, rows = ji.read_csv(b"Date,Payee,Amount\n,,\n")
         report = texts(ji.missing_report(ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")))
         self.assertIn("1 row of 1 couldn't be imported", report)
-        self.assertIn("No costs were imported", report)
+        self.assertIn("No cost lines were imported", report)
 
 
 if __name__ == "__main__":
