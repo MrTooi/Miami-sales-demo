@@ -139,13 +139,19 @@ def classify_review(comment: dict) -> dict | None:
     if body.startswith(AUTOMATED_HEADER):
         if author != AUTOMATED_AUTHOR:
             return None  # looks automated but wasn't posted by the workflow
-        sha = AUTOMATED_SHA.search(body)
-        if not sha:
+        # The workflow writes its metadata and status above the first `---`; the
+        # model's verbatim answer (which may quote anything) comes after it.
+        meta = body.split("\n---\n", 1)[0]
+        shas = AUTOMATED_SHA.findall(meta)
+        if len(shas) != 1:
             return None
-        if AUTOMATED_INCOMPLETE in body:
-            return {**base, "kind": "automated", "sha": sha.group(1), "verdict": "INCOMPLETE"}
-        verdict = AUTOMATED_QUALIFYING.search(body)
-        return {**base, "kind": "automated", "sha": sha.group(1), "verdict": verdict.group(1) if verdict else "UNCLEAR"}
+        sha = shas[0]
+        incomplete = AUTOMATED_INCOMPLETE in meta
+        verdicts = AUTOMATED_QUALIFYING.findall(meta)
+        if incomplete and not verdicts:
+            return {**base, "kind": "automated", "sha": sha, "verdict": "INCOMPLETE"}
+        verdict = verdicts[0] if len(verdicts) == 1 and not incomplete else "UNCLEAR"
+        return {**base, "kind": "automated", "sha": sha, "verdict": verdict}
     if header := MANUAL_HEADER.match(body.splitlines()[0]):
         # A recognised review whose verdict can't be read is UNCLEAR, which blocks
         # "ready" rather than letting an older PASS stand.
@@ -161,6 +167,25 @@ def review_for_head(comments: list[dict], head_sha: str) -> dict | None:
         if review and _same_commit(review["sha"], head_sha, full=review["kind"] == "automated"):
             found = review
     return found
+
+
+def collect_check_runs(fetch_page, per_page: int = 100, max_pages: int = 10) -> tuple[list[dict] | None, bool]:
+    """Read every page of a check-runs response. `fetch_page(n)` returns (data, error).
+
+    Returns (runs, complete); complete is False on any error, odd response or page cap.
+    """
+    runs: list[dict] = []
+    for page in range(1, max_pages + 1):
+        data, err = fetch_page(page)
+        if err or not isinstance(data, dict) or not isinstance(data.get("check_runs"), list):
+            return (runs or None), False
+        runs.extend(data["check_runs"])
+        total = data.get("total_count")
+        if not isinstance(total, int):
+            return runs, False
+        if len(runs) >= total or len(data["check_runs"]) < per_page:
+            return runs, len(runs) >= total
+    return runs, False
 
 
 def ci_state(check_runs: list[dict] | None, total_count: int | None = None) -> str:

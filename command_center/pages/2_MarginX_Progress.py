@@ -24,6 +24,7 @@ if _REPO_ROOT not in sys.path:
 from command_center.progress_logic import (  # noqa: E402
     UNIT_STEP_LABEL,
     ci_state,
+    collect_check_runs,
     latest_weekly_checklist,
     next_action,
     parse_build_steps,
@@ -132,12 +133,15 @@ else:
         st.info("No open, non-draft pull requests found." if open_complete else "UNKNOWN: open PRs were only partly read.")
     for pr in ready:
         number, sha = pr["number"], pr["head"]["sha"]
-        comments, comments_complete, _ = gh_all(f"/repos/{REPO}/issues/{number}/comments")
-        runs, err_r = gh(f"/repos/{REPO}/commits/{sha}/check-runs?per_page={PAGE}")
+        with st.spinner(f"Reading PR #{number}…"):
+            comments, comments_complete, _ = gh_all(f"/repos/{REPO}/issues/{number}/comments")
+            runs, runs_complete = collect_check_runs(
+                lambda page, sha=sha: gh(f"/repos/{REPO}/commits/{sha}/check-runs?per_page={PAGE}&page={page}"),
+                per_page=PAGE, max_pages=MAX_PAGES,
+            )
         partial = not comments_complete
         review = None if partial else review_for_head(comments, sha)
-        ci = ci_state(None if err_r or runs is None else runs.get("check_runs", []),
-                      None if runs is None else runs.get("total_count"))
+        ci = ci_state(runs if runs_complete else None)
         action = "Check reviews (comments could not be fully read)" if partial else next_action(review, ci)
         if review:
             source = "automated, verified" if review["kind"] == "automated" else "manual, source not verified"

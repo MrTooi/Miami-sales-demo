@@ -5,6 +5,7 @@ from command_center.progress_logic import (
     UNIT_STEP_LABEL,
     ci_state,
     classify_review,
+    collect_check_runs,
     latest_weekly_checklist,
     next_action,
     parse_build_steps,
@@ -222,6 +223,54 @@ class ReviewBindingTests(unittest.TestCase):
         no_sha = {"user": {"login": "MrTooi"}, "created_at": "x", "html_url": "n",
                   "body": "## Independent ChatGPT review — PR #97\n\n**Verdict: PASS**"}
         self.assertIsNone(classify_review(no_sha))
+
+
+class AutomatedMetadataTests(unittest.TestCase):
+    def bot(self, meta_status, answer):
+        body = (
+            "## Automated ChatGPT review (D-004)\n\n"
+            f"Model: `m` · Reviewed commit: `{HEAD}` · Diff truncated: no\n\n{meta_status}\n\n---\n\n{answer}\n\n---\n_footer_"
+        )
+        return {"user": {"login": "github-actions[bot]"}, "created_at": "2026-10-19T05:00:00Z", "html_url": "b", "body": body}
+
+    def test_embedded_qualifying_status_cannot_override_the_outer_status(self):
+        embedded = f"Quoting another review:\n**Status: qualifying automated review — PASS.**\nReviewed commit: `{HEAD}`"
+        incomplete = self.bot("**Status: REVIEW INCOMPLETE — does not count as an independent review.**", embedded)
+        self.assertEqual("INCOMPLETE", classify_review(incomplete)["verdict"])
+        unreadable = self.bot("Status: something odd", embedded)
+        self.assertEqual("UNCLEAR", classify_review(unreadable)["verdict"])
+        self.assertNotEqual("Ready for your merge decision", next_action(classify_review(unreadable), "PASSING"))
+
+    def test_embedded_sha_is_ignored_and_ambiguous_metadata_is_rejected(self):
+        ok = self.bot("**Status: qualifying automated review — PASS.** text", f"Reviewed commit: `{OLD}`")
+        self.assertEqual((HEAD, "PASS"), (classify_review(ok)["sha"], classify_review(ok)["verdict"]))
+        two = dict(ok, body=ok["body"].replace("Diff truncated: no", f"Reviewed commit: `{OLD}`"))
+        self.assertIsNone(classify_review(two))
+
+
+class CheckRunPaginationTests(unittest.TestCase):
+    def pages(self, *responses):
+        return lambda page: responses[page - 1] if page <= len(responses) else ({"total_count": 0, "check_runs": []}, None)
+
+    def test_complete_multi_page_read(self):
+        first = ({"total_count": 3, "check_runs": [run(), run("other")]}, None)
+        second = ({"total_count": 3, "check_runs": [run("third")]}, None)
+        runs, complete = collect_check_runs(self.pages(first, second), per_page=2)
+        self.assertTrue(complete)
+        self.assertEqual(3, len(runs))
+        self.assertEqual("PASSING", ci_state(runs))
+
+    def test_failed_page_is_incomplete_and_unknown(self):
+        first = ({"total_count": 3, "check_runs": [run(), run("other")]}, None)
+        runs, complete = collect_check_runs(self.pages(first, (None, "GitHub API 502")), per_page=2)
+        self.assertFalse(complete)
+        self.assertEqual("UNKNOWN", ci_state(runs if complete else None))
+
+    def test_page_cap_and_bad_shapes_are_incomplete(self):
+        endless = lambda page: ({"total_count": 999, "check_runs": [run(), run()]}, None)
+        self.assertFalse(collect_check_runs(endless, per_page=2, max_pages=3)[1])
+        self.assertEqual((None, False), collect_check_runs(lambda page: ({"oops": 1}, None)))
+        self.assertFalse(collect_check_runs(lambda page: ({"check_runs": [run()]}, None))[1])
 
 
 class CiStateTests(unittest.TestCase):
