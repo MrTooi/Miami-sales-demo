@@ -1,0 +1,10 @@
+Date,Payee,Bill No,Job,Type,Memo,Amount
+10/01/2026,Paper Supply Co (fictional),B-77,J-501,Materials,Foam board,410.00
+10/02/2026,Sign Blanks LLC (fictional),B-78,J-502,Materials,Coroplast,190.00
+10/02/2026,Install Crew (fictional),B-79,J-502,Outsourced,Install,95.00
+10/03/2026,Vinyl World (fictional),B-80,,Materials,Vinyl roll,160.00
+10/04/2026,Office Mart (fictional),B-81,,,Toner,85.00
+10/05/2026,Paper Supply Co (fictional),B-82,J-504,Materials,"=HYPERLINK(""http://example.invalid"")",55.00
+10/06/2026,Print Partner (fictional),B-83,J-505,Outsourced,Banner print,140.00
+10/07/2026,Vinyl World (fictional),B-84,J-506,Materials,Refund,-20.00
+10/31/2026,Electric Co (fictional),B-85,,Overhead,Monthly power,230.00
