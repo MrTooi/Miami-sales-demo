@@ -80,6 +80,16 @@ def latest_weekly_checklist(issues: list[dict]) -> dict | None:
     return max(weekly, key=lambda i: i.get("created_at") or "", default=None)
 
 
+def weekly_checklist_state(issues: list[dict] | None, complete: bool) -> tuple[dict | None, str]:
+    """(checklist, OK / PROVISIONAL / NONE / UNKNOWN). Missing issue pages could hold a newer one."""
+    if issues is None:
+        return None, "UNKNOWN"
+    found = latest_weekly_checklist(issues)
+    if not complete:
+        return found, "PROVISIONAL" if found else "UNKNOWN"
+    return found, "OK" if found else "NONE"
+
+
 def parse_build_steps(spec_markdown: str | None) -> list[dict]:
     """Numbered bold items under '## Build order' in docs/MVP_SPEC.md."""
     steps, inside = [], False
@@ -160,6 +170,10 @@ def classify_review(comment: dict) -> dict | None:
             return None  # looks automated but wasn't posted by the workflow
         # The workflow writes its metadata and status above the first `---`; the
         # model's verbatim answer (which may quote anything) comes after it.
+        if "\n---\n" not in body:
+            # No boundary between workflow metadata and the model's answer: can't tell
+            # which status is the real one, so block every commit rather than guess.
+            return {**base, "kind": "automated", "sha": None, "shas": [], "verdict": "UNCLEAR"}
         meta = body.split("\n---\n", 1)[0]
         shas = AUTOMATED_SHA.findall(meta)
         if len(shas) != 1:

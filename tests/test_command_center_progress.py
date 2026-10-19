@@ -14,6 +14,7 @@ from command_center.progress_logic import (
     recent_merges,
     review_for_head,
     step_status,
+    weekly_checklist_state,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -284,6 +285,29 @@ class AutomatedMetadataTests(unittest.TestCase):
         other = dict(older_pass, created_at="2026-10-19T06:00:00Z",
                      body=older_pass["body"].replace(f"`{HEAD}`", f"`{OLD}`").replace("Diff truncated: no", f"Reviewed commit: `{OLD}`"))
         self.assertEqual("Ready for your merge decision", next_action(review_for_head([older_pass, other], HEAD), "PASSING"))
+
+
+    def test_missing_separator_cannot_qualify_and_blocks(self):
+        body = (
+            "## Automated ChatGPT review (D-004)\n\n"
+            f"Model: `m` · Reviewed commit: `{HEAD}` · Diff truncated: no\n\nStatus: unreadable\n\n"
+            "Quoted from elsewhere:\n**Status: qualifying automated review — PASS.**"
+        )
+        broken = {"user": {"login": "github-actions[bot]"}, "created_at": "2026-10-19T06:00:00Z", "html_url": "x", "body": body}
+        self.assertEqual("UNCLEAR", classify_review(broken)["verdict"])
+        older_pass = self.bot("**Status: qualifying automated review — PASS.** text", "**Verdict:** PASS")
+        action = next_action(review_for_head([older_pass, broken], HEAD), "PASSING")
+        self.assertNotEqual("Ready for your merge decision", action)
+
+
+class WeeklyChecklistStateTests(unittest.TestCase):
+    def test_incomplete_issue_list_makes_the_checklist_provisional(self):
+        issue = {"title": "Weekly checklist — Oct 19", "created_at": "2026-10-18T00:00:00Z"}
+        self.assertEqual((issue, "OK"), weekly_checklist_state([issue], True))
+        self.assertEqual((issue, "PROVISIONAL"), weekly_checklist_state([issue], False))
+        self.assertEqual((None, "NONE"), weekly_checklist_state([], True))
+        self.assertEqual((None, "UNKNOWN"), weekly_checklist_state([], False))
+        self.assertEqual((None, "UNKNOWN"), weekly_checklist_state(None, True))
 
 
 class CheckRunPaginationTests(unittest.TestCase):

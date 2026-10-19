@@ -25,7 +25,6 @@ from command_center.progress_logic import (  # noqa: E402
     UNIT_STEP_LABEL,
     ci_state,
     collect_check_runs,
-    latest_weekly_checklist,
     next_action,
     parse_build_steps,
     parse_checklist,
@@ -33,6 +32,7 @@ from command_center.progress_logic import (  # noqa: E402
     recent_merges,
     review_for_head,
     step_status,
+    weekly_checklist_state,
 )
 
 REPO = "MrTooi/Miami-sales-demo"
@@ -175,13 +175,15 @@ else:
                "acceptance criteria are met; check the PR's review and tests.")
 
 # --- This week's checklist -------------------------------------------------
-weekly = None if issues is None else latest_weekly_checklist(issues)
+weekly, weekly_state = weekly_checklist_state(issues, issues_complete)
 st.header("This week's checklist")
-if issues is None:
-    st.warning(f"UNKNOWN: could not read issues ({err_issues}).")
-elif weekly is None:
-    st.info("No open weekly checklist issue found." if issues_complete else "UNKNOWN: issues were only partly read.")
+if weekly_state == "UNKNOWN":
+    st.warning(f"UNKNOWN: could not read all issues ({err_issues or 'partial list'}).")
+elif weekly_state == "NONE":
+    st.info("No open weekly checklist issue found.")
 else:
+    if weekly_state == "PROVISIONAL":
+        st.warning("PROVISIONAL: not every issue could be read, so a newer weekly checklist may exist.")
     st.markdown(f"[#{weekly['number']} {weekly['title']}]({weekly['html_url']}) · boxes are ticked on GitHub")
     groups = parse_checklist(weekly.get("body"))
     sections: dict[str, list] = {}
