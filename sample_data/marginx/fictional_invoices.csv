@@ -1,0 +1,11 @@
+Invoice #,Date,Customer Name,Job No,Description,Total
+FIC-1001,10/01/2026,Example Bakery (fictional),J-501,Menu boards,"$1,250.00"
+FIC-1002,10/02/2026,Sample Realty (fictional),J-502,Yard signs,640.00
+FIC-1002,10/02/2026,Sample Realty (fictional),J-502,Install,120.00
+FIC-1003,10/03/2026,Demo Gym (fictional),,Window decals,385.50
+FIC-1004,10/05/2026,Example Bakery (fictional),J-504,Flyers,210.00
+FIC-1004,10/05/2026,Example Bakery (fictional),J-504,Flyers,210.00
+FIC-1005,2026-10-06,Test Cafe (fictional),J-505,Banner,300.00
+FIC-1006,10/07/2026,Demo Gym (fictional),J-506,Reprint credit,-45.00
+FIC-1007,10/08/2026,,J-507,Business cards,95.00
+FIC-1008,10/09/2026,Sample Realty (fictional),J-508,Brochures,12.345
