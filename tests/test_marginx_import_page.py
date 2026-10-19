@@ -82,8 +82,8 @@ class MarginXImportPageTests(unittest.TestCase):
 
     def test_unrecognised_file_asks_what_it_is_and_which_column(self):
         at = self.with_files("Num,Date,(not in this file),Amount\nX-1,10/31/2026,Example Co (fictional),1.00\n",
-                             "Date,Payee,Amount\n10/31/2026,A,1.00\n")
-        radio(at, "Is fictional_invoices.csv a list of sales or of costs?").set_value("invoices").run()
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        radio(at, "What kind of file is fictional_invoices.csv?").set_value("invoices").run()
         # A header literally named like the "no column" choice can still be picked.
         ask = next(s for s in at.selectbox if s.label == "Which column has the customer?")
         ask.select_index(ask.options.index("(not in this file)", 1)).run()
@@ -92,7 +92,7 @@ class MarginXImportPageTests(unittest.TestCase):
 
     def test_mixed_date_styles_fall_back_to_picking_the_main_format(self):
         at = self.with_files("Invoice,Date,Customer,Amount\nA,2026-10-06,X,1.00\nB,10/31/2026,Y,2.00\n",
-                             "Date,Payee,Amount\n10/31/2026,A,1.00\n")
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         pick = radio(at, "Which date format does fictional_invoices.csv mainly use?")
         pick.set_value("MM/DD/YYYY").run()
         self.assertFalse(at.exception, at.exception)
@@ -102,7 +102,7 @@ class MarginXImportPageTests(unittest.TestCase):
 
     def test_unreadable_dates_are_still_accounted_for(self):
         at = self.with_files("Invoice,Date,Customer,Amount\nA,someday,X,1.00\nB,,Y,2.00\n",
-                             "Date,Payee,Amount\n10/31/2026,A,1.00\n")
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         radio(at, "Which date format does fictional_invoices.csv mainly use?").set_value("MM/DD/YYYY").run()
         self.assertFalse(at.exception, at.exception)
         self.assertIn("2 rows of 2 couldn't be imported", page_text(at))
@@ -131,7 +131,7 @@ class MarginXImportPageTests(unittest.TestCase):
 
     def test_two_amount_columns_ask_which_one_before_importing(self):
         at = self.with_files("Invoice,Date,Customer,Amount,Total\nA,10/31/2026,X,40.00,100.00\n",
-                             "Date,Payee,Amount\n10/31/2026,A,1.00\n")
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertNotIn("imported invoice lines", page_text(at))
         ask = next(s for s in at.selectbox if s.label == "Which column has the amount?")
         ask.set_value("Total").run()
@@ -140,7 +140,7 @@ class MarginXImportPageTests(unittest.TestCase):
 
     def test_two_date_columns_ask_which_one_before_importing(self):
         at = self.with_files("Invoice,Date,Invoice Date,Customer,Amount\nA,10/31/2026,09/30/2026,X,1.00\n",
-                             "Date,Payee,Amount\n10/31/2026,A,1.00\n")
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertNotIn("imported invoice lines", page_text(at))
         next(s for s in at.selectbox if s.label == "Which column has the invoice date?").set_value("Invoice Date").run()
         self.assertFalse(at.exception, at.exception)
@@ -148,13 +148,33 @@ class MarginXImportPageTests(unittest.TestCase):
 
     def test_file_that_fits_both_kinds_asks_before_importing(self):
         at = self.with_files("Invoice,Date,Customer,Vendor,Amount\nA,10/31/2026,X,Y,1.00\n",
-                             "Date,Payee,Amount\n10/31/2026,A,1.00\n")
-        question = radio(at, "Is fictional_invoices.csv a list of sales or of costs?")
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        question = radio(at, "What kind of file is fictional_invoices.csv?")
         self.assertIsNone(question.value)
         self.assertEqual(1, page_text(at).count("imported"))  # only the costs file has a report so far
 
+    def test_open_balance_chosen_by_hand_imports_nothing(self):
+        at = self.with_files("Invoice,Date,Customer,Open Balance\nINV-1,10/31/2026,Acme (fictional),40.00\n",
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        next(s for s in at.selectbox if s.label == "Which column has the amount?").set_value("Open Balance").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertTrue(any("balance still owed" in i.value for i in at.info))
+        self.assertNotIn("imported invoice lines", page_text(at))
+        self.assertNotIn("invoice line imported", page_text(at))
+
+    def test_bank_style_export_is_asked_about_and_never_imported_as_costs(self):
+        at = self.with_files("Invoice,Date,Customer,Amount\nA,10/31/2026,X,1.00\n",
+                             "Date,Payee,Amount\n10/31/2026,Transfer to savings,500.00\n")
+        question = radio(at, "What kind of file is fictional_costs.csv?")
+        self.assertIn("bank", question.options[2].lower())
+        self.assertNotIn("cost line", page_text(at))
+        question.set_value("bank").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertTrue(any("can't read bank or card statements" in i.value for i in at.info))
+        self.assertNotIn("cost line", page_text(at))
+
     def test_identical_files_both_get_reported(self):
-        same = "Date,Payee,Amount\n10/31/2026,A,1.00\n"
+        same = "Date,Vendor,Amount\n10/31/2026,A,1.00\n"
         at = self.with_files(same, same)
         self.assertEqual(2, page_text(at).count("1 cost line imported"))
 

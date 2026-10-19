@@ -75,9 +75,15 @@ def show_file(position: int, name: str, data: bytes) -> None:
 
     detected = ji.detect_kind(headers)
     if detected is None:
-        kind = st.radio(f"Is {name} a list of sales or of costs?", list(KIND_LABELS),
-                        format_func=KIND_LABELS.get, index=None, key=f"{key}-kind-ask")
+        kind = st.radio(f"What kind of file is {name}?", [*KIND_LABELS, "bank"],
+                        format_func=lambda k: KIND_LABELS.get(k, "a bank or card statement"),
+                        index=None, key=f"{key}-kind-ask")
         if kind is None:
+            return
+        if kind == "bank":
+            # Deposits, transfers and payments are cash movements, not sales or costs (MVP spec).
+            st.info("MarginX can't read bank or card statements yet: deposits and transfers aren't sales or "
+                    "costs. Export your sales and your bills from your accounting software instead.")
             return
     else:
         kind = detected

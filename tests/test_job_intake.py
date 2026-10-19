@@ -99,6 +99,30 @@ class MappingTests(unittest.TestCase):
         self.assertIsNone(ji.detect_kind(["Invoice", "Date", "Customer", "Vendor", "Amount"]))  # complete for both
         self.assertIsNone(ji.detect_kind(["A", "B"]))
 
+    def test_balance_columns_are_refused_as_the_amount_even_when_chosen_by_hand(self):
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Open Balance\nINV-1,10/31/2026,Acme,40.00\n")
+        mapping = {"invoice_id": "Invoice", "date": "Date", "customer": "Customer", "amount": "Open Balance"}
+        problems = ji.validate_mapping(mapping, headers, "invoices")
+        self.assertTrue(any("balance still owed" in p for p in problems))
+        with self.assertRaises(ji.IntakeError):  # zero accepted lines: intake refuses the mapping
+            ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY")
+        for header in ("Open Balance", "Amount Due", "Balance", "Outstanding", "Unpaid Amount", "Remaining"):
+            self.assertTrue(ji.is_balance_column(header), header)
+        for header in ("Amount", "Total", "Invoice Total", "Line Amount"):
+            self.assertFalse(ji.is_balance_column(header), header)
+        cost_map = {"date": "Date", "vendor": "Vendor", "amount": "Balance Due"}
+        self.assertTrue(ji.validate_mapping(cost_map, ["Date", "Vendor", "Balance Due"], "costs"))
+
+    def test_bank_style_exports_are_never_auto_classified_as_costs(self):
+        for headers in (["Date", "Payee", "Amount"], ["Date", "Description", "Payee", "Amount"],
+                        ["Date", "Vendor", "Amount", "Balance"], ["Posted Date", "Payee", "Debit", "Amount"]):
+            with self.subTest(headers=headers):
+                self.assertIsNone(ji.detect_kind(headers))
+        # Real bill/expense evidence still auto-detects.
+        self.assertEqual("costs", ji.detect_kind(load("fictional_costs.csv", "costs")[0]))
+        self.assertEqual("costs", ji.detect_kind(["Date", "Payee", "Bill No", "Amount"]))
+        self.assertEqual("costs", ji.detect_kind(["Date", "Vendor", "Amount"]))
+
     def test_two_possible_date_columns_are_never_picked_silently(self):
         self.assertIsNone(ji.suggest_mapping(["Invoice", "Date", "Invoice Date", "Customer", "Amount"], "invoices")["date"])
         self.assertEqual("Invoice Date", ji.suggest_mapping(["Invoice", "Invoice Date", "Customer", "Amount"], "invoices")["date"])
@@ -156,6 +180,10 @@ class MappingTests(unittest.TestCase):
     def test_formats_that_agree_on_every_date_need_no_question(self):
         self.assertEqual("MM/DD/YYYY", ji.suggest_date_format(["01/01/2026", "02/02/2026"]))
         self.assertIsNone(ji.date_question(["01/01/2026", "02/02/2026"]))
+
+    def test_mixed_styles_are_asked_about_even_when_the_tie_reads_the_same(self):
+        # Month-first and day-first agree on 01/01 and 02/02, but the ISO date shows a second style.
+        self.assertIsNone(ji.suggest_date_format(["01/01/2026", "02/02/2026", "2026-10-06"]))
         with self.assertRaises(ji.IntakeError):
             ji.intake(["Date"], [], {}, "costs", "guess")
 

@@ -1,7 +1,8 @@
 """MarginX step 1: job-level CSV intake with a "what's missing" report.
 
-One CSV at a time (invoices or costs). The owner confirms a column mapping and a
-date format; every row is then either accepted or rejected with a plain reason.
+One CSV at a time (invoices or costs). MarginX works out the file type, column
+mapping and date format, applies them only when they are unambiguous, and asks the
+owner otherwise; every row is then either accepted or rejected with a plain reason.
 Nothing is silently dropped, repaired, coerced or guessed, and cell text is
 always data (spreadsheet formulas are never evaluated). This step reports gaps
 only; it does not calculate profit (build step 3, docs/MVP_SPEC.md).
@@ -40,7 +41,8 @@ FIELDS: dict[str, dict[str, tuple[str, bool]]] = {
     },
 }
 
-# Normalized header words that suggest a field. Suggestions only; the owner confirms.
+# Normalized header words that suggest a field. A unique match is applied (and shown,
+# and changeable); two plausible money or date columns are always asked about.
 SYNONYMS: dict[str, tuple[str, ...]] = {
     "invoice_id": ("invoice id", "invoice", "invoice no", "invoice number", "invoice num", "num", "no", "number", "doc number"),
     "cost_id": ("bill id", "bill", "bill no", "bill number", "reference", "ref", "ref no", "num", "number"),
@@ -74,6 +76,13 @@ def is_labor(cost_type: str) -> bool:
 # removed before looking for the cost word "bill".
 INVOICE_WORDS = {"invoice", "invoices", "customer", "client", "sales", "sold"}
 COST_WORDS = {"vendor", "payee", "supplier", "expense", "expenses", "purchase", "bill", "bills"}
+# Evidence that a file really is bills/expenses; "payee" alone also fits bank statements.
+STRONG_COST_WORDS = (COST_WORDS - {"payee"}) | {"cost", "costs"}
+# Words typical of bank or card statements, whose rows are cash movements, not costs.
+BANK_WORDS = {"deposit", "deposits", "withdrawal", "withdrawals", "debit", "debits", "transfer", "transfers",
+              "balance", "posted", "statement", "check", "cheque"}
+# Headers describing what's still owed, never the amount billed.
+BALANCE_WORDS = {"balance", "due", "outstanding", "owed", "unpaid", "remaining", "open"}
 
 FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 MAX_FILE_BYTES = 5_000_000
@@ -142,7 +151,7 @@ def read_csv(data: bytes) -> tuple[list[str], list[Record]]:
 
 
 def suggest_mapping(headers: list[str], kind: str) -> dict[str, str | None]:
-    """Best-guess field -> header suggestions for the owner to confirm. Never applied silently."""
+    """Field -> header where exactly one column fits; None where none or (for money and dates) several do."""
     if kind not in KINDS:
         raise ValueError(f"Unknown file type: {kind}")
     normalized = {h: _norm(h) for h in headers}
@@ -178,7 +187,18 @@ def validate_mapping(mapping: dict[str, str | None], headers: list[str], kind: s
     unknown = set(mapping) - set(FIELDS[kind])
     if unknown:
         problems.append("Unknown fields: " + ", ".join(sorted(unknown)))
+    amount = mapping.get("amount")
+    if amount and is_balance_column(amount):
+        # Refused even when chosen by hand: what's still owed isn't what was billed.
+        what = "invoice" if kind == "invoices" else "bill"
+        problems.append(f"'{amount}' looks like a balance still owed, not the amount billed. "
+                        f"Choose the column with the {what} or line total.")
     return problems
+
+
+def is_balance_column(header: str) -> bool:
+    """Headers like "Open Balance", "Amount Due" or "Outstanding" describe what's still owed."""
+    return bool(set(_norm(header).split()) & BALANCE_WORDS)
 
 
 def suggest_date_format(values: list[str]) -> str | None:
@@ -192,18 +212,19 @@ def suggest_date_format(values: list[str]) -> str | None:
     tied = _tied_formats(values)
     if not tied:
         return None
-    if len(tied) == 1:
-        # Only when no date is readable solely by another format: a file mixing two
-        # conventions (some dates only month-first, some only day-first) is asked about,
-        # because its ambiguous dates could belong to either.
-        chosen = DATE_FORMATS[tied[0]]
-        mixed = any(not _parse_date(v, chosen) and any(_parse_date(v, f) for f in DATE_FORMATS.values())
-                    for v in _clean(values))
-        return None if mixed else tied[0]
-    # Formats that read every date as the same day (e.g. only "01/01/2026") make
-    # no difference, so there is nothing to ask.
-    readings = [[_parse_date(v, DATE_FORMATS[name]) for v in _clean(values)] for name in tied]
-    return tied[0] if all(r == readings[0] for r in readings) else None
+    if len(tied) > 1:
+        # Formats that read every date as the same day (e.g. only "01/01/2026") make
+        # no difference; otherwise the owner is asked.
+        readings = [[_parse_date(v, DATE_FORMATS[name]) for v in _clean(values)] for name in tied]
+        if any(r != readings[0] for r in readings):
+            return None
+    # Only when no date is readable solely by another format: a file mixing two
+    # conventions (e.g. some dates ISO, some month-first) is asked about, because its
+    # ambiguous dates could belong to either.
+    chosen = DATE_FORMATS[tied[0]]
+    mixed = any(not _parse_date(v, chosen) and any(_parse_date(v, f) for f in DATE_FORMATS.values())
+                for v in _clean(values))
+    return None if mixed else tied[0]
 
 
 def _clean(values: list[str]) -> list[str]:
@@ -252,12 +273,19 @@ def detect_kind(headers: list[str]) -> str | None:
     if len(full) == 2:
         return None  # the headers fit both kinds of file: ask, never guess
     if len(full) == 1 and score[full[0]] >= max(score.values()):
-        return full[0]
-    candidates = full or list(KINDS)
-    ranked = sorted(candidates, key=lambda k: score[k], reverse=True)
-    if len(ranked) > 1 and score[ranked[0]] == score[ranked[1]]:
+        found = full[0]
+    else:
+        candidates = full or list(KINDS)
+        ranked = sorted(candidates, key=lambda k: score[k], reverse=True)
+        if (len(ranked) > 1 and score[ranked[0]] == score[ranked[1]]) or score[ranked[0]] == 0:
+            return None
+        found = ranked[0]
+    if found == "costs" and (not tokens & STRONG_COST_WORDS or tokens & BANK_WORDS):
+        # "Date, Payee, Amount" is also what a bank or card statement looks like, where
+        # deposits and transfers aren't costs (MVP spec). Without bill/expense evidence,
+        # or with bank-statement words, the owner is asked.
         return None
-    return ranked[0] if score[ranked[0]] > 0 else None
+    return found
 
 
 def _parse_date(value: str, fmt: str) -> date | None:
