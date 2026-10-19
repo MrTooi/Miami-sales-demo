@@ -145,6 +145,38 @@ class CompletenessTests(unittest.TestCase):
                              b"10/01/2026,Bank,J-1,Transfer,500.00\n")
         self.assertEqual(("complete", []), (report.jobs[0].status, report.jobs[0].reasons))
 
+    def test_job_whose_only_lines_failed_keeps_its_customer_from_being_complete(self):
+        costs = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,10.00\n"
+                 b"B-2,10/01/2026,Paper Co,J-1,Materials,10.00\n")
+        report = self.report(costs, b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,50.00\n"
+                                    b"I-2,10/01/2026,Bakery,J-2,oops\n")
+        jobs = {j.job_id: j for j in report.jobs}
+        self.assertEqual("complete", jobs["J-1"].status)
+        self.assertEqual(("unavailable", ("Bakery",)), (jobs["J-2"].status, jobs["J-2"].customers))
+        bakery = report.customers[0]
+        self.assertEqual(("provisional", Decimal("30.00")), (bakery.status, bakery.contribution))
+        self.assertIn("J-2", " ".join(bakery.reasons))
+        # A failed sales line whose customer can't be read holds back every customer.
+        report = self.report(costs, b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,50.00\n"
+                                    b"I-2,10/01/2026,,J-2,20.00\n")
+        self.assertEqual("provisional", report.customers[0].status)
+        self.assertIn("no readable customer", " ".join(report.customers[0].reasons))
+
+    def test_unclear_credits_are_never_treated_as_harmless(self):
+        costs = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,10.00\n"
+                 b"B-2,10/01/2026,Paper Co,J-1,Materials,10.00\nB-3,10/01/2026,Paper Co,J-1,Vendor Credit,5.00\n")
+        report = self.report(costs, b"Invoice,Date,Customer,Job,Type,Amount\n"
+                                    b"I-1,10/01/2026,Bakery,J-1,Invoice,50.00\nI-2,10/01/2026,Bakery,J-1,Credit,10.00\n")
+        job = report.jobs[0]
+        self.assertEqual("provisional", job.status)  # a supplier credit and a customer credit may be missing
+        self.assertIn("1 of its sales lines couldn't be imported", " ".join(job.reasons))
+        self.assertIn("1 of its cost lines couldn't be imported", " ".join(job.reasons))
+        # An explicit bank credit is a cash movement: rejected, and nothing is missing.
+        report = self.report(costs.replace(b"Vendor Credit", b"Materials"),
+                             b"Invoice,Date,Customer,Job,Type,Amount\nI-1,10/01/2026,Bakery,J-1,Invoice,50.00\n"
+                             b"I-2,10/01/2026,Bank,J-1,Bank Credit,10.00\n")
+        self.assertEqual("complete", report.jobs[0].status)
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))

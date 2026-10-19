@@ -414,7 +414,9 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertEqual("No labor recorded.", jobs.loc["J-501", "Why"])
         self.assertEqual(("—", "Unavailable"), tuple(jobs.loc["J-506", ["Direct contribution", "Status"]]))
         self.assertTrue(any("Direct job contribution" in c.value and "not cash received" in c.value for c in at.caption))
-        self.assertIn("5 jobs: 0 complete, 3 provisional", page_text(at))
+        # J-507 and J-508 only have lines that failed to import: listed, with no figure.
+        self.assertIn("7 jobs: 0 complete, 3 provisional", page_text(at))
+        self.assertEqual(("—", "Unavailable"), tuple(jobs.loc["J-508", ["Direct contribution", "Status"]]))
         notes = page_text(at)
         self.assertIn("aren't linked to a job", notes)
         customers = next(d.value for d in at.dataframe if "Customer" in d.value.columns and "Jobs" in d.value.columns)

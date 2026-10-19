@@ -162,17 +162,33 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
     # never complete, and lines that can't be tied to a job hold back every job.
     missing: dict[str, dict[str, int]] = defaultdict(lambda: {"sales": 0, "cost": 0})
     untied = {"sales": 0, "cost": 0}
+    failed_customers: dict[str, set[str]] = defaultdict(set)  # customers named on failed sales lines
+    unknown_customer_lines = 0  # failed sales lines whose customer can't be read
     for result, what in ((invoices, "sales"), (costs, "cost")):
         for row in result.rejected:
             if not row.get("money_missing", True):
                 continue
-            job = (row.get("values") or {}).get("job_id", "")
+            values = row.get("values") or {}
+            job = values.get("job_id", "")
             if job:
                 missing[job][what] += 1
             else:
                 untied[what] += 1
+            if what == "sales":
+                if values.get("customer"):
+                    failed_customers[job].add(values["customer"])
+                else:
+                    unknown_customer_lines += 1
 
-    for job in sorted(set(sales) | set(job_costs)):
+    for job in sorted(set(sales) | set(job_costs) | set(missing)):
+        if job not in sales and job not in job_costs:
+            # Only failed lines: kept, with no figure, so its customer's total isn't complete.
+            customers[job] = set(failed_customers[job])
+            report.jobs.append(JobResult(job, tuple(sorted(customers[job])), ZERO, {c: ZERO for c in CATEGORIES},
+                                         0, 0, "unavailable",
+                                         [f"Its only lines couldn't be imported ({missing[job]['sales']} sales, "
+                                          f"{missing[job]['cost']} cost; listed above)."]))
+            continue
         counts = cost_lines[job] if job in cost_lines else {c: 0 for c in CATEGORIES}
         amounts = job_costs[job] if job in job_costs else {c: ZERO for c in CATEGORIES}
         reasons = []
@@ -217,7 +233,7 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
     for line in invoices.accepted:
         if not line.get("job_id"):
             no_job_lines[line["customer"]] += 1
-    for customer in sorted(set(by_customer) | set(no_job_lines) | set(shared_by_customer)):
+    for customer in sorted(set(by_customer) | set(no_job_lines) | set(shared_by_customer) | failed_customers.get("", set())):
         jobs = by_customer.get(customer, [])
         counted = [j for j in jobs if j.status != "unavailable"]
         reasons = []
@@ -230,6 +246,11 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
         if shared_by_customer.get(customer):
             reasons.append("Left out, billed to more than one customer: "
                            + ", ".join(shared_by_customer[customer]) + ".")
+        if unknown_customer_lines:
+            reasons.append(f"{unknown_customer_lines} sales line(s) couldn't be imported and have no readable "
+                           "customer, so they may belong to this customer.")
+        if customer in failed_customers.get("", set()):
+            reasons.append("Some of its sales lines without a job number couldn't be imported.")
         if no_job_lines.get(customer):
             reasons.append(f"{no_job_lines[customer]} invoice line(s) have no job number and are left out.")
         if not counted:

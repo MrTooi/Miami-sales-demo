@@ -219,6 +219,8 @@ class MappingTests(unittest.TestCase):
         result = ji.intake(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
         self.assertEqual([2, 5, 6], [r["row"] for r in result.accepted])
         self.assertEqual([3, 4], [r["row"] for r in result.rejected])
+        # A bank credit is not a line (nothing missing); a bare "Credit" is unclear (money may be missing).
+        self.assertEqual([False, True], [r["money_missing"] for r in result.rejected])
         headers, rows = ji.read_csv(b"Date,Vendor,Type,Amount\n10/31/2026,Paper Co,Credit Card Charge,80.00\n"
                                     b"10/31/2026,Bank,Credit,500.00\n")
         result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")

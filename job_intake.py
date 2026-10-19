@@ -473,11 +473,22 @@ def _type_columns(headers: list[str], mapping: dict[str, str | None]) -> list[in
 
 def _cash_movement_type(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
     """The row's type text when it names a payment, transfer, deposit, payout or settlement,
-    or a bank credit ("Credit", "Bank Credit"). Credit memos and notes are ordinary invoice
-    adjustments, and credit card charges are ordinary expenses, so those are not."""
+    or a bank credit ("Bank Credit"). Credit memos, credit card charges and other credits are
+    not: those are ordinary lines or unclear (see _unclear_credit)."""
     for i in type_columns:
         words = set(_norm(cells[i]).split())
-        if words & ROW_CASH_WORDS or ("credit" in words and not words & {"memo", "note", "card"}):
+        if words & ROW_CASH_WORDS or {"bank", "credit"} <= words:
+            return cells[i].strip()
+    return None
+
+
+def _unclear_credit(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
+    """The row's type text when it is a credit of unclear kind ("Credit", "Vendor Credit"): it
+    could be a customer or supplier adjustment or money received, so it is never imported
+    and never treated as harmless. Credit memos/notes and credit card charges are clear."""
+    for i in type_columns:
+        words = set(_norm(cells[i]).split())
+        if "credit" in words and not words & {"memo", "note", "card", "bank"}:
             return cells[i].strip()
     return None
 
@@ -631,6 +642,11 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             what = "sale" if kind == "invoices" else "cost"
             reasons.append(f"Type '{movement}' is a payment, transfer or deposit (money moving), not a {what}; "
                            "not imported.")
+        unclear = None if movement else _unclear_credit(rec.cells, types)
+        if unclear:
+            # Real money may be missing here, so this is not counted as "not a line".
+            reasons.append(f"Type '{unclear}' could be a customer or supplier credit or money received; "
+                           "not imported. Use 'Credit Memo' for credits on invoices, and leave bank credits out.")
         summary = _summary_label(rec.cells, headers, mapping)
         key = _possible_document_key(values, kind)
         if summary and key and not all_lines[key] and summaries[key] > 1:
