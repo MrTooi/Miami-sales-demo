@@ -214,9 +214,21 @@ class ReviewBindingTests(unittest.TestCase):
         self.assertIsNone(review_for_head([{"body": "﻿", "user": {}}], HEAD))
 
     def test_automated_review_needs_the_full_sha(self):
-        self.assertIsNone(review_for_head([automated(HEAD[:7])], HEAD))
-        self.assertIsNone(review_for_head([automated(HEAD[:39])], HEAD))
         self.assertEqual("automated", review_for_head([automated(HEAD)], HEAD)["kind"])
+        for short in (HEAD[:7], HEAD[:39]):
+            with self.subTest(short=short):
+                review = review_for_head([automated(short)], HEAD)
+                self.assertEqual("UNCLEAR", review["verdict"])
+                self.assertNotEqual("Ready for your merge decision", next_action(review, "PASSING"))
+
+    def test_newer_shortened_sha_review_blocks_an_older_full_pass(self):
+        older_pass = automated(HEAD, at="2026-10-19T05:00:00Z")
+        for status in ("qualifying automated review — FAIL.", "REVIEW INCOMPLETE — does not count",
+                       "something unreadable", "qualifying automated review — PASS."):
+            with self.subTest(status=status):
+                newer = automated(HEAD[:39], status=status, at="2026-10-19T06:00:00Z")
+                action = next_action(review_for_head([older_pass, newer], HEAD), "PASSING")
+                self.assertNotEqual("Ready for your merge decision", action)
 
     def test_short_or_missing_sha_never_matches(self):
         self.assertIsNone(review_for_head([manual("a39")], HEAD))

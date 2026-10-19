@@ -172,7 +172,13 @@ def review_for_head(comments: list[dict], head_sha: str) -> dict | None:
             # Malformed bot review: it blocks when it names this commit or names none.
             if not review["shas"] or any(_same_commit(s, head_sha, full=False) for s in review["shas"]):
                 found = review
-        elif _same_commit(review["sha"], head_sha, full=review["kind"] == "automated"):
+        elif review["kind"] == "automated":
+            if _same_commit(review["sha"], head_sha, full=True):
+                found = review
+            elif _same_commit(review["sha"], head_sha, full=False):
+                # Names this head only by a shortened SHA: not qualifying, but it blocks.
+                found = {**review, "verdict": "UNCLEAR"}
+        elif _same_commit(review["sha"], head_sha, full=False):
             found = review
     return found
 

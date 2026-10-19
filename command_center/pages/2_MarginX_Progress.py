@@ -144,15 +144,17 @@ else:
         ci = ci_state(runs if runs_complete else None)
         action = "Check reviews (comments could not be fully read)" if partial else next_action(review, ci)
         if review:
-            source = "automated, verified" if review["kind"] == "automated" else "manual, source not verified"
+            source = ("automated, posted by github-actions[bot]" if review["kind"] == "automated"
+                      else "manual, source not verified")
             verdict = f"[{review['verdict']}]({review['url']}) on `{sha[:7]}` ({source})"
         else:
             verdict = f"none on current commit `{sha[:7]}`"
         tone = st.success if action.startswith("Ready") else st.info if action.startswith("Needs") else st.warning
         tone(f"**[PR #{number}]({pr['html_url']}) {pr['title']}**  \n"
              f"Next: **{action}** · Review: {verdict} · Tests: {ci}")
-    st.caption("A PR shows as ready only with a verified automated PASS on its exact current commit and a "
-               "successful `unit-tests` check. Merging is always your decision.")
+    st.caption("A PR shows as ready only with an automated D-004 PASS (posted by github-actions[bot]; the bot "
+               "account and comment format are checked, not which workflow posted it) on its exact current commit "
+               "and a successful `unit-tests` check. Merging is always your decision.")
 
 # --- Build steps ---------------------------------------------------------
 st.header("MarginX build steps")
