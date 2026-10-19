@@ -399,6 +399,45 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertIn("2 rows of 2 couldn't be imported", page_text(at))
         self.assertIn("No invoice lines were imported", page_text(at))
 
+    def profit_table(self, at):
+        return next(d.value for d in at.dataframe if "Direct contribution" in d.value.columns and "Job" in d.value.columns)
+
+    def test_sample_profit_by_job_after_answering_the_questions(self):
+        at = self.run_page()
+        self.assertTrue(any("one sales file and one costs file" in i.value for i in at.info))  # not before answers
+        radio(at, SAMPLE_AMOUNT_QUESTION).set_value("line").run()
+        radio(at, INVOICE_DATE_QUESTION).set_value("MM/DD/YYYY").run()
+        self.assertFalse(at.exception, at.exception)
+        jobs = self.profit_table(at).set_index("Job")
+        self.assertEqual(("$1,250.00", "$410.00", "$840.00", "Provisional"),
+                         tuple(jobs.loc["J-501", ["Sales", "Materials", "Direct contribution", "Status"]]))
+        self.assertEqual("No labor recorded.", jobs.loc["J-501", "Why"])
+        self.assertEqual(("—", "Unavailable"), tuple(jobs.loc["J-506", ["Direct contribution", "Status"]]))
+        self.assertTrue(any("Direct job contribution" in c.value and "not cash received" in c.value for c in at.caption))
+        self.assertIn("5 jobs: 0 complete, 3 provisional", page_text(at))
+        notes = page_text(at)
+        self.assertIn("aren't linked to a job", notes)
+        customers = next(d.value for d in at.dataframe if "Customer" in d.value.columns and "Jobs" in d.value.columns)
+        bakery = customers.set_index("Customer").loc["Example Bakery (fictional)"]
+        self.assertEqual(("$995.00", "Provisional"), (bakery["Direct contribution"], bakery["Status"]))
+        gym = customers.set_index("Customer").loc["Demo Gym (fictional)"]
+        self.assertEqual(("—", "—", "—", "Unavailable"), tuple(gym[["Sales", "Costs", "Direct contribution", "Status"]]))
+
+    def test_profit_needs_job_numbers_in_both_files(self):
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                             "Date,Vendor,Type,Amount\n10/31/2026,Paper Co (fictional),Materials,40.00\n")
+        self.assertFalse(at.exception, at.exception)
+        self.assertTrue(any("costs file has no job number column" in i.value for i in at.info))
+        self.assertFalse(any("Direct contribution" in d.value.columns for d in at.dataframe))
+
+    def test_complete_job_shows_an_exact_figure(self):
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                             "Date,Vendor,Job,Type,Amount\n10/31/2026,Paper Co (fictional),J-1,Materials,40.00\n"
+                             "10/31/2026,Crew (fictional),J-1,Labor,25.50\n")
+        self.assertFalse(at.exception, at.exception)
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("$34.50", "Complete", ""), (job["Direct contribution"], job["Status"], job["Why"]))
+
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertTrue(any("no rows" in i.value for i in at.info))

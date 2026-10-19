@@ -1,0 +1,146 @@
+from decimal import Decimal
+from pathlib import Path
+import unittest
+
+import job_intake as ji
+import job_profit as jp
+
+SAMPLES = Path(__file__).resolve().parents[1] / "sample_data" / "marginx"
+
+
+def intake(csv_bytes, kind, scope=None):
+    headers, rows = ji.read_csv(csv_bytes)
+    return ji.intake(headers, rows, ji.suggest_mapping(headers, kind), kind, "MM/DD/YYYY", scope)
+
+
+INVOICES = (b"Invoice,Date,Customer,Job,Description,Line Amount\n"
+            b"I-1,10/01/2026,Bakery,J-1,Signs,1000.00\n"
+            b"I-1,10/01/2026,Bakery,J-1,Reprint credit,-50.00\n"
+            b"I-2,10/02/2026,Gym,J-2,Banner,300.00\n"
+            b"I-3,10/03/2026,Bakery,J-3,Decals,200.00\n"
+            b"I-4,10/04/2026,Gym,,Rush fee,40.00\n")
+COSTS = (b"Bill,Date,Vendor,Job,Type,Amount\n"
+         b"B-1,10/01/2026,Paper Co,J-1,Materials,300.00\n"
+         b"B-2,10/01/2026,Crew,J-1,Labor,200.10\n"
+         b"B-3,10/02/2026,Print Partner,J-2,Outsourced,350.00\n"
+         b"B-4,10/02/2026,Crew,J-2,Labor,25.00\n"
+         b"B-5,10/05/2026,Electric Co,,Overhead,230.00\n"
+         b"B-6,10/06/2026,Paper Co,J-9,Materials,60.00\n")
+
+
+class JobProfitTests(unittest.TestCase):
+    def setUp(self):
+        self.report = jp.job_profit(intake(INVOICES, "invoices"), intake(COSTS, "costs"))
+        self.jobs = {j.job_id: j for j in self.report.jobs}
+        self.customers = {c.customer: c for c in self.report.customers}
+
+    def test_complete_job_is_exact_and_includes_credits(self):
+        j1 = self.jobs["J-1"]
+        self.assertEqual("complete", j1.status)
+        self.assertEqual(Decimal("950.00"), j1.sales)  # 1000 - 50 credit
+        self.assertEqual(Decimal("500.10"), j1.total_costs)
+        self.assertEqual(Decimal("449.90"), j1.contribution)
+        self.assertIsInstance(j1.contribution, Decimal)
+
+    def test_loss_making_job_is_shown_as_a_negative_contribution(self):
+        j2 = self.jobs["J-2"]
+        self.assertEqual("complete", j2.status)  # outsourced work counts as the job's direct cost
+        self.assertEqual(Decimal("-75.00"), j2.contribution)
+
+    def test_jobs_missing_sales_or_costs_get_no_figure(self):
+        self.assertEqual("unavailable", self.jobs["J-3"].status)
+        self.assertIsNone(self.jobs["J-3"].contribution)
+        self.assertIn("No costs recorded", " ".join(self.jobs["J-3"].reasons))
+        self.assertEqual("unavailable", self.jobs["J-9"].status)
+        self.assertIn("No sales", " ".join(self.jobs["J-9"].reasons))
+
+    def test_unlinked_sales_and_costs_are_reported_never_spread_over_jobs(self):
+        self.assertEqual((Decimal("40.00"), 1), (self.report.unlinked_sales, self.report.unlinked_sales_lines))
+        self.assertEqual((Decimal("230.00"), 1), (self.report.unlinked_costs, self.report.unlinked_cost_lines))
+        notes = " ".join(self.report.notes)
+        self.assertIn("$40.00", notes)
+        self.assertIn("$230.00", notes)
+
+    def test_customer_totals_inherit_their_jobs_status(self):
+        bakery = self.customers["Bakery"]
+        self.assertEqual(("J-1", "J-3"), bakery.jobs)
+        self.assertEqual(Decimal("449.90"), bakery.contribution)  # only J-1 has a figure
+        self.assertEqual("provisional", bakery.status)
+        self.assertIn("J-3", " ".join(bakery.reasons))
+        gym = self.customers["Gym"]
+        self.assertEqual("provisional", gym.status)  # its rush fee has no job
+        self.assertIn("no job number", " ".join(gym.reasons))
+
+    def test_basis_and_dates_are_stated(self):
+        self.assertIn("Direct job contribution", self.report.basis)
+        self.assertIn("not cash received", self.report.basis)
+        self.assertEqual(("2026-10-01", "2026-10-04"), self.report.invoice_dates)
+        self.assertEqual(("2026-10-01", "2026-10-06"), self.report.cost_dates)
+
+
+class CompletenessTests(unittest.TestCase):
+    def report(self, costs, invoices=b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,500.00\n"):
+        return jp.job_profit(intake(invoices, "invoices"), intake(costs, "costs"))
+
+    def test_missing_labor_or_materials_makes_a_job_provisional(self):
+        job = self.report(b"Date,Vendor,Job,Type,Amount\n10/01/2026,Paper Co,J-1,Materials,100.00\n").jobs[0]
+        self.assertEqual(("provisional", ["No labor recorded."]), (job.status, job.reasons))
+        self.assertEqual(Decimal("400.00"), job.contribution)
+        job = self.report(b"Date,Vendor,Job,Type,Amount\n10/01/2026,Crew,J-1,Labor,100.00\n").jobs[0]
+        self.assertEqual(["No materials or outsourced work recorded."], job.reasons)
+
+    def test_unknown_cost_types_make_a_job_provisional(self):
+        job = self.report(b"Date,Vendor,Job,Amount\n10/01/2026,Paper Co,J-1,100.00\n").jobs[0]
+        self.assertEqual("provisional", job.status)
+        self.assertIn("no cost type column", " ".join(job.reasons))
+        job = self.report(b"Date,Vendor,Job,Type,Amount\n10/01/2026,Crew,J-1,Labor,100.00\n"
+                          b"10/01/2026,Paper Co,J-1,Materials,50.00\n10/01/2026,Ink Co,J-1,,20.00\n").jobs[0]
+        self.assertEqual(["1 of its cost lines have no cost type."], job.reasons)
+        self.assertEqual(Decimal("170.00"), job.total_costs)
+
+    def test_job_billed_to_two_customers_is_kept_out_of_customer_totals(self):
+        report = self.report(b"Date,Vendor,Job,Type,Amount\n10/01/2026,Crew,J-1,Labor,10.00\n"
+                             b"10/01/2026,Paper Co,J-1,Materials,10.00\n",
+                             b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,50.00\n"
+                             b"I-2,10/01/2026,Gym,J-1,50.00\n")
+        self.assertEqual("provisional", report.jobs[0].status)
+        self.assertEqual([], report.customers)
+        self.assertIn("more than one customer", " ".join(report.notes))
+
+    def test_look_alike_job_numbers_are_never_merged(self):
+        report = self.report(b"Date,Vendor,Job,Type,Amount\n10/01/2026,Paper Co,j-1,Materials,100.00\n")
+        self.assertEqual(["J-1", "j-1"], sorted(j.job_id for j in report.jobs))
+        self.assertIn("look alike", " ".join(report.notes))
+
+    def test_no_job_column_means_no_figures_at_all(self):
+        report = self.report(b"Date,Vendor,Type,Amount\n10/01/2026,Paper Co,Materials,100.00\n")
+        self.assertFalse(report.available)
+        self.assertEqual([], report.jobs)
+        self.assertIn("costs file has no job number column", " ".join(report.reasons))
+
+    def test_cost_categories(self):
+        self.assertEqual("labor", jp.cost_category("Contract labor"))
+        self.assertEqual("outsourced", jp.cost_category("Subcontractor"))
+        self.assertEqual("materials", jp.cost_category("COGS:Materials"))
+        self.assertEqual("other", jp.cost_category("Non-labor fees"))
+        self.assertEqual("unknown", jp.cost_category("  "))
+
+    def test_wrong_kinds_are_refused(self):
+        inv = intake(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,500.00\n", "invoices")
+        with self.assertRaises(ValueError):
+            jp.job_profit(inv, inv)
+
+
+class SampleFileTests(unittest.TestCase):
+    def test_sample_files(self):
+        headers, rows = ji.read_csv((SAMPLES / "fictional_invoices.csv").read_bytes())
+        inv = ji.intake(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY", "line")
+        headers, rows = ji.read_csv((SAMPLES / "fictional_costs.csv").read_bytes())
+        cst = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")
+        jobs = {j.job_id: j for j in jp.job_profit(inv, cst).jobs}
+        self.assertEqual((Decimal("840.00"), "provisional"), (jobs["J-501"].contribution, jobs["J-501"].status))
+        self.assertEqual(Decimal("475.00"), jobs["J-502"].contribution)  # 640 + 120 - 190 - 95
+
+
+if __name__ == "__main__":
+    unittest.main()
