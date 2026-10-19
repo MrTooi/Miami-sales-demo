@@ -30,11 +30,30 @@ REQUIRED_CHECKS = ("unit-tests",)
 UNIT_STEP_LABEL = "STEP PR MERGED — completion unverified"
 
 
+FENCE = re.compile(r"^\s*(```|~~~)")
+
+
+def _rendered_lines(markdown: str | None) -> list[str]:
+    """Lines GitHub would render as content: fenced code blocks and HTML comments removed."""
+    text = re.sub(r"<!--.*?-->", "", markdown or "", flags=re.DOTALL)
+    lines, fence = [], None
+    for line in text.splitlines():
+        if m := FENCE.match(line):
+            if fence is None:
+                fence = m.group(1)
+            elif m.group(1) == fence:
+                fence = None
+            continue
+        if fence is None:
+            lines.append(line)
+    return lines
+
+
 def parse_checklist(markdown: str | None) -> list[dict]:
     """Group `- [ ]` / `- [x]` items under their `##` section and bold sub-heading."""
     groups: list[dict] = []
     section, sub = "", ""
-    for line in (markdown or "").splitlines():
+    for line in _rendered_lines(markdown):
         if m := HEADING.match(line):
             section, sub = m.group(1), ""
             continue

@@ -68,6 +68,15 @@ class ChecklistAndStepsTests(unittest.TestCase):
         self.assertEqual((1, 2), progress(groups[2]["items"]))
         self.assertNotIn("How do you know", str(groups))
 
+    def test_fenced_and_commented_tasks_are_not_counted(self):
+        for wrapper in ("```\n- [x] Ship release\n```", "~~~md\n- [x] Ship release\n~~~", "<!--\n- [x] Ship release\n-->",
+                        "<!-- - [x] Ship release -->"):
+            with self.subTest(wrapper=wrapper):
+                groups = parse_checklist(f"## Lane\n{wrapper}\n- [ ] Real task")
+                self.assertEqual((0, 1), progress([i for g in groups for i in g["items"]]))
+        # A fence that never closes hides everything after it, as GitHub renders it.
+        self.assertEqual([], parse_checklist("## Lane\n```\n- [x] hidden"))
+
     def test_empty_or_missing_checklist(self):
         self.assertEqual([], parse_checklist(None))
         self.assertEqual((0, 0), progress([]))
