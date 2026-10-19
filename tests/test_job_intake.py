@@ -243,11 +243,42 @@ class MappingTests(unittest.TestCase):
         headers, rows = ji.read_csv(b"Bill No,Date,Vendor,Amount\n"
                                     b"B-1,10/31/2026,Paper Co,50.00\nB-1,10/31/2026,Ink Co,50.00\n")
         self.assertIsNone(ji.amount_scope_question(headers, rows, ji.suggest_mapping(headers, "costs"), "costs"))
+        # The report counts them as two bills too.
+        result = ji.intake(*ji.read_csv(b"Bill No,Date,Vendor,Amount\n"
+                                        b"B-1,10/31/2026,Paper Co,50.00\nB-1,10/31/2026,Ink Co,50.00\n"),
+                           {"date": "Date", "vendor": "Vendor", "amount": "Amount", "cost_id": "Bill No"},
+                           "costs", "MM/DD/YYYY")
+        report = texts(ji.missing_report(result))
+        self.assertIn("2 cost lines imported (2 bills)", report)
+        self.assertNotIn("more than one line", report)
         # The same vendor's bill on two lines with one repeated amount is asked about.
-        headers, rows = ji.read_csv(b"Bill No,Date,Vendor,Amount\n"
-                                    b"B-1,10/31/2026,Paper Co,50.00\nB-1,10/31/2026,Paper Co,50.00\n")
+        headers, rows = ji.read_csv(b"Bill No,Date,Vendor,Memo,Amount\n"
+                                    b"B-1,10/31/2026,Paper Co,Vinyl,50.00\nB-1,10/31/2026,Paper Co,Ink,50.00\n")
         self.assertEqual({"document": "B-1", "lines": 2},
                          ji.amount_scope_question(headers, rows, ji.suggest_mapping(headers, "costs"), "costs"))
+
+    def test_each_document_is_judged_on_its_own_lines(self):
+        # Invoice A's different amounts don't settle what invoice B's repeated 100s mean.
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Total\n"
+                                    b"A,10/31/2026,X,Sign,40.00\nA,10/31/2026,X,Stand,60.00\n"
+                                    b"B,10/31/2026,Y,Banner,100.00\nB,10/31/2026,Y,Install,100.00\n")
+        mapping = ji.suggest_mapping(headers, "invoices")
+        self.assertEqual({"document": "B", "lines": 2}, ji.amount_scope_question(headers, rows, mapping, "invoices"))
+        # An unreadable amount isn't evidence that the lines differ.
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Total\n"
+                                    b"B,10/31/2026,Y,Banner,100.00\nB,10/31/2026,Y,Install,100.00\n"
+                                    b"B,10/31/2026,Y,Note,n/a\n")
+        self.assertEqual({"document": "B", "lines": 2},
+                         ji.amount_scope_question(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices"))
+
+    def test_bill_total_rows_without_a_bill_number_are_not_imported(self):
+        headers, rows = ji.read_csv(b"Bill No,Date,Vendor,Memo,Bill Total\n"
+                                    b",10/31/2026,Paper Co,Vinyl,300.00\n,10/31/2026,Paper Co,Ink,300.00\n"
+                                    b"B-2,10/31/2026,Paper Co,Tape,12.00\n")
+        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")
+        self.assertEqual([Decimal("12.00")], [r["amount"] for r in result.accepted])
+        self.assertEqual([2, 3], [r["row"] for r in result.rejected])
+        self.assertTrue(all("No bill number" in " ".join(r["reasons"]) for r in result.rejected))
 
     def test_competing_customer_and_job_columns_are_never_picked_silently(self):
         headers = ["Invoice", "Date", "Customer", "Client", "Amount", "Job", "Project"]

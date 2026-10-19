@@ -394,27 +394,29 @@ def amount_scope_question(headers: list[str], records: list[Record], mapping: di
     if not amount or _norm(amount) in LINE_AMOUNTS or is_document_total(amount):
         return None
     index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
-    amounts: dict[tuple[str, ...], list[str]] = {}
+    # Each document is judged on its own lines. Exact duplicate rows (rejected anyway)
+    # and amounts that aren't valid money are not evidence either way.
+    amounts: dict[tuple[str, ...], list] = {}
+    seen: set[tuple[str, ...]] = set()
     for r in records:
-        if len(r.cells) == len(headers):
-            values = {f: r.cells[i].strip() for f, i in index.items()}
-            key = _document_key(values, kind)
-            if key:
-                amounts.setdefault(key, []).append(values.get("amount", ""))
-    multi = {k: v for k, v in amounts.items() if len(v) > 1}
-    if not multi or any(len({_money_or_text(a) for a in v}) > 1 for v in multi.values()):
-        # One line per document, or a document whose lines have different amounts: a
-        # whole-document total would repeat the same number, so these are line amounts.
+        if len(r.cells) != len(headers) or r.cells in seen:
+            continue
+        seen.add(r.cells)
+        values = {f: r.cells[i].strip() for f, i in index.items()}
+        key = _document_key(values, kind)
+        try:
+            amount = money(values.get("amount", ""))
+        except ValueError:
+            continue
+        if key:
+            amounts.setdefault(key, []).append(amount)
+    # A document whose lines all show one amount could be showing its total on each
+    # line; one whose lines differ can't be (a repeated total would be the same number).
+    repeated = [(k, v) for k, v in amounts.items() if len(v) > 1 and len(set(v)) == 1]
+    if not repeated:
         return None
-    key, lines = next(iter(multi.items()))
+    key, lines = repeated[0]
     return {"document": key[-1], "lines": len(lines)}
-
-
-def _money_or_text(value: str):
-    try:
-        return money(value)
-    except ValueError:
-        return value
 
 
 def intake(headers: list[str], records: list[Record], mapping: dict[str, str | None], kind: str,
@@ -470,6 +472,11 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
         if kind == "costs" and amount is not None and amount < 0:
             reasons.append("Cost is negative; record refunds or credits separately.")
         document = _document_key(values, kind)
+        if per_document and document is None:
+            # Without its invoice or bill number, a line's whole-document total can't be
+            # checked against the document's other lines.
+            reasons.append(f"No {entity.lower()} number, and '{mapping['amount']}' is a whole "
+                           f"{entity.lower()}'s total, so it can't be checked against other lines.")
         if document and lines_per_document[document] > 1:
             reasons.append(f"{entity} {document[-1]} has {lines_per_document[document]} lines and "
                            f"'{mapping['amount']}' is the whole {entity.lower()}'s total, so it can't be "
@@ -519,13 +526,14 @@ def missing_report(result: IntakeResult) -> list[dict]:
         if unlinked:
             what = "have no job number" if result.kind == "invoices" else "aren't linked to a job"
             items.append({"level": "gap", "text": f"{unlinked} of {len(accepted)} imported {noun}s {what}."})
-    id_field = "invoice_id" if result.kind == "invoices" else "cost_id"
-    counts = Counter(r.get(id_field) for r in accepted if r.get(id_field))
-    multi = {i for i, n in counts.items() if n > 1}
+    # The same grouping as intake: an invoice number, or a vendor plus bill number.
+    keys = [_document_key(r, result.kind) for r in accepted]
+    counts = Counter(k for k in keys if k)
+    multi = {k for k, n in counts.items() if n > 1}
     if multi:
         verb = "spans" if len(multi) == 1 else "span"
         items.append({"level": "info", "text": f"{_count(len(multi), entity)} {verb} more than one line "
-                      f"(for example {sorted(multi)[0]}); each line was imported once."})
+                      f"(for example {sorted(multi)[0][-1]}); each line was imported once."})
     if result.kind == "invoices":
         credits = sum(1 for r in accepted if r["amount"] < 0)
         if credits:
@@ -549,7 +557,7 @@ def missing_report(result: IntakeResult) -> list[dict]:
         items.append({"level": "info", "text": f"{_count(len(spaced), 'value')} had extra spaces at the start or end, "
                       f"which MarginX ignores (for example row {r['row']}: {r['original'][f]!r})."})
     dates = sorted(r["date"] for r in accepted)
-    distinct = f" ({_count(len(counts), entity)})" if counts and all(r.get(id_field) for r in accepted) else ""
+    distinct = f" ({_count(len(counts), entity)})" if counts and all(keys) else ""
     items.append({"level": "info", "text": f"{_count(len(accepted), noun)} imported{distinct}, dated {dates[0]} to {dates[-1]}."})
     return items
 
