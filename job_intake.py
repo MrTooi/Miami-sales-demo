@@ -108,6 +108,16 @@ AMOUNT_SCOPES = ("line", "document")
 DOCUMENT_TOTALS = {"invoice total", "bill total", "invoice amount", "bill amount", "invoice total amount",
                    "bill total amount", "total invoice", "total bill"}
 
+# Columns whose cells say what kind of transaction a row is ("Type: Payment").
+TYPE_HEADERS = {"type", "transaction type", "txn type", "trans type", "entry type", "document type", "doc type"}
+# Row types that are cash movements, not sales or costs. ("Check" is an ordinary way to
+# pay an expense, and credit memos are legitimate negative invoice lines, so neither is here.)
+ROW_CASH_WORDS = {"payment", "payments", "deposit", "deposits", "transfer", "transfers", "payout", "payouts",
+                  "settlement", "settlements", "withdrawal", "withdrawals", "receipt", "received"}
+# Description/memo/type text marking a summary row rather than a line of its own.
+SUMMARY_LABELS = {"subtotal", "sub total", "total", "invoice total", "bill total", "grand total", "total due",
+                  "amount due", "balance due", "total amount"}
+
 FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 MAX_FILE_BYTES = 5_000_000
 
@@ -393,7 +403,7 @@ def _label(key: tuple[str, ...], kind: str) -> str:
 def _lines_per_vendor_day(headers: list[str], records: list[Record], mapping: dict[str, str | None]) -> Counter:
     """Cost lines per (vendor, date), numbered or not, without exact duplicate rows."""
     index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
-    rows = {r.cells for r in records if len(r.cells) == len(headers)}
+    rows = {r.cells for r in records if len(r.cells) == len(headers) and _is_line(r.cells, headers, mapping)}
     return Counter((cells[index["vendor"]].strip(), cells[index["date"]].strip()) for cells in rows
                    if "vendor" in index and "date" in index and cells[index["vendor"]].strip())
 
@@ -402,7 +412,7 @@ def _lines_per_document(headers: list[str], records: list[Record], mapping: dict
                         kind: str, key_of=_document_key) -> Counter:
     index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
     keys = (key_of({f: r.cells[i].strip() for f, i in index.items()}, kind)
-            for r in records if len(r.cells) == len(headers))
+            for r in records if len(r.cells) == len(headers) and _is_line(r.cells, headers, mapping))
     return Counter(k for k in keys if k)
 
 
@@ -425,7 +435,7 @@ def amount_scope_question(headers: list[str], records: list[Record], mapping: di
     amounts: dict[tuple[str, ...], list] = {}
     seen: set[tuple[str, ...]] = set()
     for r in records:
-        if len(r.cells) != len(headers) or r.cells in seen:
+        if len(r.cells) != len(headers) or r.cells in seen or not _is_line(r.cells, headers, mapping):
             continue
         seen.add(r.cells)
         values = {f: r.cells[i].strip() for f, i in index.items()}
@@ -448,15 +458,53 @@ def amount_scope_question(headers: list[str], records: list[Record], mapping: di
     return {"label": _label(key, kind), "lines": len(lines)}
 
 
+def _type_columns(headers: list[str], mapping: dict[str, str | None]) -> list[int]:
+    """Columns that classify rows: any "Type"-style column, plus the mapped cost type."""
+    found = [i for i, h in enumerate(headers) if _norm(h) in TYPE_HEADERS]
+    if mapping.get("cost_type") in headers and headers.index(mapping["cost_type"]) not in found:
+        found.append(headers.index(mapping["cost_type"]))
+    return found
+
+
+def _cash_movement_type(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
+    """The row's type text when it names a payment, transfer, deposit, payout or settlement."""
+    for i in type_columns:
+        if set(_norm(cells[i]).split()) & ROW_CASH_WORDS:
+            return cells[i].strip()
+    return None
+
+
+def _summary_label(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]) -> str | None:
+    """The row's label when its description, memo or type says it is a subtotal or total."""
+    columns = [headers.index(mapping[f]) for f in ("description", "memo") if mapping.get(f) in headers]
+    for i in [*columns, *(i for i, h in enumerate(headers) if _norm(h) in TYPE_HEADERS)]:
+        if _norm(cells[i]) in SUMMARY_LABELS:
+            return cells[i].strip()
+    return None
+
+
+def _is_line(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]) -> bool:
+    """False for rows rejected on their own (payments/transfers, labeled subtotals), which
+    therefore don't make a document multi-line."""
+    return not (_cash_movement_type(cells, _type_columns(headers, mapping)) or _summary_label(cells, headers, mapping))
+
+
+def _per_document_amounts(mapping: dict[str, str | None], question: dict | None, amount_scope: str | None) -> bool:
+    return is_document_total(mapping["amount"]) or (question is not None and amount_scope == "document")
+
+
 def subtotal_questions(headers: list[str], records: list[Record], mapping: dict[str, str | None],
-                       kind: str) -> list[dict]:
+                       kind: str, amount_scope: str | None = None) -> list[dict]:
     """Lines that may be a subtotal: in a document with 3+ lines, a non-zero amount equal to the
     sum of the document's other lines. That can be a summary line (counting it would double the
     document) or a real line that adds up by coincidence, so the owner is asked about each one.
+    Rows labeled "Subtotal"/"Total" are not asked about: intake rejects them with a reason.
 
-    Returns [{"row": 4, "label": "invoice INV-1", "amount": "100.00"}, ...]. Only relevant after
-    the owner says a generic amount column holds each line's own amount.
+    Returns [{"row": 4, "label": "invoice INV-1", "amount": "100.00"}, ...]. Applies whenever
+    amounts are per line, whether the header says so ("Line Amount") or the owner did.
     """
+    if _per_document_amounts(mapping, amount_scope_question(headers, records, mapping, kind), amount_scope):
+        return []
     return [{"row": row, "label": _label(key, kind), "amount": text}
             for row, (key, text) in _subtotal_rows(headers, records, mapping, kind).items()]
 
@@ -464,12 +512,17 @@ def subtotal_questions(headers: list[str], records: list[Record], mapping: dict[
 def _subtotal_rows(headers: list[str], records: list[Record], mapping: dict[str, str | None],
                    kind: str) -> dict[int, tuple[tuple[str, ...], str]]:
     index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
+    types = _type_columns(headers, mapping)
     lines: dict[tuple[str, ...], list[tuple[int, object]]] = {}
     seen: set[tuple[str, ...]] = set()
     for r in records:
         if len(r.cells) != len(headers) or r.cells in seen:
             continue
         seen.add(r.cells)
+        # Labeled summary rows and cash movements are rejected on their own, so they are
+        # neither asked about nor counted among a document's lines.
+        if _summary_label(r.cells, headers, mapping) or _cash_movement_type(r.cells, types):
+            continue
         values = {f: r.cells[i].strip() for f, i in index.items()}
         key = _possible_document_key(values, kind)
         try:
@@ -521,9 +574,11 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
     key_of = _possible_document_key if answered_total and not total_header else _document_key
     per_document = total_header or answered_total
     lines_per_document = _lines_per_document(headers, records, mapping, kind, key_of) if per_document else Counter()
+    types = _type_columns(headers, mapping)
+    all_lines = _lines_per_document(headers, records, mapping, kind, _possible_document_key)
     per_day = _lines_per_vendor_day(headers, records, mapping) if answered_total and kind == "costs" else Counter()
     entity = "Invoice" if kind == "invoices" else "Bill"
-    candidates = _subtotal_rows(headers, records, mapping, kind) if question and amount_scope == "line" else {}
+    candidates = {} if _per_document_amounts(mapping, question, amount_scope) else _subtotal_rows(headers, records, mapping, kind)
     subtotals = subtotals or {}
     unanswered = [row for row in candidates if row not in subtotals]
     if unanswered:
@@ -557,6 +612,18 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             # checked against the document's other lines.
             reasons.append(f"No {entity.lower()} number, and '{mapping['amount']}' is a whole "
                            f"{entity.lower()}'s total, so it can't be checked against other lines.")
+        movement = _cash_movement_type(rec.cells, types)
+        if movement:
+            what = "sale" if kind == "invoices" else "cost"
+            reasons.append(f"Type '{movement}' is a payment, transfer or deposit (money moving), not a {what}; "
+                           "not imported.")
+        summary = _summary_label(rec.cells, headers, mapping)
+        key = _possible_document_key(values, kind)
+        if summary and key and all_lines[key] >= 1:
+            # Only when the document has other lines (summary rows aren't counted among them):
+            # a one-line invoice described "Total" is its own amount.
+            reasons.append(f"Row is labeled '{summary}': a summary of {_label(key, kind)}'s other lines, "
+                           "not a line of its own; not counted again.")
         if number in candidates and subtotals[number]:
             reasons.append(f"Subtotal of {_label(candidates[number][0], kind)} (the owner said so); "
                            "its lines are already counted.")

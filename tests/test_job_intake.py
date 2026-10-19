@@ -190,6 +190,55 @@ class MappingTests(unittest.TestCase):
         self.assertEqual("invoices", ji.detect_kind(headers))
         self.assertIn(Decimal("-45.00"), [r["amount"] for r in ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY", "line").accepted])
 
+    def test_payment_rows_in_an_invoice_file_are_rejected_not_imported_as_sales(self):
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Type,Amount\n"
+                                    b"INV-1,10/31/2026,Acme,Invoice,100.00\nINV-1,10/31/2026,Acme,Payment,100.00\n"
+                                    b"INV-2,10/31/2026,Acme,Credit Memo,-20.00\n")
+        self.assertEqual("invoices", ji.detect_kind(headers))  # an ordinary file, no extra question
+        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        self.assertEqual([2, 4], [r["row"] for r in result.accepted])  # the invoice line and the credit memo
+        self.assertEqual([Decimal("100.00"), Decimal("-20.00")], [r["amount"] for r in result.accepted])
+        self.assertEqual([3], [r["row"] for r in result.rejected])
+        self.assertIn("Type 'Payment' is a payment, transfer or deposit", " ".join(result.rejected[0]["reasons"]))
+
+    def test_transfer_rows_in_a_cost_file_are_rejected_not_imported_as_expenses(self):
+        headers, rows = ji.read_csv(b"Date,Vendor,Type,Amount\n10/31/2026,Paper Co,Transfer,500.00\n"
+                                    b"10/31/2026,Paper Co,Materials,80.00\n11/01/2026,Ink Co,Bill Payment (Check),80.00\n"
+                                    b"11/02/2026,Sign Co,Check,45.00\n")
+        self.assertEqual("costs", ji.detect_kind(headers))
+        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")
+        self.assertEqual([3, 5], [r["row"] for r in result.accepted])  # materials and an expense paid by check
+        self.assertEqual([2, 4], [r["row"] for r in result.rejected])
+        self.assertTrue(all("not a cost" in " ".join(r["reasons"]) for r in result.rejected))
+
+    def test_labeled_subtotal_rows_are_never_counted_even_under_a_line_amount_header(self):
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Line Amount\n"
+                                    b"INV-1,10/31/2026,Acme,Sign,40.00\nINV-1,10/31/2026,Acme,Install,60.00\n"
+                                    b"INV-1,10/31/2026,Acme,Subtotal,100.00\nINV-2,10/31/2026,Acme,Total,75.00\n")
+        mapping = ji.suggest_mapping(headers, "invoices")
+        self.assertIsNone(ji.amount_scope_question(headers, rows, mapping, "invoices"))
+        self.assertEqual([], ji.subtotal_questions(headers, rows, mapping, "invoices"))  # labeled: no question needed
+        result = ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY")
+        # INV-2 has one line described "Total": that is its own amount.
+        self.assertEqual([Decimal("40.00"), Decimal("60.00"), Decimal("75.00")], [r["amount"] for r in result.accepted])
+        self.assertEqual([4], [r["row"] for r in result.rejected])
+        self.assertIn("labeled 'Subtotal'", " ".join(result.rejected[0]["reasons"]))
+
+    def test_unlabeled_sum_lines_are_asked_about_under_a_line_amount_header_too(self):
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Line Amount\n"
+                                    b"INV-1,10/31/2026,Acme,Sign,40.00\nINV-1,10/31/2026,Acme,Install,60.00\n"
+                                    b"INV-1,10/31/2026,Acme,Stand,100.00\n")
+        mapping = ji.suggest_mapping(headers, "invoices")
+        self.assertEqual([4], [q["row"] for q in ji.subtotal_questions(headers, rows, mapping, "invoices")])
+        with self.assertRaises(ji.IntakeError):
+            ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY")
+        kept = ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY", None, {4: False})
+        self.assertEqual([Decimal("40.00"), Decimal("60.00"), Decimal("100.00")], [r["amount"] for r in kept.accepted])
+        # A clean line-amount file is not asked anything.
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Line Amount\nA,10/31/2026,X,40.00\n"
+                                    b"A,10/31/2026,X,60.00\nA,10/31/2026,X,70.00\n")
+        self.assertEqual([], ji.subtotal_questions(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices"))
+
     def test_repeated_invoice_total_is_never_counted_on_each_line(self):
         headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Invoice Total\n"
                                     b"INV-1,10/31/2026,Acme,Banner,100.00\nINV-1,10/31/2026,Acme,Install,100.00\n"

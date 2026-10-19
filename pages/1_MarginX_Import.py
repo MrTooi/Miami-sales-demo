@@ -161,18 +161,19 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
             return
 
     # A line equal to the sum of its document's other lines may be a subtotal, or a real line
-    # that adds up by coincidence: the owner says which, one line at a time.
+    # that adds up by coincidence: the owner says which, one line at a time. This applies
+    # whether the column says it holds line amounts or the owner did.
     subtotals: dict[int, bool] = {}
-    if amount_scope == "line":
-        for item in ji.subtotal_questions(headers, records, mapping, kind):
-            answer = st.radio(
-                f"In {name}, row {item['row']} of {item['label']} shows {item['amount']}, which equals its other "
-                "lines added together. Is it a subtotal?", (False, True), index=None,
-                format_func={False: "No, it's a real line (count it)", True: "Yes, a subtotal (don't count it)"}.get,
-                key=f"{key}-{kind}-subtotal-{asked}-{item['row']}")
-            if answer is None:
-                return
-            subtotals[item["row"]] = answer
+    asked_sums = hashlib.sha256(repr((sorted(mapping.items(), key=str), amount_scope)).encode("utf-8")).hexdigest()[:12]
+    for item in ji.subtotal_questions(headers, records, mapping, kind, amount_scope):
+        answer = st.radio(
+            f"In {name}, row {item['row']} of {item['label']} shows {item['amount']}, which equals its other "
+            "lines added together. Is it a subtotal?", (False, True), index=None,
+            format_func={False: "No, it's a real line (count it)", True: "Yes, a subtotal (don't count it)"}.get,
+            key=f"{key}-{kind}-subtotal-{asked_sums}-{item['row']}")
+        if answer is None:
+            return
+        subtotals[item["row"]] = answer
 
     # Date format: automatic unless the dates could genuinely mean two different days.
     # Answers are keyed to the file type and date column, so a changed choice asks again.

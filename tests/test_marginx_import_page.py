@@ -359,6 +359,39 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertIn("1 row of 2 couldn't be imported", page_text(at))
 
+    def test_mixed_invoice_and_payment_rows_import_only_the_invoice_line(self):
+        at = self.with_files("Invoice,Date,Customer,Type,Amount\nINV-1,10/31/2026,X (fictional),Invoice,100.00\n"
+                             "INV-1,10/31/2026,X (fictional),Payment,100.00\n",
+                             "Date,Vendor,Type,Amount\n10/31/2026,Paper Co (fictional),Transfer,500.00\n"
+                             "10/31/2026,Paper Co (fictional),Materials,80.00\n")
+        self.assertFalse(at.exception, at.exception)
+        text = page_text(at)
+        self.assertIn("1 invoice line imported (1 invoice)", text)
+        self.assertIn("1 cost line imported", text)
+        self.assertEqual(2, text.count("1 row of 2 couldn't be imported"))  # the payment and the transfer
+        reasons = " ".join(" ".join(d.value["Why"]) for d in at.dataframe)
+        self.assertIn("Type 'Payment'", reasons)
+        self.assertIn("Type 'Transfer'", reasons)
+
+    def test_subtotal_under_line_amount_is_listed_not_imported(self):
+        at = self.with_files("Invoice,Date,Customer,Description,Line Amount\n"
+                             "INV-1,10/31/2026,X (fictional),Sign,40.00\nINV-1,10/31/2026,X (fictional),Install,60.00\n"
+                             "INV-1,10/31/2026,X (fictional),Subtotal,100.00\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("2 invoice lines imported (1 invoice)", page_text(at))
+        self.assertEqual([4], list(at.dataframe[0].value["Row in file"]))
+
+    def test_unlabeled_sum_under_line_amount_is_asked_about(self):
+        at = self.with_files("Invoice,Date,Customer,Description,Line Amount\n"
+                             "INV-1,10/31/2026,X (fictional),Sign,40.00\nINV-1,10/31/2026,X (fictional),Install,60.00\n"
+                             "INV-1,10/31/2026,X (fictional),Stand,100.00\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        question = radio(at, "In fictional_invoices.csv, row 4 of invoice INV-1 shows 100.00, which equals its other "
+                             "lines added together. Is it a subtotal?")
+        self.assertNotIn("invoice line", page_text(at))
+        question.set_value(False).run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("3 invoice lines imported (1 invoice)", page_text(at))
+
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertTrue(any("no rows" in i.value for i in at.info))
