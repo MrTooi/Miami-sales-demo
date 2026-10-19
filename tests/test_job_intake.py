@@ -123,6 +123,18 @@ class MappingTests(unittest.TestCase):
         self.assertEqual("costs", ji.detect_kind(["Date", "Payee", "Bill No", "Amount"]))
         self.assertEqual("costs", ji.detect_kind(["Date", "Vendor", "Amount"]))
 
+    def test_invoice_shaped_payment_exports_are_asked_about(self):
+        for headers in (["Invoice", "Date", "Customer", "Amount", "Deposit"],
+                        ["Invoice", "Date", "Customer", "Payment Amount", "Amount"],
+                        ["Invoice", "Date", "Customer", "Amount", "Payout ID"],
+                        ["Invoice", "Date", "Customer", "Amount", "Received"]):
+            with self.subTest(headers=headers):
+                self.assertIsNone(ji.detect_kind(headers))
+        # Ordinary invoice files stay automatic, including a "Payment Terms" field.
+        self.assertEqual("invoices", ji.detect_kind(load("fictional_invoices.csv", "invoices")[0]))
+        self.assertEqual("invoices", ji.detect_kind(["Invoice", "Date", "Customer", "Payment Terms", "Amount"]))
+        self.assertEqual("invoices", ji.detect_kind(["Num", "Date", "Customer", "Amount", "Open Balance"]))  # QuickBooks list
+
     def test_two_possible_date_columns_are_never_picked_silently(self):
         self.assertIsNone(ji.suggest_mapping(["Invoice", "Date", "Invoice Date", "Customer", "Amount"], "invoices")["date"])
         self.assertEqual("Invoice Date", ji.suggest_mapping(["Invoice", "Invoice Date", "Customer", "Amount"], "invoices")["date"])

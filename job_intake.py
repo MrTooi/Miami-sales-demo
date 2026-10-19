@@ -81,6 +81,11 @@ STRONG_COST_WORDS = (COST_WORDS - {"payee"}) | {"cost", "costs"}
 # Words typical of bank or card statements, whose rows are cash movements, not costs.
 BANK_WORDS = {"deposit", "deposits", "withdrawal", "withdrawals", "debit", "debits", "transfer", "transfers",
               "balance", "posted", "statement", "check", "cheque"}
+# Words that make an invoice-shaped file plausibly a payments/deposits export, where
+# "Amount" may be money received rather than the amount billed. ("Payment terms" is
+# an ordinary invoice field and is removed before checking.)
+PAYMENT_WORDS = {"deposit", "deposits", "payment", "payments", "payout", "payouts", "settlement", "settlements",
+                 "transfer", "transfers", "withdrawal", "withdrawals", "debit", "debits", "received", "receipt"}
 # Headers describing what's still owed, never the amount billed.
 BALANCE_WORDS = {"balance", "due", "outstanding", "owed", "unpaid", "remaining", "open"}
 
@@ -267,7 +272,7 @@ def detect_kind(headers: list[str]) -> str | None:
         mapping = suggest_mapping(headers, kind)
         return all(mapping[f] for f, (_, required) in FIELDS[kind].items() if required)
 
-    tokens = set(" ".join(_norm(h).replace("bill to", "") for h in headers).split())
+    tokens = set(" ".join(_norm(h).replace("bill to", "").replace("payment terms", "") for h in headers).split())
     score = {"invoices": len(tokens & INVOICE_WORDS), "costs": len(tokens & COST_WORDS)}
     full = [k for k in KINDS if complete(k)]
     if len(full) == 2:
@@ -284,6 +289,12 @@ def detect_kind(headers: list[str]) -> str | None:
         # "Date, Payee, Amount" is also what a bank or card statement looks like, where
         # deposits and transfers aren't costs (MVP spec). Without bill/expense evidence,
         # or with bank-statement words, the owner is asked.
+        return None
+    if found == "invoices" and tokens & (PAYMENT_WORDS | (BANK_WORDS - {"balance"})):
+        # An invoice-shaped payments or deposits export: its amounts may be money
+        # received, not amounts billed, so the owner is asked what the file is.
+        # ("Open Balance" is a normal invoice-list column, and is never usable as the
+        # amount anyway, so it doesn't trigger the question.)
         return None
     return found
 

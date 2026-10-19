@@ -29,6 +29,9 @@ SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")
 KIND_LABELS = {"invoices": "sales / invoices", "costs": "costs / bills"}
 NOT_MAPPED = "(not in this file)"
 LEVEL_LABELS = {"problem": "Problem", "gap": "Missing", "info": "Note"}
+# Deposits, transfers and payments are cash movements, not sales or costs (MVP spec).
+BANK_MESSAGE = ("MarginX can't read bank, card or payment statements yet: deposits, payments and transfers "
+                "aren't sales or costs. Export your invoices and your bills from your accounting software instead.")
 
 st.set_page_config(page_title="MarginX | Check your data", page_icon="▰", layout="wide")
 apply_theme()
@@ -76,21 +79,23 @@ def show_file(position: int, name: str, data: bytes) -> None:
     detected = ji.detect_kind(headers)
     if detected is None:
         kind = st.radio(f"What kind of file is {name}?", [*KIND_LABELS, "bank"],
-                        format_func=lambda k: KIND_LABELS.get(k, "a bank or card statement"),
+                        format_func=lambda k: KIND_LABELS.get(k, "a bank, card or payment statement"),
                         index=None, key=f"{key}-kind-ask")
         if kind is None:
             return
         if kind == "bank":
-            # Deposits, transfers and payments are cash movements, not sales or costs (MVP spec).
-            st.info("MarginX can't read bank or card statements yet: deposits and transfers aren't sales or "
-                    "costs. Export your sales and your bills from your accounting software instead.")
+            st.info(BANK_MESSAGE)
             return
     else:
         kind = detected
     settings = st.expander("How MarginX read this file (change anything that's wrong)")
     with settings:
-        kind = st.radio("File type", list(KIND_LABELS), index=list(KIND_LABELS).index(kind),
-                        format_func=KIND_LABELS.get, horizontal=True, key=f"{key}-kind-{kind}")
+        kind = st.radio("File type", [*KIND_LABELS, "bank"], index=list(KIND_LABELS).index(kind),
+                        format_func=lambda k: KIND_LABELS.get(k, "a bank, card or payment statement"), horizontal=True,
+                        key=f"{key}-kind-{kind}")
+    if kind == "bank":
+        st.info(BANK_MESSAGE)
+        return
 
     # Columns: suggested automatically; the owner is asked only for required ones MarginX can't find.
     mapping = ji.suggest_mapping(headers, kind)

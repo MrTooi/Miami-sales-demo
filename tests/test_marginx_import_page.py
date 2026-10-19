@@ -170,8 +170,34 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertNotIn("cost line", page_text(at))
         question.set_value("bank").run()
         self.assertFalse(at.exception, at.exception)
-        self.assertTrue(any("can't read bank or card statements" in i.value for i in at.info))
+        self.assertTrue(any("can't read bank, card or payment statements" in i.value for i in at.info))
         self.assertNotIn("cost line", page_text(at))
+
+    def test_invoice_shaped_deposit_export_is_asked_about_and_bank_imports_nothing(self):
+        at = self.with_files("Invoice,Date,Customer,Amount,Deposit\nA,10/31/2026,X (fictional),40.00,40.00\n",
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        question = radio(at, "What kind of file is fictional_invoices.csv?")  # (a) asked, not auto-imported
+        self.assertNotIn("invoice line", page_text(at))
+        question.set_value("bank").run()  # (b) bank/payment choice imports no sales
+        self.assertFalse(at.exception, at.exception)
+        self.assertTrue(any("payment statements" in i.value for i in at.info))
+        self.assertNotIn("invoice line", page_text(at))
+
+    def test_ordinary_invoice_file_still_imports_with_no_questions(self):  # (c)
+        at = self.with_files("Invoice,Date,Customer,Payment Terms,Amount\nA,10/31/2026,X (fictional),Net 30,100.00\n",
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        self.assertEqual([], [r.label for r in at.radio if r.label.startswith("What kind of file")])
+        self.assertIn("1 invoice line imported (1 invoice)", page_text(at))
+
+    def test_wrong_auto_classification_can_be_rejected_as_a_bank_statement(self):
+        at = self.with_files("Invoice,Date,Customer,Amount\nA,10/31/2026,X (fictional),40.00\n",
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        self.assertIn("1 invoice line imported (1 invoice)", page_text(at))
+        override = next(r for r in at.radio if r.label == "File type" and r.value == "invoices")
+        override.set_value("bank").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertNotIn("invoice line", page_text(at))
+        self.assertTrue(any("payment statements" in i.value for i in at.info))
 
     def test_identical_files_both_get_reported(self):
         same = "Date,Vendor,Amount\n10/31/2026,A,1.00\n"
