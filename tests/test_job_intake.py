@@ -24,8 +24,8 @@ class ReadCsvTests(unittest.TestCase):
     def test_reads_utf8_with_bom_and_keeps_text_as_text(self):
         headers, rows = ji.read_csv("﻿A,B\n=1+1,0012\n".encode("utf-8"))
         self.assertEqual(["A", "B"], headers)
-        self.assertEqual("=1+1", rows[0]["A"])  # never evaluated
-        self.assertEqual("0012", rows[0]["B"])  # no type coercion
+        self.assertEqual("=1+1", rows[0].cells[0])  # never evaluated
+        self.assertEqual("0012", rows[0].cells[1])  # no type coercion
 
     def test_refuses_unreadable_files_with_plain_reasons(self):
         cases = {
@@ -43,11 +43,14 @@ class ReadCsvTests(unittest.TestCase):
                     ji.read_csv(data)
                 self.assertIn(phrase, str(ctx.exception))
 
-    def test_row_numbers_match_the_file_despite_blank_lines(self):
-        headers, rows = ji.read_csv(b"Date,Payee,Amount\n\n10/01/2026,A,1.00\n,,\n10/02/2026,,2.00\n")
+    def test_row_numbers_match_the_file_and_separator_only_lines_are_reported(self):
+        headers, rows = ji.read_csv(b"Date,Payee,Amount\n\n10/01/2026,A,1.00\n,,\n   \n10/02/2026,,2.00\n")
         result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")
         self.assertEqual(3, result.accepted[0]["row"])
-        self.assertEqual(5, result.rejected[0]["row"])
+        # ",," is a record with blank cells: counted and rejected, never silently skipped.
+        self.assertEqual([4, 6], [r["row"] for r in result.rejected])
+        self.assertEqual(3, result.total_rows)
+        self.assertIn("Date is blank", " ".join(result.rejected[0]["reasons"]))
 
     def test_wrong_cell_count_is_reported_per_row_not_dropped(self):
         headers, rows = ji.read_csv(b"Date,Payee,Amount\n10/01/2026,A,1.00\n10/02/2026,B\n")
@@ -55,6 +58,13 @@ class ReadCsvTests(unittest.TestCase):
         self.assertEqual(1, len(result.accepted))
         self.assertEqual(3, result.rejected[0]["row"])
         self.assertIn("2 cells", result.rejected[0]["reasons"][0])
+
+    def test_reserved_looking_headers_are_ordinary_columns(self):
+        headers, rows = ji.read_csv(b"__row__,__shape_error__,Date,Payee,Amount\nx,y,10/01/2026,A,1.00\n")
+        result = ji.intake(headers, rows, {"date": "Date", "vendor": "Payee", "amount": "Amount"}, "costs", "MM/DD/YYYY")
+        self.assertEqual(1, len(result.accepted))
+        self.assertEqual(2, result.accepted[0]["row"])
+        self.assertEqual([], result.rejected)
 
 
 class MappingTests(unittest.TestCase):
@@ -117,7 +127,7 @@ class InvoiceIntakeTests(unittest.TestCase):
         report = texts(ji.missing_report(self.result))
         self.assertIn("4 rows of 10 couldn't be imported", report)
         self.assertIn("1 of 6 imported invoices have no job number", report)
-        self.assertIn("1 credit or refund line ($45.00 total)", report)
+        self.assertIn("1 credit or refund line were imported", report)
         self.assertIn("span more than one line (for example FIC-1002)", report)
         self.assertIn("6 invoices imported, dated 2026-10-01 to 2026-10-07", report)
         self.assertNotIn("profit is", report.lower())
@@ -158,7 +168,46 @@ class CostIntakeTests(unittest.TestCase):
         self.assertIn("No cost type column was chosen", texts(ji.missing_report(result)))
 
 
+class DuplicateTests(unittest.TestCase):
+    MAP = {"date": "Date", "vendor": "Payee", "amount": "Amount"}
+
+    def run_costs(self, data):
+        headers, rows = ji.read_csv(data)
+        return ji.intake(headers, rows, self.MAP, "costs", "MM/DD/YYYY")
+
+    def test_rows_differing_only_in_unmapped_columns_are_both_kept(self):
+        result = self.run_costs(b"Date,Payee,Amount,Note\n10/01/2026,A,1.00,first\n10/01/2026,A,1.00,second\n")
+        self.assertEqual(2, len(result.accepted))
+
+    def test_rows_differing_only_in_whitespace_are_both_kept(self):
+        result = self.run_costs(b"Date,Payee,Amount\n10/01/2026,A,1.00\n10/01/2026,A ,1.00\n")
+        self.assertEqual(2, len(result.accepted))
+
+    def test_identical_rows_are_rejected_once(self):
+        result = self.run_costs(b"Date,Payee,Amount\n10/01/2026,A,1.00\n10/01/2026,A,1.00\n")
+        self.assertEqual(1, len(result.accepted))
+        self.assertIn("Exact duplicate of row 2", result.rejected[0]["reasons"][0])
+
+
+class UploadGateTests(unittest.TestCase):
+    def test_own_file_needs_made_up_confirmation(self):
+        self.assertTrue(ji.upload_allowed(True, False, False))
+        self.assertFalse(ji.upload_allowed(False, True, False))
+        self.assertFalse(ji.upload_allowed(False, False, True))
+        self.assertTrue(ji.upload_allowed(False, True, True))
+
+
 class ExportSafetyTests(unittest.TestCase):
+    def test_rows_to_fix_export_is_lossless(self):
+        headers, rows = ji.read_csv(
+            b"Date,Payee,Note,Amount\n10/01/2026,A,keep me,-5\n10/02/2026,B\n10/03/2026,C,x,1.00,EXTRA\n")
+        result = ji.intake(headers, rows, {"date": "Date", "vendor": "Payee", "amount": "Amount"}, "costs", "MM/DD/YYYY")
+        exported = list(csv.reader(io.StringIO(ji.rejected_rows_csv(result))))
+        self.assertEqual(["marginx_row", "marginx_reasons", "Date", "Payee", "Note", "Amount", "extra_cell_1"], exported[0])
+        self.assertEqual(["2", "10/01/2026", "A", "keep me", "'-5", ""], [exported[1][0], *exported[1][2:]])
+        self.assertEqual(["3", "10/02/2026", "B", "", "", ""], [exported[2][0], *exported[2][2:]])
+        self.assertEqual(["4", "10/03/2026", "C", "x", "1.00", "EXTRA"], [exported[3][0], *exported[3][2:]])
+
     def test_rejected_rows_export_neutralizes_formulas(self):
         headers, rows = ji.read_csv(b'Date,Payee,Amount\n10/01/2026,"=cmd|\' /C calc\'!A0",-5\n')
         result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")
@@ -172,6 +221,7 @@ class ExportSafetyTests(unittest.TestCase):
     def test_empty_import_reports_nothing_imported(self):
         headers, rows = ji.read_csv(b"Date,Payee,Amount\n,,\n")
         report = texts(ji.missing_report(ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")))
+        self.assertIn("1 row of 1 couldn't be imported", report)
         self.assertIn("No costs were imported", report)
 
 

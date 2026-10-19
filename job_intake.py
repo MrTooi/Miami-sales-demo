@@ -14,7 +14,6 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from decimal import Decimal
 
 from finance_engine import money
 
@@ -75,16 +74,30 @@ class IntakeResult:
     kind: str
     total_rows: int
     accepted: list[dict] = field(default_factory=list)
-    rejected: list[dict] = field(default_factory=list)  # {"row": n, "reasons": [...], "values": {...}}
+    # {"row": n, "reasons": [...], "values": {field: value}, "cells": original cells}
+    rejected: list[dict] = field(default_factory=list)
     mapped_fields: tuple[str, ...] = ()
+    headers: tuple[str, ...] = ()
 
 
 def _norm(header: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", header.lower()).strip()
 
 
-def read_csv(data: bytes) -> tuple[list[str], list[dict[str, str]]]:
-    """Parse CSV bytes into headers and string rows, refusing anything ambiguous."""
+@dataclass(frozen=True)
+class Record:
+    """One CSV record exactly as it appears in the file. Metadata never mixes with cells."""
+    row: int  # spreadsheet row number (header = row 1)
+    cells: tuple[str, ...]
+
+
+def _is_blank_line(cells: list[str]) -> bool:
+    # An empty line, or one holding only spaces. A line of separators (",,") is a record.
+    return not cells or (len(cells) == 1 and not cells[0].strip())
+
+
+def read_csv(data: bytes) -> tuple[list[str], list[Record]]:
+    """Parse CSV bytes into headers and records, refusing anything ambiguous."""
     if len(data) > MAX_FILE_BYTES:
         raise IntakeError(f"File is larger than {MAX_FILE_BYTES // 1_000_000} MB; split it or contact us.")
     try:
@@ -96,8 +109,8 @@ def read_csv(data: bytes) -> tuple[list[str], list[dict[str, str]]]:
     try:
         reader = csv.reader(io.StringIO(text, newline=""), strict=True)
         # Row numbers count records as a spreadsheet shows them (header = row 1),
-        # before fully blank lines are skipped, so they match the owner's file.
-        table = [(number, row) for number, row in enumerate(reader, start=1) if any(cell.strip() for cell in row)]
+        # before blank lines are skipped, so they match the owner's file.
+        table = [(number, row) for number, row in enumerate(reader, start=1) if not _is_blank_line(row)]
     except csv.Error as exc:
         raise IntakeError(f"File isn't valid CSV ({exc}). Check for unbalanced quotes.") from exc
     if not table:
@@ -109,13 +122,7 @@ def read_csv(data: bytes) -> tuple[list[str], list[dict[str, str]]]:
         raise IntakeError("A column has no header name. Every column needs a header.")
     if len({h.lower() for h in headers}) != len(headers):
         raise IntakeError("Two columns have the same header name.")
-    rows = []
-    for number, cells in table[1:]:
-        if len(cells) != len(headers):
-            rows.append({"__row__": str(number), "__shape_error__": f"has {len(cells)} cells, header has {len(headers)}"})
-            continue
-        rows.append({"__row__": str(number), **{h: c for h, c in zip(headers, cells)}})
-    return headers, rows
+    return headers, [Record(number, tuple(cells)) for number, cells in table[1:]]
 
 
 def suggest_mapping(headers: list[str], kind: str) -> dict[str, str | None]:
@@ -166,9 +173,15 @@ def _parse_date(value: str, fmt: str) -> date | None:
         return None
 
 
-def intake(headers: list[str], rows: list[dict[str, str]], mapping: dict[str, str | None], kind: str,
+def column_values(headers: list[str], records: list[Record], header: str) -> list[str]:
+    """The cells of one column, from records whose cell count matches the header."""
+    index = headers.index(header)
+    return [r.cells[index] for r in records if len(r.cells) == len(headers)]
+
+
+def intake(headers: list[str], records: list[Record], mapping: dict[str, str | None], kind: str,
            date_format: str) -> IntakeResult:
-    """Accept or reject every row with a reason. Raises IntakeError if the mapping is unusable."""
+    """Accept or reject every record with a reason. Raises IntakeError if the mapping is unusable."""
     if kind not in KINDS:
         raise IntakeError(f"Unknown file type: {kind}")
     if date_format not in DATE_FORMATS:
@@ -177,15 +190,17 @@ def intake(headers: list[str], rows: list[dict[str, str]], mapping: dict[str, st
     if problems:
         raise IntakeError(" ".join(problems))
     fmt = DATE_FORMATS[date_format]
-    result = IntakeResult(kind=kind, total_rows=len(rows), mapped_fields=tuple(f for f, h in mapping.items() if h))
-    seen_rows: dict[tuple, int] = {}
+    index = {f: headers.index(h) for f, h in mapping.items() if h}
+    result = IntakeResult(kind=kind, total_rows=len(records), mapped_fields=tuple(index), headers=tuple(headers))
+    seen_rows: dict[tuple[str, ...], int] = {}
 
-    for raw in rows:
-        number = int(raw["__row__"])
-        values = {f: (raw.get(h) or "").strip() for f, h in mapping.items() if h}
-        if "__shape_error__" in raw:
-            result.rejected.append({"row": number, "reasons": [f"Row {raw['__shape_error__']}."], "values": {}})
+    for rec in records:
+        number = rec.row
+        if len(rec.cells) != len(headers):
+            result.rejected.append({"row": number, "cells": rec.cells, "values": {},
+                                    "reasons": [f"Row has {len(rec.cells)} cells, header has {len(headers)}."]})
             continue
+        values = {f: rec.cells[i].strip() for f, i in index.items()}
         reasons = []
         for fld, (label, required) in FIELDS[kind].items():
             if required and not values.get(fld):
@@ -201,15 +216,15 @@ def intake(headers: list[str], rows: list[dict[str, str]], mapping: dict[str, st
                 reasons.append(f"Amount '{values['amount']}' isn't a valid dollar amount (max 2 decimals).")
         if kind == "costs" and amount is not None and amount < 0:
             reasons.append("Cost is negative; record refunds or credits separately.")
-        # A repeated invoice/bill number is normal (one line per item); an identical
-        # row is not, so it's rejected rather than double-counted.
-        fingerprint = tuple(sorted(values.items()))
-        if fingerprint in seen_rows:
-            reasons.append(f"Exact duplicate of row {seen_rows[fingerprint]}; not imported twice.")
+        # A repeated invoice/bill number is normal (one line per item); a row that is
+        # identical cell for cell, including unmapped columns, is rejected rather than
+        # double-counted.
+        if rec.cells in seen_rows:
+            reasons.append(f"Exact duplicate of row {seen_rows[rec.cells]}; not imported twice.")
         else:
-            seen_rows[fingerprint] = number
+            seen_rows[rec.cells] = number
         if reasons:
-            result.rejected.append({"row": number, "reasons": reasons, "values": values})
+            result.rejected.append({"row": number, "cells": rec.cells, "values": values, "reasons": reasons})
             continue
         record = {**values, "row": number, "date": parsed_date.isoformat(), "amount": amount}
         result.accepted.append(record)
@@ -246,11 +261,10 @@ def missing_report(result: IntakeResult) -> list[dict]:
         items.append({"level": "info", "text": f"{_count(len(multi), noun)} span more than one line "
                       f"(for example {sorted(multi)[0]}); each line was imported once."})
     if result.kind == "invoices":
-        credits = [r for r in accepted if r["amount"] < 0]
+        credits = sum(1 for r in accepted if r["amount"] < 0)
         if credits:
-            total_credit = -sum((r["amount"] for r in credits), Decimal("0"))
-            items.append({"level": "info", "text": f"{_count(len(credits), 'credit or refund line')} "
-                          f"(${total_credit:,.2f} total) were imported as negative amounts."})
+            items.append({"level": "info", "text": f"{_count(credits, 'credit or refund line')} "
+                          "were imported as negative amounts."})
     else:
         if "cost_type" not in result.mapped_fields:
             items.append({"level": "gap", "text": "No cost type column was chosen, so materials, labor and outsourced "
@@ -267,6 +281,11 @@ def missing_report(result: IntakeResult) -> list[dict]:
     return items
 
 
+def upload_allowed(use_sample: bool, has_upload: bool, confirmed_made_up: bool) -> bool:
+    """Pilot gate (D-003): an own file is processed only after the owner confirms it is made-up or anonymized."""
+    return use_sample or (has_upload and confirmed_made_up)
+
+
 def safe_cell(value: str) -> str:
     """Neutralize spreadsheet formula prefixes when a value is written back out to a file."""
     text = "" if value is None else str(value)
@@ -274,12 +293,18 @@ def safe_cell(value: str) -> str:
 
 
 def rejected_rows_csv(result: IntakeResult) -> str:
-    """The rejected rows with reasons, formula-safe, for the owner to fix and re-upload."""
+    """Rejected records with reasons, for the owner to fix and re-upload.
+
+    Lossless: every original column, under its original header and in its
+    original order, plus any extra cells from over-long rows. Cells starting with
+    a formula character get a leading apostrophe so spreadsheets show them as text.
+    """
+    width = max([len(result.headers), *(len(item["cells"]) for item in result.rejected)])
+    extra = [f"extra_cell_{i}" for i in range(1, width - len(result.headers) + 1)]
     out = io.StringIO()
-    fields = list(FIELDS[result.kind])
     writer = csv.writer(out)
-    writer.writerow(["row", "reasons", *fields])
+    writer.writerow(["marginx_row", "marginx_reasons", *result.headers, *extra])
     for item in result.rejected:
-        writer.writerow([item["row"], safe_cell(" ".join(item["reasons"])),
-                         *[safe_cell(item["values"].get(f, "")) for f in fields]])
+        cells = list(item["cells"]) + [""] * (width - len(item["cells"]))
+        writer.writerow([item["row"], safe_cell(" ".join(item["reasons"])), *[safe_cell(c) for c in cells]])
     return out.getvalue()

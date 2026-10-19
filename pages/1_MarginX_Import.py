@@ -20,9 +20,11 @@ from ui_theme import apply_theme, section_header  # noqa: E402
 
 SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"
 KIND_LABELS = {"invoices": "Invoices / sales", "costs": "Costs / bills / expenses"}
-NOT_MAPPED = "â€” not in this file â€”"
+NOT_MAPPED = "(not in this file)"
+CHOOSE = "Choose a format"
+LEVEL_LABELS = {"problem": "Problem", "gap": "Gap", "info": "Note"}
 
-st.set_page_config(page_title="MarginX | Import", page_icon="â–°", layout="wide")
+st.set_page_config(page_title="MarginX | Import", page_icon="▰", layout="wide")
 apply_theme()
 
 st.title("MarginX: import your jobs data")
@@ -36,24 +38,24 @@ section_header("1. Choose a file", "One CSV at a time. Excel and multiple files 
 kind = st.radio("What's in the file?", list(KIND_LABELS), format_func=KIND_LABELS.get, horizontal=True)
 sample_name = "fictional_invoices.csv" if kind == "invoices" else "fictional_costs.csv"
 use_sample = st.toggle(f"Use the fictional sample file ({sample_name})", value=True)
-upload = None if use_sample else st.file_uploader("CSV file", type=["csv"])
+upload, confirmed = None, False
 if not use_sample:
+    upload = st.file_uploader("CSV file", type=["csv"])
     confirmed = st.checkbox("This file is made-up or anonymized (no real customer, invoice or bank data).")
     if upload is not None and not confirmed:
         st.info("Tick the box above to continue.")
-        st.stop()
 
-data = (SAMPLES / sample_name).read_bytes() if use_sample else (upload.getvalue() if upload else None)
-if data is None:
+if not ji.upload_allowed(use_sample, upload is not None, confirmed):
     st.stop()
+data = (SAMPLES / sample_name).read_bytes() if use_sample else upload.getvalue()
 
 try:
-    headers, rows = ji.read_csv(data)
+    headers, records = ji.read_csv(data)
 except ji.IntakeError as exc:
     st.error(f"This file can't be read: {exc}")
     st.stop()
 
-st.caption(f"{len(rows)} data rows, {len(headers)} columns: {', '.join(headers)}")
+st.caption(f"{len(records)} data rows, {len(headers)} columns: {', '.join(headers)}")
 
 # --- 2. Confirm the columns ---------------------------------------------------
 section_header("2. Confirm the columns", "MarginX suggests a match; check each one. Nothing is guessed silently.")
@@ -72,12 +74,12 @@ for i, (fld, (label, required)) in enumerate(ji.FIELDS[kind].items()):
         )
         mapping[fld] = None if choice == NOT_MAPPED else choice
 
-date_values = [r.get(mapping["date"], "") for r in rows] if mapping.get("date") else []
+date_values = ji.column_values(headers, records, mapping["date"]) if mapping.get("date") else []
 date_guess = ji.suggest_date_format(date_values)
 formats = list(ji.DATE_FORMATS)
 date_format = st.selectbox(
     "Date format used in the file *",
-    ["Chooseâ€¦", *formats],
+    [CHOOSE, *formats],
     index=formats.index(date_guess) + 1 if date_guess else 0,
     help="Picked automatically only when every date fits exactly one format.",
     key=f"datefmt-{kind}",
@@ -86,7 +88,7 @@ if date_guess is None and mapping.get("date"):
     st.caption("The dates don't fit a single format, or fit more than one, so please choose.")
 
 problems = ji.validate_mapping(mapping, headers, kind)
-if date_format == "Chooseâ€¦":
+if date_format == CHOOSE:
     problems.append("Choose the date format used in the file.")
 if problems:
     for p in problems:
@@ -94,19 +96,19 @@ if problems:
     st.stop()
 
 # --- 3. What's missing --------------------------------------------------------
-result = ji.intake(headers, rows, mapping, kind, date_format)
+result = ji.intake(headers, records, mapping, kind, date_format)
 section_header("3. What's missing", "Counts only. Profit by job comes in a later step.")
-icons = {"problem": "ðŸ”´", "gap": "ðŸŸ ", "info": "â„¹ï¸"}
 for item in ji.missing_report(result):
-    st.markdown(f"{icons[item['level']]} {item['text']}")
+    st.markdown(f"**{LEVEL_LABELS[item['level']]}:** {item['text']}")
 
 if result.rejected:
     st.subheader(f"Rows that couldn't be imported ({len(result.rejected)})")
     st.dataframe(
-        pd.DataFrame([{"Row in file": r["row"], "Why": " ".join(r["reasons"]), **r["values"]} for r in result.rejected]),
+        pd.DataFrame([{"Row in file": r["row"], "Why": " ".join(r["reasons"]),
+                       "Original row": " | ".join(r["cells"])} for r in result.rejected]),
         hide_index=True, width="stretch",
     )
-    st.download_button("Download these rows to fix", ji.rejected_rows_csv(result),
+    st.download_button("Download these rows to fix (all original columns)", ji.rejected_rows_csv(result),
                        file_name=f"marginx_{kind}_rows_to_fix.csv", mime="text/csv")
 
 if result.accepted:
