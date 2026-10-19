@@ -248,6 +248,19 @@ class CompletenessTests(unittest.TestCase):
         self.assertEqual(("complete", Decimal("50.00")), (report.jobs[0].status, report.jobs[0].contribution))
         self.assertIn("$90.00 aren't linked to a job", " ".join(report.notes))
 
+    def test_direct_cost_words_win_over_fee_words(self):
+        for text, category in (("Materials processing", "materials"), ("Labor fees", "labor"),
+                               ("Outsourced install fee", "outsourced"), ("Ink processing fee", "materials"),
+                               ("Processing fees", "fees_overhead"), ("Rent", "fees_overhead")):
+            self.assertEqual(category, jp.cost_category(text), text)
+        # The review's example: unlinked "Materials processing" holds the job back.
+        report = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                             b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n"
+                             b"B-3,10/02/2026,Paper Co,,Materials processing,40.00\n",
+                             b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n")
+        self.assertEqual(("provisional", Decimal("50.00")), (report.jobs[0].status, report.jobs[0].contribution))
+        self.assertIn("worth $40.00 have no job number", " ".join(report.jobs[0].reasons))
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))

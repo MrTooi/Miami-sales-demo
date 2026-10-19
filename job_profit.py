@@ -44,7 +44,12 @@ BASIS = ("Direct job contribution: sales billed on each job's invoice lines (cre
 
 
 def cost_category(cost_type: str | None) -> str:
-    """Materials, outsourced, labor, other, or unknown (blank), from the cost type text."""
+    """Materials, outsourced, labor, fees/overhead, other, or unknown (blank or a "not known"
+    marker), from the cost type text.
+
+    Direct-cost words win over fee words ("Materials processing" is materials), because a cost
+    typed as fees or overhead is treated as outside the job when it has no job number.
+    """
     text = (cost_type or "").strip()
     if not text or re.sub(r"[^a-z0-9]+", " ", text.lower()).strip() in UNKNOWN_TYPES:
         return "unknown"
@@ -53,10 +58,10 @@ def cost_category(cost_type: str | None) -> str:
     words = set(re.sub(r"[^a-z0-9]+", " ", text.lower()).split())
     if words & OUTSOURCED_WORDS:
         return "outsourced"
-    if words & FEE_OVERHEAD_WORDS:
-        return "fees_overhead"
     if words & MATERIAL_WORDS:
         return "materials"
+    if words & FEE_OVERHEAD_WORDS:
+        return "fees_overhead"
     return "other"
 
 
