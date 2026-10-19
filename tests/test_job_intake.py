@@ -134,6 +134,15 @@ class MappingTests(unittest.TestCase):
         self.assertEqual({"MM/DD/YYYY": "October 1, 2026", "DD/MM/YYYY": "January 10, 2026"}, q["options"])
         self.assertIsNone(ji.date_question(["10/31/2026"]))  # not ambiguous
         self.assertIsNone(ji.date_question(["nope"]))
+
+    def test_three_way_tie_offers_no_partial_question(self):
+        values = ["2026-10-06", "10/01/2026"]  # ISO, month-first and day-first each read one date
+        self.assertIsNone(ji.suggest_date_format(values))
+        self.assertIsNone(ji.date_question(values))  # no single date shows all three; the page asks for the main format
+
+    def test_formats_that_agree_on_every_date_need_no_question(self):
+        self.assertEqual("MM/DD/YYYY", ji.suggest_date_format(["01/01/2026", "02/02/2026"]))
+        self.assertIsNone(ji.date_question(["01/01/2026", "02/02/2026"]))
         with self.assertRaises(ji.IntakeError):
             ji.intake(["Date"], [], {}, "costs", "guess")
 
@@ -271,14 +280,8 @@ class UploadGateTests(unittest.TestCase):
         self.assertTrue(ji.upload_allowed(False, True, True))
 
 
-class ExportSafetyTests(unittest.TestCase):
-    MAP = {"date": "Date", "vendor": "Payee", "amount": "Amount"}
 
-    def export(self, data):
-        headers, rows = ji.read_csv(data)
-        result = ji.intake(headers, rows, self.MAP, "costs", "MM/DD/YYYY")
-        return list(csv.reader(io.StringIO(ji.rejected_rows_csv(result))))
-
+class FormulaSafetyTests(unittest.TestCase):
     def test_safe_cell_policy_covers_control_and_whitespace_prefixes(self):
         for risky in ("=1+1", "+1", "-1", "@SUM(A1)", "\t=1", "\r=1", "\n=1+1", " =1+1", "\x00=1", "  \n @x"):
             with self.subTest(risky=risky):
@@ -287,59 +290,16 @@ class ExportSafetyTests(unittest.TestCase):
             with self.subTest(plain=plain):
                 self.assertEqual("" if plain is None else plain, ji.safe_cell(plain))
 
-    def test_newline_prefixed_formulas_are_neutralized_in_headers_and_cells(self):
-        exported = self.export(b'Date,Payee,Amount,"\n=HDR()"\n10/01/2026,"\n=1+1",-5,x\n')
-        self.assertEqual("'\n=HDR()", exported[0][-1])
-        self.assertEqual("'\n=1+1", exported[1][3])
-
-    def test_formula_headers_are_neutralized_in_the_export(self):
-        exported = self.export(b'Date,Payee,Amount,"=HYPERLINK(""http://x.invalid"")"\n10/01/2026,A,-5,n\n')
-        self.assertEqual("'=HYPERLINK(\"http://x.invalid\")", exported[0][-1])
-
-    def test_original_headers_round_trip_and_export_names_never_collide(self):
-        data = b"Date,Payee,Amount,marginx_row,marginx_reasons, Note \n10/01/2026,A,-5,a,b,c\n"
-        exported = self.export(data)
-        self.assertEqual(["marginx_row_2", "marginx_reasons_2", "Date", "Payee", "Amount", "marginx_row",
-                          "marginx_reasons", " Note "], exported[0])
-        # Re-uploading the fix file works: headers are unique and readable.
-        fixed = io.StringIO()
-        csv.writer(fixed).writerows(exported)
-        headers, rows = ji.read_csv(fixed.getvalue().encode("utf-8"))
-        self.assertIn(" Note ", headers)
-        self.assertEqual(1, len(rows))
-
-    def test_headers_that_collide_after_formula_protection_still_round_trip(self):
-        exported = self.export(b"Date,Payee,Amount,=Note,'=Note\n10/01/2026,A,-5,x,y\n")
-        self.assertEqual(["marginx_row", "marginx_reasons", "Date", "Payee", "Amount", "'=Note", "'=Note_2"], exported[0])
-        fixed = io.StringIO()
-        csv.writer(fixed).writerows(exported)
-        headers, rows = ji.read_csv(fixed.getvalue().encode("utf-8"))  # re-imports without a duplicate-header error
-        self.assertEqual(7, len(headers))
-        self.assertEqual(("x", "y"), rows[0].cells[5:7])
-
-    def test_extra_cell_names_avoid_collisions(self):
-        exported = self.export(b"Date,Payee,Amount,extra_cell_1\n10/01/2026,A,1.00,x,OVER\n")
-        self.assertEqual("extra_cell_1_2", exported[0][-1])
-
-    def test_rows_to_fix_export_is_lossless(self):
-        headers, rows = ji.read_csv(
-            b"Date,Payee,Note,Amount\n10/01/2026,A,keep me,-5\n10/02/2026,B\n10/03/2026,C,x,1.00,EXTRA\n")
-        result = ji.intake(headers, rows, {"date": "Date", "vendor": "Payee", "amount": "Amount"}, "costs", "MM/DD/YYYY")
-        exported = list(csv.reader(io.StringIO(ji.rejected_rows_csv(result))))
-        self.assertEqual(["marginx_row", "marginx_reasons", "Date", "Payee", "Note", "Amount", "extra_cell_1"], exported[0])
-        self.assertEqual(["2", "10/01/2026", "A", "keep me", "'-5", ""], [exported[1][0], *exported[1][2:]])
-        self.assertEqual(["3", "10/02/2026", "B", "", "", ""], [exported[2][0], *exported[2][2:]])
-        self.assertEqual(["4", "10/03/2026", "C", "x", "1.00", "EXTRA"], [exported[3][0], *exported[3][2:]])
-
-    def test_rejected_rows_export_neutralizes_formulas(self):
+    def test_rejected_rows_keep_formula_text_as_data(self):
         headers, rows = ji.read_csv(b'Date,Payee,Amount\n10/01/2026,"=cmd|\' /C calc\'!A0",-5\n')
         result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")
-        exported = list(csv.reader(io.StringIO(ji.rejected_rows_csv(result))))
-        self.assertEqual("'=cmd|' /C calc'!A0", exported[1][3])
-        self.assertTrue(exported[1][1].startswith("Cost is negative"))
-        for prefix in ("=", "+", "-", "@"):
-            self.assertTrue(ji.safe_cell(prefix + "x").startswith("'"))
-        self.assertEqual("plain", ji.safe_cell("plain"))
+        self.assertEqual("=cmd|' /C calc'!A0", result.rejected[0]["cells"][1])  # stored as text, never run
+        self.assertTrue(result.rejected[0]["reasons"][0].startswith("Cost is negative"))
+
+    def test_there_is_no_repair_file_export(self):
+        # Removed on purpose: re-importing an edited repair file could turn unresolved
+        # rows into accepted ones. Owners fix data at the source and export again.
+        self.assertFalse(hasattr(ji, "rejected_rows_csv"))
 
     def test_empty_import_reports_nothing_imported(self):
         headers, rows = ji.read_csv(b"Date,Payee,Amount\n,,\n")

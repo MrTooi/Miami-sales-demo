@@ -107,7 +107,8 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertIn("2 rows of 2 couldn't be imported", page_text(at))
         self.assertIn("No invoices were imported", page_text(at))
-        self.assertEqual(1, len(at.get("download_button")))
+        self.assertEqual([2, 3], list(at.dataframe[0].value["Row in file"]))  # every row listed with its reason
+        self.assertEqual(0, len(at.get("download_button")))  # no repair-file download (removed on purpose)
 
     def test_automatic_date_format_can_be_changed_and_report_recomputes(self):
         at = self.run_page()

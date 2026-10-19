@@ -184,31 +184,45 @@ def suggest_date_format(values: list[str]) -> str | None:
     truly ambiguous and the owner is asked. Dates the chosen format can't read are
     rejected with a reason, never reinterpreted.
     """
-    values = [v.strip() for v in values if v and v.strip()]
+    tied = _tied_formats(values)
+    if not tied:
+        return None
+    if len(tied) == 1:
+        return tied[0]
+    # Formats that read every date as the same day (e.g. only "01/01/2026") make
+    # no difference, so there is nothing to ask.
+    readings = [[_parse_date(v, DATE_FORMATS[name]) for v in _clean(values)] for name in tied]
+    return tied[0] if all(r == readings[0] for r in readings) else None
+
+
+def _clean(values: list[str]) -> list[str]:
+    return [v.strip() for v in values if v and v.strip()]
+
+
+def _tied_formats(values: list[str]) -> list[str]:
+    """The formats that read the most dates (none if no format reads any)."""
+    values = _clean(values)
     counts = {name: sum(1 for v in values if _parse_date(v, fmt)) for name, fmt in DATE_FORMATS.items()}
     best = max(counts.values(), default=0)
-    winners = [name for name, n in counts.items() if n == best]
-    return winners[0] if best > 0 and len(winners) == 1 else None
+    return [name for name, n in counts.items() if n == best] if best > 0 else []
 
 
 def date_question(values: list[str]) -> dict | None:
-    """When the date format is ambiguous: one example date and what it means in each format.
+    """When the date format is ambiguous: one example date and what it means in every tied format.
 
-    Returns {"example": "10/01/2026", "options": {"MM/DD/YYYY": "October 1, 2026", ...}}.
+    Returns {"example": "10/01/2026", "options": {"MM/DD/YYYY": "October 1, 2026", ...}},
+    or None when no single date can show every tied format a different meaning
+    (the caller then asks for the main format directly).
     """
-    values = [v.strip() for v in values if v and v.strip()]
-    counts = {name: sum(1 for v in values if _parse_date(v, fmt)) for name, fmt in DATE_FORMATS.items()}
-    best = max(counts.values(), default=0)
-    tied = [name for name, n in counts.items() if n == best and n > 0]
-    example = next((v for v in values if sum(1 for n in tied if _parse_date(v, DATE_FORMATS[n])) > 1), None)
-    if example is None:
-        return None
-    options = {}
-    for name in tied:
-        d = _parse_date(example, DATE_FORMATS[name])
-        if d:
-            options[name] = f"{d:%B} {d.day}, {d.year}"
-    return {"example": example, "options": options}
+    tied = _tied_formats(values)
+    if len(tied) < 2:
+        return None  # nothing to choose between
+    for example in _clean(values):
+        dates = [_parse_date(example, DATE_FORMATS[name]) for name in tied]
+        if all(dates) and len(set(dates)) == len(dates):
+            return {"example": example,
+                    "options": {name: f"{d:%B} {d.day}, {d.year}" for name, d in zip(tied, dates)}}
+    return None
 
 
 def detect_kind(headers: list[str]) -> str | None:
@@ -312,7 +326,8 @@ def missing_report(result: IntakeResult) -> list[dict]:
     noun = "invoice" if result.kind == "invoices" else "cost"
     if result.rejected:
         items.append({"level": "problem", "text": f"{_count(len(result.rejected), 'row')} of {total} couldn't be imported. "
-                      "Each one is listed below with the reason; fix them in the file and upload again."})
+                      "Each one is listed below with the reason. Fix them where the data comes from "
+                      "(for example QuickBooks) and export the file again."})
     if not accepted:
         items.append({"level": "problem", "text": f"No {noun}s were imported."})
         return items
@@ -364,51 +379,20 @@ def confirmation_key(data: bytes, kind: str, mapping: dict[str, str | None], dat
 
 
 def upload_allowed(use_sample: bool, has_upload: bool, confirmed_made_up: bool) -> bool:
-    """Pilot gate (D-003): an own file is processed only after the owner confirms it is made-up or anonymized."""
+    """Pilot gate (D-003): an own file is processed only after the owner confirms it is made-up."""
     return use_sample or (has_upload and confirmed_made_up)
 
 
 def safe_cell(value: str) -> str:
-    """Spreadsheet-safe export policy: prefix an apostrophe when a cell could be read as a formula.
+    """Spreadsheet-safe display policy: prefix an apostrophe when a cell could be read as a formula.
 
     That is when it starts with = + - @ or a tab, carriage return or line feed, or
     when it reaches one of = + - @ after leading spaces or control characters.
+    Used for on-screen tables, whose toolbar can export CSV. MarginX offers no
+    repair-file download: owners fix data where it lives and export again.
     """
     text = "" if value is None else str(value)
     stripped = text.lstrip("".join(chr(c) for c in range(33)))
     risky = text.startswith(FORMULA_PREFIXES) or stripped.startswith(FORMULA_PREFIXES[:4])
     return "'" + text if risky else text
 
-
-def rejected_rows_csv(result: IntakeResult) -> str:
-    """Spreadsheet-safe repair export of rejected records, to fix and re-upload.
-
-    Every original column appears under its original header and in its original
-    order, plus any extra cells from over-long rows; short rows are padded with
-    blanks. This is not an exact byte-for-byte copy: cells and headers that could
-    be read as formulas get a leading apostrophe (see safe_cell).
-    """
-    width = max([len(result.headers), *(len(item["cells"]) for item in result.rejected)])
-    taken: set[str] = set()
-
-    def unique(name: str) -> str:
-        # Uniqueness is checked on the final, spreadsheet-safe header as read_csv
-        # compares it, so the repair file always re-imports. Original headers stay
-        # in their columns; only a clashing one gets a numeric suffix.
-        candidate, n = name, 1
-        while candidate.strip().lower() in taken:
-            n += 1
-            candidate = f"{name}_{n}"
-        taken.add(candidate.strip().lower())
-        return candidate
-
-    shop = [unique(safe_cell(h)) for h in result.headers]
-    meta = [unique("marginx_row"), unique("marginx_reasons")]
-    extra = [unique(f"extra_cell_{i}") for i in range(1, width - len(result.headers) + 1)]
-    out = io.StringIO()
-    writer = csv.writer(out)
-    writer.writerow([*meta, *shop, *extra])
-    for item in result.rejected:
-        cells = list(item["cells"]) + [""] * (width - len(item["cells"]))
-        writer.writerow([item["row"], safe_cell(" ".join(item["reasons"])), *[safe_cell(c) for c in cells]])
-    return out.getvalue()

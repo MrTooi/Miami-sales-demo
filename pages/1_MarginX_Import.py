@@ -151,8 +151,6 @@ def show_file(position: int, name: str, data: bytes) -> None:
                                "Original row": ji.safe_cell(" | ".join(r["cells"]))} for r in result.rejected]),
                 hide_index=True, width="stretch",
             )
-            st.download_button("Download these rows to fix", ji.rejected_rows_csv(result),
-                               file_name=f"marginx_rows_to_fix_{name}", mime="text/csv", key=f"{key}-download")
 
 
 for file_position, (file_name, file_data) in enumerate(files):
