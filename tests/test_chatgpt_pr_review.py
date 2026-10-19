@@ -105,10 +105,24 @@ class ChatGPTReviewScriptTests(unittest.TestCase):
                 self.assertIn("REVIEW INCOMPLETE", review.format_comment(text, "m", "abc", False, verdict, problems))
 
     def test_pass_with_required_changes_is_contradictory(self):
+        listed = (
+            "- add a test for refunds",
+            "None. Fix auth",
+            "None, change test",
+            "None\n- fix x",
+            "None yet",
+            "none - see warnings",
+        )
         for verdict in ("PASS", "PASS WITH WARNINGS"):
-            with self.subTest(verdict):
-                _, problems = review.assess(answer(verdict, "- add a test for refunds"), truncated=False, stale=False)
-                self.assertTrue(any("contradicts" in p for p in problems))
+            for required in listed:
+                with self.subTest(verdict=verdict, required=required):
+                    _, problems = review.assess(answer(verdict, required), truncated=False, stale=False)
+                    self.assertTrue(any("contradicts" in p for p in problems))
+
+    def test_pass_accepts_only_the_single_word_none(self):
+        for required in ("None", "None.", "none", "  None  "):
+            with self.subTest(required=required):
+                self.assertEqual(("PASS", []), review.assess(answer("PASS", required), truncated=False, stale=False))
 
     def test_truncated_diff_cannot_produce_a_qualifying_pass(self):
         for verdict in ("PASS", "PASS WITH WARNINGS"):

@@ -91,8 +91,8 @@ def extract_output_text(response: dict) -> str:
 
 
 def _says_none(body: str) -> bool:
-    words = re.sub(r"[^a-z]+", " ", body.lower()).split()
-    return words[:1] == ["none"] and len(words) <= 3
+    """True only when the section is the single word None (optionally with a period)."""
+    return body.strip().rstrip(".").strip().lower() == "none"
 
 
 def _sections(review: str) -> tuple[dict[str, str] | None, list[str]]:
