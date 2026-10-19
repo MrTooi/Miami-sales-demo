@@ -411,7 +411,9 @@ class MarginXImportPageTests(unittest.TestCase):
         jobs = self.profit_table(at).set_index("Job")
         self.assertEqual(("$1,250.00", "$410.00", "$840.00", "Provisional"),
                          tuple(jobs.loc["J-501", ["Sales", "Materials", "Direct contribution", "Status"]]))
-        self.assertEqual("No labor recorded.", jobs.loc["J-501", "Why"])
+        # The $160 vinyl and $85 toner bills have no job number; the $230 power bill is overhead.
+        self.assertEqual("No labor recorded. 2 cost line(s) worth $245.00 have no job number and may belong to "
+                         "this job.", jobs.loc["J-501", "Why"])
         self.assertEqual(("—", "Unavailable"), tuple(jobs.loc["J-506", ["Direct contribution", "Status"]]))
         self.assertTrue(any("Direct job contribution" in c.value and "not cash received" in c.value for c in at.caption))
         # J-507 and J-508 only have lines that failed to import: listed, with no figure.

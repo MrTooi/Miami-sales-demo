@@ -232,6 +232,22 @@ class CompletenessTests(unittest.TestCase):
             report = self.report(costs + b"B-3,10/01/2026,Paper Co,J-1,Vendor Credit," + amount + b"\n")
             self.assertEqual(("provisional", Decimal("20.00")), (report.jobs[0].status, report.jobs[0].total_costs))
 
+    def test_unlinked_costs_keep_jobs_provisional_but_are_never_allocated(self):
+        invoices = b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n"
+        report = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                             b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\nB-3,10/02/2026,Paper Co,,Materials,40.00\n",
+                             invoices)
+        job = report.jobs[0]
+        self.assertEqual(("provisional", Decimal("50.00")), (job.status, job.contribution))  # figure kept, not $10
+        self.assertIn("1 cost line(s) worth $40.00 have no job number and may belong to this job", " ".join(job.reasons))
+        self.assertEqual("provisional", report.customers[0].status)
+        # Unlinked overhead or fees are outside the stated basis and don't hold jobs back.
+        report = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                             b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\nB-3,10/31/2026,Electric Co,,Overhead,90.00\n",
+                             invoices)
+        self.assertEqual(("complete", Decimal("50.00")), (report.jobs[0].status, report.jobs[0].contribution))
+        self.assertIn("$90.00 aren't linked to a job", " ".join(report.notes))
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))

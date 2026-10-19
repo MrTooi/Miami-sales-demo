@@ -156,6 +156,7 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
         customers[job].add(line["customer"])
         invoice_lines[job] += 1
 
+    unlinked_job_costs: list[Decimal] = []
     job_costs: dict[str, dict[str, Decimal]] = defaultdict(lambda: {c: ZERO for c in CATEGORIES})
     cost_lines: dict[str, dict[str, int]] = defaultdict(lambda: {c: 0 for c in CATEGORIES})
     for line in costs.accepted:
@@ -163,6 +164,10 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
         if not job:
             report.unlinked_costs += line["amount"]
             report.unlinked_cost_lines += 1
+            # Unlinked fees and overhead are left out by the stated basis; any other unlinked
+            # cost may belong to a job, so it holds every job back from "complete".
+            if not typed or cost_category(line.get("cost_type")) != "fees_overhead":
+                unlinked_job_costs.append(line["amount"])
             continue
         category = cost_category(line.get("cost_type")) if typed else "unknown"
         job_costs[job][category] += line["amount"]
@@ -224,6 +229,10 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
                 reasons.append("No materials or outsourced work recorded.")
             if len(customers[job]) > 1:
                 reasons.append("Billed to more than one customer: " + ", ".join(sorted(customers[job])) + ".")
+            if unlinked_job_costs:
+                reasons.append(f"{len(unlinked_job_costs)} cost line(s) worth "
+                               f"{format_money(sum(unlinked_job_costs, ZERO))} have no job number and may "
+                               "belong to this job.")
             for what in ("sales", "cost"):
                 if missing[job][what]:
                     reasons.append(f"{missing[job][what]} of its {what} lines couldn't be imported (listed above).")
