@@ -241,11 +241,28 @@ class AutomatedMetadataTests(unittest.TestCase):
         self.assertEqual("UNCLEAR", classify_review(unreadable)["verdict"])
         self.assertNotEqual("Ready for your merge decision", next_action(classify_review(unreadable), "PASSING"))
 
-    def test_embedded_sha_is_ignored_and_ambiguous_metadata_is_rejected(self):
+    def test_embedded_sha_is_ignored_and_ambiguous_metadata_is_unclear(self):
         ok = self.bot("**Status: qualifying automated review — PASS.** text", f"Reviewed commit: `{OLD}`")
         self.assertEqual((HEAD, "PASS"), (classify_review(ok)["sha"], classify_review(ok)["verdict"]))
         two = dict(ok, body=ok["body"].replace("Diff truncated: no", f"Reviewed commit: `{OLD}`"))
-        self.assertIsNone(classify_review(two))
+        self.assertEqual("UNCLEAR", classify_review(two)["verdict"])
+
+    def test_newer_malformed_bot_review_blocks_an_older_pass(self):
+        older_pass = self.bot("**Status: qualifying automated review — PASS.** text", "**Verdict:** PASS")
+        variants = {
+            "duplicate head SHA": older_pass["body"].replace("Diff truncated: no", f"Reviewed commit: `{HEAD}`"),
+            "head and old SHA": older_pass["body"].replace("Diff truncated: no", f"Reviewed commit: `{OLD}`"),
+            "no SHA": older_pass["body"].replace(f"Reviewed commit: `{HEAD}`", "Reviewed commit: unknown"),
+        }
+        for name, body in variants.items():
+            with self.subTest(name):
+                newer = dict(older_pass, body=body, created_at="2026-10-19T06:00:00Z")
+                action = next_action(review_for_head([older_pass, newer], HEAD), "PASSING")
+                self.assertNotEqual("Ready for your merge decision", action)
+        # A malformed review naming only another commit doesn't block this one.
+        other = dict(older_pass, created_at="2026-10-19T06:00:00Z",
+                     body=older_pass["body"].replace(f"`{HEAD}`", f"`{OLD}`").replace("Diff truncated: no", f"Reviewed commit: `{OLD}`"))
+        self.assertEqual("Ready for your merge decision", next_action(review_for_head([older_pass, other], HEAD), "PASSING"))
 
 
 class CheckRunPaginationTests(unittest.TestCase):

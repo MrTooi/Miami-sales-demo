@@ -144,7 +144,9 @@ def classify_review(comment: dict) -> dict | None:
         meta = body.split("\n---\n", 1)[0]
         shas = AUTOMATED_SHA.findall(meta)
         if len(shas) != 1:
-            return None
+            # Malformed bot metadata blocks readiness for every commit it might cover
+            # (all of them when it names none) instead of being ignored.
+            return {**base, "kind": "automated", "sha": None, "shas": shas, "verdict": "UNCLEAR"}
         sha = shas[0]
         incomplete = AUTOMATED_INCOMPLETE in meta
         verdicts = AUTOMATED_QUALIFYING.findall(meta)
@@ -164,7 +166,13 @@ def review_for_head(comments: list[dict], head_sha: str) -> dict | None:
     found = None
     for c in sorted(comments, key=lambda c: c.get("created_at") or ""):
         review = classify_review(c)
-        if review and _same_commit(review["sha"], head_sha, full=review["kind"] == "automated"):
+        if review is None:
+            continue
+        if review["sha"] is None:
+            # Malformed bot review: it blocks when it names this commit or names none.
+            if not review["shas"] or any(_same_commit(s, head_sha, full=False) for s in review["shas"]):
+                found = review
+        elif _same_commit(review["sha"], head_sha, full=review["kind"] == "automated"):
             found = review
     return found
 
