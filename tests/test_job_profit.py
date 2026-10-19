@@ -104,8 +104,52 @@ class CompletenessTests(unittest.TestCase):
                              b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,50.00\n"
                              b"I-2,10/01/2026,Gym,J-1,50.00\n")
         self.assertEqual("provisional", report.jobs[0].status)
-        self.assertEqual([], report.customers)
+        # Each customer stays listed, with no figure and the left-out job named.
+        self.assertEqual(["Bakery", "Gym"], [c.customer for c in report.customers])
+        for customer in report.customers:
+            self.assertEqual("unavailable", customer.status)
+            self.assertIsNone(customer.contribution)
+            self.assertIn("Left out, billed to more than one customer: J-1", " ".join(customer.reasons))
         self.assertIn("more than one customer", " ".join(report.notes))
+
+    def test_customer_with_a_complete_job_and_a_shared_job_is_not_complete(self):
+        report = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,10.00\n"
+                             b"B-2,10/01/2026,Paper Co,J-1,Materials,10.00\nB-3,10/01/2026,Crew,J-2,Labor,5.00\n"
+                             b"B-4,10/01/2026,Paper Co,J-2,Materials,5.00\n",
+                             b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,50.00\n"
+                             b"I-2,10/01/2026,Bakery,J-2,30.00\nI-3,10/01/2026,Gym,J-2,30.00\n")
+        bakery = {c.customer: c for c in report.customers}["Bakery"]
+        self.assertEqual(("provisional", Decimal("30.00")), (bakery.status, bakery.contribution))  # J-1 only
+        self.assertIn("J-2", " ".join(bakery.reasons))
+
+    def test_a_cost_line_that_failed_to_import_keeps_its_job_from_being_complete(self):
+        report = self.report(b"Date,Vendor,Job,Type,Amount\n10/01/2026,Crew,J-1,Labor,10.00\n"
+                             b"10/01/2026,Paper Co,J-1,Materials,10.00\n10/01/2026,Ink Co,J-1,Materials,12.345\n")
+        job = report.jobs[0]
+        self.assertEqual("provisional", job.status)
+        self.assertIn("1 of its cost lines couldn't be imported", " ".join(job.reasons))
+        self.assertEqual("provisional", report.customers[0].status)
+
+    def test_failed_lines_without_a_job_number_hold_back_every_job(self):
+        report = self.report(b"Date,Vendor,Job,Type,Amount\n10/01/2026,Crew,J-1,Labor,10.00\n"
+                             b"10/01/2026,Paper Co,J-1,Materials,10.00\n10/01/2026,Ink Co,,Materials,oops\n"
+                             b"10/01/2026,Paper Co,J-1\n")
+        job = report.jobs[0]
+        self.assertEqual("provisional", job.status)
+        self.assertIn("2 cost line(s) couldn't be imported and have no readable job number", " ".join(job.reasons))
+
+    def test_rows_that_are_not_lines_do_not_hold_a_job_back(self):
+        # A duplicate row and a transfer row are rejected, but no money is missing.
+        report = self.report(b"Date,Vendor,Job,Type,Amount\n10/01/2026,Crew,J-1,Labor,10.00\n"
+                             b"10/01/2026,Crew,J-1,Labor,10.00\n10/01/2026,Paper Co,J-1,Materials,10.00\n"
+                             b"10/01/2026,Bank,J-1,Transfer,500.00\n")
+        self.assertEqual(("complete", []), (report.jobs[0].status, report.jobs[0].reasons))
+
+    def test_money_is_never_shown_rounded(self):
+        self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
+        self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))
+        with self.assertRaises(ValueError):
+            jp.format_money(Decimal("12.345"))
 
     def test_look_alike_job_numbers_are_never_merged(self):
         report = self.report(b"Date,Vendor,Job,Type,Amount\n10/01/2026,Paper Co,j-1,Materials,100.00\n")

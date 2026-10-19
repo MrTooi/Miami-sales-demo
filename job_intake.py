@@ -597,7 +597,7 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
     for rec in records:
         number = rec.row
         if len(rec.cells) != len(headers):
-            result.rejected.append({"row": number, "cells": rec.cells, "values": {},
+            result.rejected.append({"row": number, "cells": rec.cells, "values": {}, "money_missing": True,
                                     "reasons": [f"Row has {len(rec.cells)} cells, header has {len(headers)}."]})
             continue
         values = {f: rec.cells[i].strip() for f, i in index.items()}
@@ -622,8 +622,12 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             # checked against the document's other lines.
             reasons.append(f"No {entity.lower()} number, and '{mapping['amount']}' is a whole "
                            f"{entity.lower()}'s total, so it can't be checked against other lines.")
+        # Reasons that mean the row isn't a line at all (a payment, a summary, a duplicate):
+        # nothing is missing when it is left out. Any other reason means real money is.
+        not_a_line = 0
         movement = _cash_movement_type(rec.cells, types)
         if movement:
+            not_a_line += 1
             what = "sale" if kind == "invoices" else "cost"
             reasons.append(f"Type '{movement}' is a payment, transfer or deposit (money moving), not a {what}; "
                            "not imported.")
@@ -636,9 +640,11 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
         elif summary and key and all_lines[key] >= 1:
             # Only when the document has other lines (summary rows aren't counted among them):
             # a one-line invoice described "Total" is its own amount.
+            not_a_line += 1
             reasons.append(f"Row is labeled '{summary}': a summary of {_label(key, kind)}'s other lines, "
                            "not a line of its own; not counted again.")
         if number in candidates and subtotals[number]:
+            not_a_line += 1
             reasons.append(f"Subtotal of {_label(candidates[number][0], kind)} (the owner said so); "
                            "its lines are already counted.")
         unnumbered = document is not None and len(document) == 3
@@ -655,11 +661,13 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
         # identical cell for cell, including unmapped columns, is rejected rather than
         # double-counted.
         if rec.cells in seen_rows:
+            not_a_line += 1
             reasons.append(f"Exact duplicate of row {seen_rows[rec.cells]}; not imported twice.")
         else:
             seen_rows[rec.cells] = number
         if reasons:
-            result.rejected.append({"row": number, "cells": rec.cells, "values": values, "reasons": reasons})
+            result.rejected.append({"row": number, "cells": rec.cells, "values": values, "reasons": reasons,
+                                    "money_missing": len(reasons) > not_a_line})
             continue
         # Working values are trimmed (so "J-501 " matches "J-501"); the untouched
         # original cells are kept alongside for provenance.

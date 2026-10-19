@@ -111,6 +111,10 @@ def _dates(records: list[dict]) -> tuple[str, str] | None:
 
 
 def format_money(amount: Decimal) -> str:
+    """Dollars with two decimals. Amounts always have at most two (intake refuses more), so
+    nothing is rounded; anything else is refused rather than shown rounded."""
+    if amount != amount.quantize(Decimal("0.01")):
+        raise ValueError(f"Amount with more than two decimals: {amount}")
     return f"-${-amount:,.2f}" if amount < 0 else f"${amount:,.2f}"
 
 
@@ -154,6 +158,20 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
         job_costs[job][category] += line["amount"]
         cost_lines[job][category] += 1
 
+    # Lines that couldn't be imported may hold this job's money: a job with any of them is
+    # never complete, and lines that can't be tied to a job hold back every job.
+    missing: dict[str, dict[str, int]] = defaultdict(lambda: {"sales": 0, "cost": 0})
+    untied = {"sales": 0, "cost": 0}
+    for result, what in ((invoices, "sales"), (costs, "cost")):
+        for row in result.rejected:
+            if not row.get("money_missing", True):
+                continue
+            job = (row.get("values") or {}).get("job_id", "")
+            if job:
+                missing[job][what] += 1
+            else:
+                untied[what] += 1
+
     for job in sorted(set(sales) | set(job_costs)):
         counts = cost_lines[job] if job in cost_lines else {c: 0 for c in CATEGORIES}
         amounts = job_costs[job] if job in job_costs else {c: ZERO for c in CATEGORIES}
@@ -175,22 +193,31 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
                 reasons.append("No materials or outsourced work recorded.")
             if len(customers[job]) > 1:
                 reasons.append("Billed to more than one customer: " + ", ".join(sorted(customers[job])) + ".")
+            for what in ("sales", "cost"):
+                if missing[job][what]:
+                    reasons.append(f"{missing[job][what]} of its {what} lines couldn't be imported (listed above).")
+                if untied[what]:
+                    reasons.append(f"{untied[what]} {what} line(s) couldn't be imported and have no readable job "
+                                   "number, so they may belong to this job.")
             status = "provisional" if reasons else "complete"
         report.jobs.append(JobResult(job, tuple(sorted(customers[job])), sales.get(job, ZERO), dict(amounts),
                                      invoice_lines.get(job, 0), sum(counts.values()), status, reasons))
 
     by_customer: dict[str, list[JobResult]] = defaultdict(list)
+    shared_by_customer: dict[str, list[str]] = defaultdict(list)
     shared = []
     for job in report.jobs:
         if len(job.customers) == 1:
             by_customer[job.customers[0]].append(job)
         elif len(job.customers) > 1:
             shared.append(job.job_id)
+            for customer in job.customers:
+                shared_by_customer[customer].append(job.job_id)
     no_job_lines: dict[str, int] = defaultdict(int)
     for line in invoices.accepted:
         if not line.get("job_id"):
             no_job_lines[line["customer"]] += 1
-    for customer in sorted(set(by_customer) | set(no_job_lines)):
+    for customer in sorted(set(by_customer) | set(no_job_lines) | set(shared_by_customer)):
         jobs = by_customer.get(customer, [])
         counted = [j for j in jobs if j.status != "unavailable"]
         reasons = []
@@ -200,13 +227,16 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
         if any(j.status == "provisional" for j in counted):
             reasons.append("Includes provisional jobs: "
                            + ", ".join(j.job_id for j in counted if j.status == "provisional") + ".")
+        if shared_by_customer.get(customer):
+            reasons.append("Left out, billed to more than one customer: "
+                           + ", ".join(shared_by_customer[customer]) + ".")
         if no_job_lines.get(customer):
             reasons.append(f"{no_job_lines[customer]} invoice line(s) have no job number and are left out.")
         if not counted:
             status = "unavailable"
         else:
             status = _worst([j.status for j in counted] + (["provisional"] if reasons else []))
-        report.customers.append(CustomerResult(customer, tuple(j.job_id for j in jobs),
+        report.customers.append(CustomerResult(customer, tuple(j.job_id for j in jobs) + tuple(shared_by_customer[customer]),
                                                sum((j.sales for j in counted), ZERO),
                                                sum((j.total_costs for j in counted), ZERO), status, reasons))
 
