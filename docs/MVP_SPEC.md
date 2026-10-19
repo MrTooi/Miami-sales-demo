@@ -57,13 +57,16 @@ None of these has been measured yet; they are targets, not results. Record actua
    - Reuse the existing money parser and validators only where their input contracts fit.
    - Today's helpers are not a job importer. `data_pipeline.normalize` accepts only fixed `sales`/`expenses` schemas and raises on bad input instead of reporting rows. `transaction_integrity.deduplicate` needs canonical source-aware transaction events, so rows are converted to those events before it is applied.
    - Rows are never silently dropped or guessed.
-2. **Excel (.xlsx) and multiple files**, with saved per-shop mappings, plus coverage and provenance rules.
-3. **Profit by job and customer**, as defined above.
+2. **Profit by job and customer**, as defined above, from one sales CSV and one costs CSV linked by job number.
    - This is a **new** job/customer-keyed calculation on exact Decimal amounts.
    - `finance_engine.summarize` is a period-total helper with no job or customer grouping, not an existing job-profit engine.
-4. **"Where you're losing money" list.**
-5. **Weekly summary.**
-6. **Pilot data-safety minimums** (can run alongside 1–5).
+   - Linking the two files needs only what is required for profit. Excel and saved mappings wait for step 4.
+3. **Pilot data-safety minimums** (`LAUNCH_RISK_REGISTER.md`). After this, and only with the owner's explicit approval of real data, 1–2 pilot shops can use MarginX on their own files.
+4. **Excel (.xlsx), more file combinations and saved per-shop mappings**, plus coverage and provenance rules.
+5. **"Where you're losing money" list.**
+6. **Weekly summary.**
+
+**Order changed on 2026-10-19 by the owner:** the safety minimums moved ahead of the extra features, so a real pilot can start right after profit per job, and pilot feedback shapes steps 4–6. Until step 3 is done and the owner approves real data, MarginX is used with **made-up files only**; anonymized real exports are not allowed either.
 
 ## Out of scope for the pilot
 - Live QuickBooks/Square/bank connections (they need credentials and a separate owner decision).
