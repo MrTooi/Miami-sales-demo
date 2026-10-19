@@ -9,6 +9,7 @@ only; it does not calculate profit (build step 3, docs/MVP_SPEC.md).
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import re
 from collections import Counter
@@ -47,7 +48,8 @@ SYNONYMS: dict[str, tuple[str, ...]] = {
     "date": ("date", "invoice date", "bill date", "txn date", "transaction date"),
     "customer": ("customer", "customer name", "client", "client name", "name", "bill to"),
     "vendor": ("vendor", "vendor name", "payee", "supplier", "name"),
-    "amount": ("amount", "total", "amt", "amount usd", "amt usd", "total amount", "invoice total", "open balance"),
+    # Never balances: an open/outstanding balance is what's still owed, not what was billed.
+    "amount": ("amount", "total", "amt", "amount usd", "amt usd", "total amount", "invoice total"),
     "job_id": ("job", "job id", "job no", "job number", "job num", "project", "project id", "work order", "wo"),
     "description": ("description", "memo", "item", "service", "product service"),
     "cost_type": ("cost type", "type", "category", "account", "expense type"),
@@ -61,7 +63,7 @@ DATE_FORMATS = {
 }
 
 LABOR_WORDS = ("labor", "labour", "wages", "payroll")
-FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 MAX_FILE_BYTES = 5_000_000
 
 
@@ -282,23 +284,36 @@ def missing_report(result: IntakeResult) -> list[dict]:
     return items
 
 
+def confirmation_key(data: bytes, kind: str, mapping: dict[str, str | None], date_format: str) -> str:
+    """Identifies exactly what the owner confirmed: this file, this mapping, this date format."""
+    choices = repr((kind, sorted((k, v or "") for k, v in mapping.items()), date_format)).encode("utf-8")
+    return "confirm-" + hashlib.sha256(hashlib.sha256(data).digest() + choices).hexdigest()[:24]
+
+
 def upload_allowed(use_sample: bool, has_upload: bool, confirmed_made_up: bool) -> bool:
     """Pilot gate (D-003): an own file is processed only after the owner confirms it is made-up or anonymized."""
     return use_sample or (has_upload and confirmed_made_up)
 
 
 def safe_cell(value: str) -> str:
-    """Neutralize spreadsheet formula prefixes when a value is written back out to a file."""
+    """Spreadsheet-safe export policy: prefix an apostrophe when a cell could be read as a formula.
+
+    That is when it starts with = + - @ or a tab, carriage return or line feed, or
+    when it reaches one of = + - @ after leading spaces or control characters.
+    """
     text = "" if value is None else str(value)
-    return "'" + text if text.startswith(FORMULA_PREFIXES) else text
+    stripped = text.lstrip("".join(chr(c) for c in range(33)))
+    risky = text.startswith(FORMULA_PREFIXES) or stripped.startswith(FORMULA_PREFIXES[:4])
+    return "'" + text if risky else text
 
 
 def rejected_rows_csv(result: IntakeResult) -> str:
-    """Rejected records with reasons, for the owner to fix and re-upload.
+    """Spreadsheet-safe repair export of rejected records, to fix and re-upload.
 
-    Lossless: every original column, under its original header and in its
-    original order, plus any extra cells from over-long rows. Cells starting with
-    a formula character get a leading apostrophe so spreadsheets show them as text.
+    Every original column appears under its original header and in its original
+    order, plus any extra cells from over-long rows; short rows are padded with
+    blanks. This is not an exact byte-for-byte copy: cells and headers that could
+    be read as formulas get a leading apostrophe (see safe_cell).
     """
     width = max([len(result.headers), *(len(item["cells"]) for item in result.rejected)])
     taken = {h.strip().lower() for h in result.headers}

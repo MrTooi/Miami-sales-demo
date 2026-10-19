@@ -5,7 +5,6 @@ in memory for this session and are never saved.
 """
 from __future__ import annotations
 
-import hashlib
 import sys
 from pathlib import Path
 
@@ -96,11 +95,10 @@ if problems:
         st.info(p)
     st.stop()
 
-# The owner must confirm this exact mapping; changing any column or the date format
-# gives a new checkbox, so an old confirmation never carries over.
-confirm_key = "confirm-" + hashlib.sha256(
-    repr((kind, sorted((k, v or "") for k, v in mapping.items()), date_format)).encode("utf-8")).hexdigest()[:16]
-if not st.checkbox("These columns and the date format are right", key=confirm_key):
+# The owner must confirm this exact file, mapping and date format; changing any of
+# them gives a new checkbox, so an old confirmation never carries over.
+if not st.checkbox("These columns and the date format are right",
+                   key=ji.confirmation_key(data, kind, mapping, date_format)):
     st.info("Check the columns above, then tick the box to see what's missing.")
     st.stop()
 

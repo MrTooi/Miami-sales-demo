@@ -80,6 +80,12 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(("Payee", "Bill No", "Job", "Type"),
                          (cost_map["vendor"], cost_map["cost_id"], cost_map["job_id"], cost_map["cost_type"]))
 
+    def test_open_balance_is_never_suggested_as_the_amount(self):
+        mapping = ji.suggest_mapping(["Num", "Date", "Customer", "Open Balance"], "invoices")
+        self.assertIsNone(mapping["amount"])
+        mapping = ji.suggest_mapping(["Num", "Date", "Customer", "Open Balance", "Amount"], "invoices")
+        self.assertEqual("Amount", mapping["amount"])
+
     def test_unrecognised_headers_are_left_for_the_owner(self):
         mapping = ji.suggest_mapping(["Cust Nm", "Amt (USD)", "When"], "invoices")
         self.assertIsNone(mapping["customer"])
@@ -192,6 +198,21 @@ class DuplicateTests(unittest.TestCase):
         self.assertIn("Exact duplicate of row 2", result.rejected[0]["reasons"][0])
 
 
+class ConfirmationKeyTests(unittest.TestCase):
+    def test_any_change_to_file_mapping_or_date_format_needs_fresh_confirmation(self):
+        mapping = {"date": "Date", "vendor": "Payee", "amount": "Amount"}
+        base = ji.confirmation_key(b"Date,Payee,Amount\n10/01/2026,A,1.00\n", "costs", mapping, "MM/DD/YYYY")
+        self.assertEqual(base, ji.confirmation_key(b"Date,Payee,Amount\n10/01/2026,A,1.00\n", "costs", dict(mapping), "MM/DD/YYYY"))
+        changed = [
+            ji.confirmation_key(b"Date,Payee,Amount\n10/01/2026,A,9.00\n", "costs", mapping, "MM/DD/YYYY"),  # same headers, new file
+            ji.confirmation_key(b"Date,Payee,Amount\n10/01/2026,A,1.00\n", "costs", {**mapping, "memo": "Payee"}, "MM/DD/YYYY"),
+            ji.confirmation_key(b"Date,Payee,Amount\n10/01/2026,A,1.00\n", "costs", mapping, "DD/MM/YYYY"),
+            ji.confirmation_key(b"Date,Payee,Amount\n10/01/2026,A,1.00\n", "invoices", mapping, "MM/DD/YYYY"),
+        ]
+        self.assertNotIn(base, changed)
+        self.assertEqual(len(changed), len(set(changed)))
+
+
 class UploadGateTests(unittest.TestCase):
     def test_own_file_needs_made_up_confirmation(self):
         self.assertTrue(ji.upload_allowed(True, False, False))
@@ -207,6 +228,19 @@ class ExportSafetyTests(unittest.TestCase):
         headers, rows = ji.read_csv(data)
         result = ji.intake(headers, rows, self.MAP, "costs", "MM/DD/YYYY")
         return list(csv.reader(io.StringIO(ji.rejected_rows_csv(result))))
+
+    def test_safe_cell_policy_covers_control_and_whitespace_prefixes(self):
+        for risky in ("=1+1", "+1", "-1", "@SUM(A1)", "\t=1", "\r=1", "\n=1+1", " =1+1", "\x00=1", "  \n @x"):
+            with self.subTest(risky=risky):
+                self.assertEqual("'" + risky, ji.safe_cell(risky))
+        for plain in ("Menu boards", "1.00", " plain", "a=b", "", None):
+            with self.subTest(plain=plain):
+                self.assertEqual("" if plain is None else plain, ji.safe_cell(plain))
+
+    def test_newline_prefixed_formulas_are_neutralized_in_headers_and_cells(self):
+        exported = self.export(b'Date,Payee,Amount,"\n=HDR()"\n10/01/2026,"\n=1+1",-5,x\n')
+        self.assertEqual("'\n=HDR()", exported[0][-1])
+        self.assertEqual("'\n=1+1", exported[1][3])
 
     def test_formula_headers_are_neutralized_in_the_export(self):
         exported = self.export(b'Date,Payee,Amount,"=HYPERLINK(""http://x.invalid"")"\n10/01/2026,A,-5,n\n')
