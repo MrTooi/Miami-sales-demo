@@ -251,7 +251,9 @@ class CompletenessTests(unittest.TestCase):
     def test_direct_cost_words_win_over_fee_words(self):
         for text, category in (("Materials processing", "materials"), ("Labor fees", "labor"),
                                ("Outsourced install fee", "outsourced"), ("Ink processing fee", "materials"),
-                               ("Processing fees", "fees_overhead"), ("Rent", "fees_overhead")):
+                               ("Processing fees", "fees_overhead"), ("Rent", "fees_overhead"),
+                               ("Merchant fees", "fees_overhead"), ("Delivery fee", "other"),
+                               ("Installation fee", "other"), ("Rush fee", "other")):
             self.assertEqual(category, jp.cost_category(text), text)
         # The review's example: unlinked "Materials processing" holds the job back.
         report = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
@@ -260,6 +262,16 @@ class CompletenessTests(unittest.TestCase):
                              b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n")
         self.assertEqual(("provisional", Decimal("50.00")), (report.jobs[0].status, report.jobs[0].contribution))
         self.assertIn("worth $40.00 have no job number", " ".join(report.jobs[0].reasons))
+
+    def test_unlinked_delivery_or_installation_fees_hold_jobs_back(self):
+        for fee in (b"Delivery fee", b"Installation fee"):
+            with self.subTest(fee=fee):
+                report = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                                     b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n"
+                                     b"B-3,10/02/2026,Courier,," + fee + b",40.00\n",
+                                     b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n")
+                self.assertEqual(("provisional", Decimal("50.00")),
+                                 (report.jobs[0].status, report.jobs[0].contribution))
 
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
@@ -283,7 +295,7 @@ class CompletenessTests(unittest.TestCase):
         self.assertEqual("outsourced", jp.cost_category("Subcontractor"))
         self.assertEqual("materials", jp.cost_category("COGS:Materials"))
         self.assertEqual("other", jp.cost_category("Delivery"))
-        self.assertEqual("fees_overhead", jp.cost_category("Non-labor fees"))
+        self.assertEqual("other", jp.cost_category("Non-labor fees"))  # a plain fee may be a job cost
         self.assertEqual("unknown", jp.cost_category("  "))
 
     def test_wrong_kinds_are_refused(self):

@@ -2,13 +2,16 @@
 
 Input is what step 1 accepted: invoice lines and cost lines (job_intake.intake), linked by
 job number. Every result is labeled "direct job contribution": sales billed on the job's
-invoice lines minus the costs recorded against the job. Processor fees, overhead and costs
-not linked to a job are never included, and the result says so.
+invoice lines minus every cost recorded against the job, by type (payment-processing fees and
+overhead included only when recorded against a job). Sales and costs not linked to a job are
+never spread over jobs; they are totalled in the notes.
 
 A result is shown as complete only when the job has sales, labor and materials or outsourced
-work recorded, with every cost line's type known. Otherwise it is provisional (shown, marked,
-with the reasons) or unavailable (no figure at all). Customer totals inherit their jobs'
-status. Money is exact Decimal throughout; nothing is rounded, estimated or allocated.
+work recorded, every cost line's type is known, none of its lines failed to import, and the
+costs file has no unlinked cost that could belong to it (only clear overhead and payment-
+processing fees are exempt). Otherwise it is provisional (shown, marked, with the reasons) or
+unavailable (no figure at all). Customer totals inherit their jobs' status. Money is exact
+Decimal throughout; nothing is rounded, estimated or allocated.
 """
 from __future__ import annotations
 
@@ -28,7 +31,9 @@ CATEGORY_LABELS = {"materials": "Materials", "outsourced": "Outsourced work", "l
 UNKNOWN_TYPES = {"unknown", "uncategorized", "uncategorised", "n a", "na", "none", "tbd", "to be determined",
                  "ask my accountant", "unclassified", "not classified", "not categorized", "not categorised",
                  "no category", "not set", "pending"}
-FEE_OVERHEAD_WORDS = {"fee", "fees", "processing", "merchant", "overhead", "rent", "utilities", "utility",
+# Only costs that clearly aren't tied to one job: a plain "fee" (delivery fee, installation
+# fee) may well be a job's cost, so it is not here and stays "other".
+FEE_OVERHEAD_WORDS = {"processing", "merchant", "overhead", "rent", "utilities", "utility",
                       "insurance", "admin", "administrative"}
 MATERIAL_WORDS = {"material", "materials", "supplies", "supply", "inventory", "stock", "substrate", "substrates",
                   "blanks", "media", "ink", "vinyl", "paper"}
