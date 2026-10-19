@@ -84,6 +84,26 @@ class ChatGPTReviewScriptTests(unittest.TestCase):
                 self.assertIn("REVIEW INCOMPLETE", comment)
                 self.assertNotIn("qualifying automated review", comment)
 
+    def test_section_structure_is_enforced(self):
+        good = answer()
+        cases = {
+            "empty warnings": answer(warnings=""),
+            "empty could-not-verify": answer(unverified=""),
+            "punctuation-only section": answer(unverified="-"),
+            "empty required changes": answer(required=""),
+            "duplicated section": good + "\n\n**Warnings**\nmore",
+            "out of order": (
+                "**Verdict:** PASS\n\n**Warnings**\nNone\n\n**Required changes**\nNone\n\n"
+                "**What I could not verify**\nRuntime."
+            ),
+            "verdict not on the first line": "Here is my review.\n\n" + good,
+        }
+        for name, text in cases.items():
+            with self.subTest(name):
+                verdict, problems = review.assess(text, truncated=False, stale=False)
+                self.assertTrue(problems)
+                self.assertIn("REVIEW INCOMPLETE", review.format_comment(text, "m", "abc", False, verdict, problems))
+
     def test_pass_with_required_changes_is_contradictory(self):
         for verdict in ("PASS", "PASS WITH WARNINGS"):
             with self.subTest(verdict):

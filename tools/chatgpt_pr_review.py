@@ -90,15 +90,39 @@ def extract_output_text(response: dict) -> str:
     return text
 
 
-def _section_body(text: str, heading: str) -> str:
-    start = text.index(heading) + len(heading)
-    ends = [text.find(h, start) for h in SECTIONS if text.find(h, start) != -1]
-    return text[start:min(ends)] if ends else text[start:]
-
-
 def _says_none(body: str) -> bool:
     words = re.sub(r"[^a-z]+", " ", body.lower()).split()
     return words[:1] == ["none"] and len(words) <= 3
+
+
+def _sections(review: str) -> tuple[dict[str, str] | None, list[str]]:
+    """Split the answer into its required sections, or explain why the shape is wrong.
+
+    Each heading must appear exactly once, in the documented order, and carry
+    content (the word None counts as content for the first two).
+    """
+    problems = []
+    counts = {h: review.count(h) for h in SECTIONS}
+    missing = [h for h, n in counts.items() if n == 0]
+    duplicated = [h for h, n in counts.items() if n > 1]
+    if missing:
+        problems.append("missing required section(s): " + ", ".join(missing))
+    if duplicated:
+        problems.append("section(s) appear more than once: " + ", ".join(duplicated))
+    if problems:
+        return None, problems
+    starts = [review.index(h) for h in SECTIONS]
+    if starts != sorted(starts):
+        return None, ["required sections are out of order"]
+    bodies = {}
+    for i, heading in enumerate(SECTIONS):
+        begin = starts[i] + len(heading)
+        end = starts[i + 1] if i + 1 < len(SECTIONS) else len(review)
+        bodies[heading] = review[begin:end].strip(" \t\r\n:")
+    empty = [h for h, body in bodies.items() if not re.search(r"[A-Za-z0-9]", body)]
+    if empty:
+        return None, ["empty required section(s): " + ", ".join(empty)]
+    return bodies, []
 
 
 def assess(review: str, *, truncated: bool, stale: bool) -> tuple[str | None, list[str]]:
@@ -106,14 +130,14 @@ def assess(review: str, *, truncated: bool, stale: bool) -> tuple[str | None, li
     problems = []
     matches = VERDICT_LINE.findall(review)
     labels = len(ANY_VERDICT_LABEL.findall(review))
-    verdict = matches[0] if len(matches) == 1 and labels == 1 else None
+    first_line = review.strip().splitlines()[0] if review.strip() else ""
+    verdict = matches[0] if len(matches) == 1 and labels == 1 and VERDICT_LINE.match(first_line) else None
     if verdict is None:
-        problems.append("the answer does not contain exactly one valid **Verdict:** line (PASS / PASS WITH WARNINGS / FAIL)")
-    missing = [h for h in SECTIONS if h not in review]
-    if missing:
-        problems.append("missing required section(s): " + ", ".join(missing))
-    if verdict in ("PASS", "PASS WITH WARNINGS") and "**Required changes**" in review:
-        if not _says_none(_section_body(review, "**Required changes**")):
+        problems.append("the first line is not the one valid **Verdict:** line (PASS / PASS WITH WARNINGS / FAIL)")
+    bodies, shape_problems = _sections(review)
+    problems.extend(shape_problems)
+    if verdict in ("PASS", "PASS WITH WARNINGS") and bodies is not None:
+        if not _says_none(bodies["**Required changes**"]):
             problems.append(f"verdict {verdict} contradicts listed required changes")
     if truncated and verdict != "FAIL":
         problems.append("the diff was truncated, so only a FAIL can be posted as a verdict; a full manual review is required")
