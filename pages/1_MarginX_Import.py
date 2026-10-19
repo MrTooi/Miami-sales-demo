@@ -160,6 +160,20 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
         if amount_scope is None:
             return
 
+    # A line equal to the sum of its document's other lines may be a subtotal, or a real line
+    # that adds up by coincidence: the owner says which, one line at a time.
+    subtotals: dict[int, bool] = {}
+    if amount_scope == "line":
+        for item in ji.subtotal_questions(headers, records, mapping, kind):
+            answer = st.radio(
+                f"In {name}, row {item['row']} of {item['label']} shows {item['amount']}, which equals its other "
+                "lines added together. Is it a subtotal?", (False, True), index=None,
+                format_func={False: "No, it's a real line (count it)", True: "Yes, a subtotal (don't count it)"}.get,
+                key=f"{key}-{kind}-subtotal-{asked}-{item['row']}")
+            if answer is None:
+                return
+            subtotals[item["row"]] = answer
+
     # Date format: automatic unless the dates could genuinely mean two different days.
     # Answers are keyed to the file type and date column, so a changed choice asks again.
     values = ji.column_values(headers, records, mapping["date"])
@@ -185,7 +199,7 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
                                    format_func=lambda f: describe_format(f, example),
                                    key=f"{date_key}-override-{date_format}")
 
-    result = ji.intake(headers, records, mapping, kind, date_format, amount_scope)
+    result = ji.intake(headers, records, mapping, kind, date_format, amount_scope, subtotals)
     st.caption(f"Read as {KIND_LABELS[kind]}, dates as {date_format}.")
     for item in ji.missing_report(result):
         # Report text can quote values from the file, so it is shown as plain text.

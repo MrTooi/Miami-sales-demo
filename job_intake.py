@@ -432,10 +432,21 @@ def amount_scope_question(headers: list[str], records: list[Record], mapping: di
     return {"label": _label(key, kind), "lines": len(lines)}
 
 
+def subtotal_questions(headers: list[str], records: list[Record], mapping: dict[str, str | None],
+                       kind: str) -> list[dict]:
+    """Lines that may be a subtotal: in a document with 3+ lines, a non-zero amount equal to the
+    sum of the document's other lines. That can be a summary line (counting it would double the
+    document) or a real line that adds up by coincidence, so the owner is asked about each one.
+
+    Returns [{"row": 4, "label": "invoice INV-1", "amount": "100.00"}, ...]. Only relevant after
+    the owner says a generic amount column holds each line's own amount.
+    """
+    return [{"row": row, "label": _label(key, kind), "amount": text}
+            for row, (key, text) in _subtotal_rows(headers, records, mapping, kind).items()]
+
+
 def _subtotal_rows(headers: list[str], records: list[Record], mapping: dict[str, str | None],
-                   kind: str) -> dict[int, tuple[str, ...]]:
-    """Rows of a document with 3+ lines whose amount equals the sum of the document's other lines:
-    a summary line, which counted as a line would double the document. Row -> document."""
+                   kind: str) -> dict[int, tuple[tuple[str, ...], str]]:
     index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
     lines: dict[tuple[str, ...], list[tuple[int, object]]] = {}
     seen: set[tuple[str, ...]] = set()
@@ -450,21 +461,23 @@ def _subtotal_rows(headers: list[str], records: list[Record], mapping: dict[str,
         except ValueError:
             continue
         if key:
-            lines.setdefault(key, []).append((r.row, amount))
+            lines.setdefault(key, []).append((r.row, amount, values["amount"]))
     found = {}
     for key, rows in lines.items():
         if len(rows) >= 3:
-            total = sum(a for _, a in rows)
-            found.update({row: key for row, a in rows if a == total - a})
+            total = sum(a for _, a, _ in rows)
+            found.update({row: (key, text) for row, a, text in rows if a != 0 and a == total - a})
     return found
 
 
 def intake(headers: list[str], records: list[Record], mapping: dict[str, str | None], kind: str,
-           date_format: str, amount_scope: str | None = None) -> IntakeResult:
+           date_format: str, amount_scope: str | None = None,
+           subtotals: dict[int, bool] | None = None) -> IntakeResult:
     """Accept or reject every record with a reason. Raises IntakeError if the mapping is unusable.
 
     amount_scope is the owner's answer to amount_scope_question: "line" (each line's own
     amount) or "document" (the whole invoice's or bill's total, repeated on each line).
+    subtotals answers subtotal_questions: row -> True if that line is a subtotal.
     """
     if kind not in KINDS:
         raise IntakeError(f"Unknown file type: {kind}")
@@ -493,7 +506,11 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
     per_document = total_header or answered_total
     lines_per_document = _lines_per_document(headers, records, mapping, kind, key_of) if per_document else Counter()
     entity = "Invoice" if kind == "invoices" else "Bill"
-    subtotals = _subtotal_rows(headers, records, mapping, kind) if question and amount_scope == "line" else {}
+    candidates = _subtotal_rows(headers, records, mapping, kind) if question and amount_scope == "line" else {}
+    subtotals = subtotals or {}
+    unanswered = [row for row in candidates if row not in subtotals]
+    if unanswered:
+        raise IntakeError(f"Say whether row {unanswered[0]} is a subtotal or a real line.")
 
     for rec in records:
         number = rec.row
@@ -523,9 +540,9 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             # checked against the document's other lines.
             reasons.append(f"No {entity.lower()} number, and '{mapping['amount']}' is a whole "
                            f"{entity.lower()}'s total, so it can't be checked against other lines.")
-        if number in subtotals:
-            reasons.append(f"Looks like a subtotal: {values['amount']} is the sum of the other lines of "
-                           f"{_label(subtotals[number], kind)}, so it isn't counted again.")
+        if number in candidates and subtotals[number]:
+            reasons.append(f"Subtotal of {_label(candidates[number][0], kind)} (the owner said so); "
+                           "its lines are already counted.")
         if document and lines_per_document[document] > 1:
             reasons.append(f"{_label(document, kind).capitalize()} has {lines_per_document[document]} lines and "
                            f"'{mapping['amount']}' is the whole {entity.lower()}'s total, so it can't be "

@@ -242,19 +242,34 @@ class MappingTests(unittest.TestCase):
         headers, rows, mapping = load("fictional_invoices.csv", "invoices")
         self.assertEqual({"label": "invoice FIC-1002", "lines": 2}, ji.amount_scope_question(headers, rows, mapping, "invoices"))
 
-    def test_summary_line_is_never_counted_with_its_detail_lines(self):
+    def test_possible_subtotal_lines_are_asked_about_not_decided(self):
         headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Total\n"
                                     b"INV-1,10/31/2026,Acme,Banner,40.00\nINV-1,10/31/2026,Acme,Install,60.00\n"
-                                    b"INV-1,10/31/2026,Acme,Invoice total,100.00\n")
+                                    b"INV-1,10/31/2026,Acme,Stand,100.00\n")
         mapping = ji.suggest_mapping(headers, "invoices")
-        self.assertIsNotNone(ji.amount_scope_question(headers, rows, mapping, "invoices"))
-        result = ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY", "line")
-        self.assertEqual([Decimal("40.00"), Decimal("60.00")], [r["amount"] for r in result.accepted])
-        self.assertEqual([4], [r["row"] for r in result.rejected])
-        self.assertIn("Looks like a subtotal", " ".join(result.rejected[0]["reasons"]))
-        # Two lines can't be told apart from a repeated total this way; the question covers them.
-        two = ji.read_csv(b"Invoice,Date,Customer,Total\nA,10/31/2026,X,100.00\nA,10/31/2026,X,100.00 \n")
-        self.assertEqual(2, len(ji.intake(*two, ji.suggest_mapping(two[0], "invoices"), "invoices", "MM/DD/YYYY", "line").accepted))
+        self.assertEqual([{"row": 4, "label": "invoice INV-1", "amount": "100.00"}],
+                         ji.subtotal_questions(headers, rows, mapping, "invoices"))
+        with self.assertRaises(ji.IntakeError):  # never decided without the owner
+            ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY", "line")
+        real = ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY", "line", {4: False})
+        self.assertEqual([Decimal("40.00"), Decimal("60.00"), Decimal("100.00")], [r["amount"] for r in real.accepted])
+        summary = ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY", "line", {4: True})
+        self.assertEqual([Decimal("40.00"), Decimal("60.00")], [r["amount"] for r in summary.accepted])
+        self.assertEqual([4], [r["row"] for r in summary.rejected])
+        self.assertIn("Subtotal of invoice INV-1", " ".join(summary.rejected[0]["reasons"]))
+
+    def test_zero_negative_and_non_adding_lines(self):
+        def questions(body):
+            headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Total\n" + body)
+            return ji.subtotal_questions(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices")
+        # Zero lines never count as subtotals; amounts that don't add up need no question.
+        self.assertEqual([], questions(b"A,10/31/2026,X,Free proof,0.00\nA,10/31/2026,X,Setup,0.00\nA,10/31/2026,X,Note,0.00\n"))
+        self.assertEqual([], questions(b"A,10/31/2026,X,Sign,40.00\nA,10/31/2026,X,Stand,60.00\nA,10/31/2026,X,Vinyl,70.00\n"))
+        # A discount line can make a real line equal the others' sum: asked, never decided.
+        self.assertEqual([4], [q["row"] for q in questions(
+            b"A,10/31/2026,X,Sign,100.00\nA,10/31/2026,X,Discount,-20.00\nA,10/31/2026,X,Install,80.00\n")])
+        # Two lines are covered by the amount question, not this one.
+        self.assertEqual([], questions(b"A,10/31/2026,X,Sign,100.00\nA,10/31/2026,X,Stand,100.00\n"))
 
     def test_no_amount_question_when_the_file_shows_what_the_amount_means(self):
         # One line per invoice, or a column named per line or per invoice.
