@@ -78,7 +78,7 @@ def latest_review(comments: list[dict]) -> dict | None:
     found = None
     for c in sorted(comments, key=lambda c: c.get("created_at") or ""):
         body = c.get("body") or ""
-        if "REVIEW INCOMPLETE" in body:
+        if "**Status: REVIEW INCOMPLETE" in body:
             found = {"verdict": "INCOMPLETE", "url": c.get("html_url"), "at": c.get("created_at")}
         elif m := VERDICT.search(body):
             found = {"verdict": m.group(1), "url": c.get("html_url"), "at": c.get("created_at")}

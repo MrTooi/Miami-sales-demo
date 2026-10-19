@@ -101,8 +101,9 @@ class ProgressLogicTests(unittest.TestCase):
         self.assertEqual("FAIL", latest_review([comment])["verdict"])
         # A fix note that only mentions the format has no verdict.
         note = {"created_at": "2026-10-19T05:00:00Z", "html_url": "y",
-                "body": "the first line is the one valid `**Verdict:**` line"}
+                "body": "the first line is the one valid `**Verdict:**` line; anything else is REVIEW INCOMPLETE"}
         self.assertEqual("FAIL", latest_review([comment, note])["verdict"])
+        self.assertEqual("x", latest_review([comment, note])["url"])
 
     def test_ci_state(self):
         self.assertEqual("UNKNOWN", ci_state(None))
