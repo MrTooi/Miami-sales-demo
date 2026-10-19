@@ -148,12 +148,15 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
     scope = ji.amount_scope_question(headers, records, mapping, kind)
     if scope:
         what = "invoice" if kind == "invoices" else "bill"
+        # The answer is keyed to the whole mapping and the question, so changing how lines are
+        # grouped (or which column is the amount) asks again instead of reusing an old answer.
+        asked = hashlib.sha256(repr((sorted(mapping.items(), key=str), scope)).encode("utf-8")).hexdigest()[:12]
         amount_scope = st.radio(
-            f"In {name}, {what} {scope['document']} is on {scope['lines']} lines, each showing the same "
+            f"In {name}, {scope['label']} has {scope['lines']} lines that all show the same "
             f"'{mapping['amount']}'. What is that number?", ji.AMOUNT_SCOPES, index=None,
             format_func={"line": "Each line's own amount (count every line)",
                          "document": f"The whole {what}'s total, repeated on each line"}.get,
-            key=f"{key}-{kind}-scope-{mapping['amount']}")
+            key=f"{key}-{kind}-scope-{asked}")
         if amount_scope is None:
             return
 

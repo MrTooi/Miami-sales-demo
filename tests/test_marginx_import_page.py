@@ -272,7 +272,7 @@ class MarginXImportPageTests(unittest.TestCase):
     def test_repeated_generic_total_asks_what_the_number_is(self):
         csv_text = ("Invoice,Date,Customer,Description,Total\n"
                     "INV-1,10/31/2026,X (fictional),Banner,100.00\nINV-1,10/31/2026,X (fictional),Install,100.00\n")
-        label = ("In fictional_invoices.csv, invoice INV-1 is on 2 lines, each showing the same 'Total'. "
+        label = ("In fictional_invoices.csv, invoice INV-1 has 2 lines that all show the same 'Total'. "
                  "What is that number?")
         at = self.with_files(csv_text, "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         question = radio(at, label)
@@ -286,6 +286,32 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertIn("2 rows of 2 couldn't be imported", page_text(at))
         self.assertIn("No invoice lines were imported", page_text(at))
+
+    def test_changing_how_lines_are_grouped_asks_the_amount_question_again(self):
+        csv_text = ("Invoice,Order,Date,Customer,Description,Total\n"
+                    "INV-1,O-7,10/31/2026,X (fictional),Banner,100.00\nINV-1,O-7,10/31/2026,X (fictional),Install,100.00\n")
+        at = self.with_files(csv_text, "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        first = next(r for r in at.radio if "What is that number?" in r.label)
+        first.set_value("line").run()
+        self.assertIn("2 invoice lines imported (1 invoice)", page_text(at))
+        # The owner says the order column is the invoice number: the question is now about
+        # order O-7, and nothing is imported until it is answered again.
+        next(s for s in at.selectbox if s.label == "Invoice number *").set_value("Order").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIsNone(next(r for r in at.radio if "invoice O-7 has 2 lines" in r.label).value)
+        self.assertNotIn("invoice lines imported", page_text(at))
+        self.assertNotIn("invoice line imported", page_text(at))
+
+    def test_costs_without_bill_numbers_ask_about_a_repeated_amount(self):
+        at = self.with_files("Invoice,Date,Customer,Amount\nA,10/31/2026,X (fictional),1.00\n",
+                             "Date,Vendor,Memo,Amount\n10/31/2026,Paper Co (fictional),Vinyl,300.00\n"
+                             "10/31/2026,Paper Co (fictional),Ink,300.00\n")
+        question = radio(at, "In fictional_costs.csv, Paper Co (fictional) on 10/31/2026 (no bill number) has 2 lines "
+                             "that all show the same 'Amount'. What is that number?")
+        self.assertNotIn("cost line", page_text(at))
+        question.set_value("document").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("2 rows of 2 couldn't be imported", page_text(at))
 
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
