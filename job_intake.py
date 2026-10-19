@@ -94,6 +94,13 @@ PAYMENT_WORDS = {"deposit", "deposits", "payment", "payments", "payout", "payout
 CASH_MOVEMENT_WORDS = PAYMENT_WORDS | BANK_WORDS
 # Headers describing what's still owed, never the amount billed.
 BALANCE_WORDS = {"balance", "due", "outstanding", "owed", "unpaid", "remaining", "open"}
+# Headers describing money paid, received or moved ("Payment Amount", "Amount Paid"),
+# never the amount billed.
+PAID_WORDS = PAYMENT_WORDS | {"paid"}
+# Headers holding a whole invoice's or bill's total. Repeated on every line of a
+# multi-line document, they can't be counted per line.
+DOCUMENT_TOTALS = {"invoice total", "bill total", "invoice amount", "bill amount", "invoice total amount",
+                   "bill total amount", "total invoice", "total bill"}
 
 FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 MAX_FILE_BYTES = 5_000_000
@@ -214,12 +221,32 @@ def validate_mapping(mapping: dict[str, str | None], headers: list[str], kind: s
         what = "invoice" if kind == "invoices" else "bill"
         problems.append(f"'{amount}' looks like a balance still owed, not the amount billed. "
                         f"Choose the column with the {what} or line total.")
+    elif amount and is_paid_column(amount):
+        # Also refused when chosen by hand: money paid or received is a cash movement,
+        # not a sale or a cost (MVP spec), whatever the file was said to be.
+        what = "invoice" if kind == "invoices" else "bill"
+        problems.append(f"'{amount}' looks like money paid or received, not the amount billed. "
+                        f"Choose the column with the {what} or line total.")
+    if kind == "costs" and amount and is_document_total(amount) and not mapping.get("cost_id"):
+        # Without bill numbers, a bill total repeated on each line of a bill can't be caught.
+        problems.append(f"'{amount}' is a whole bill's total. Choose the bill number column too, "
+                        "so a total repeated on several lines isn't counted more than once.")
     return problems
 
 
 def is_balance_column(header: str) -> bool:
     """Headers like "Open Balance", "Amount Due" or "Outstanding" describe what's still owed."""
     return bool(set(_norm(header).split()) & BALANCE_WORDS)
+
+
+def is_paid_column(header: str) -> bool:
+    """Headers like "Payment Amount", "Amount Paid" or "Payout" describe money moved, not billed."""
+    return bool(set(_norm(header).split()) & PAID_WORDS)
+
+
+def is_document_total(header: str) -> bool:
+    """Headers like "Invoice Total" hold the whole document's total, not one line's amount."""
+    return _norm(header) in DOCUMENT_TOTALS
 
 
 def suggest_date_format(values: list[str]) -> str | None:
@@ -349,6 +376,12 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
     index = {f: headers.index(h) for f, h in mapping.items() if h}
     result = IntakeResult(kind=kind, total_rows=len(records), mapped_fields=tuple(index), headers=tuple(headers))
     seen_rows: dict[tuple[str, ...], int] = {}
+    # A whole-document total on a document with several lines would be counted once
+    # per line, so those lines are rejected until a line amount column is chosen.
+    id_field = "invoice_id" if kind == "invoices" else "cost_id"
+    lines_per_document: Counter = Counter()
+    if is_document_total(mapping["amount"]) and id_field in index:
+        lines_per_document.update(r.cells[index[id_field]].strip() for r in records if len(r.cells) == len(headers))
 
     for rec in records:
         number = rec.row
@@ -372,6 +405,13 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
                 reasons.append(f"Amount '{values['amount']}' isn't a valid dollar amount (max 2 decimals).")
         if kind == "costs" and amount is not None and amount < 0:
             reasons.append("Cost is negative; record refunds or credits separately.")
+        document = values.get(id_field)
+        if document and lines_per_document[document] > 1:
+            entity = "Invoice" if kind == "invoices" else "Bill"
+            reasons.append(f"{entity} {document} has {lines_per_document[document]} lines and "
+                           f"'{mapping['amount']}' is the whole {entity.lower()}'s total, so it can't be "
+                           "counted on each line. Choose a line amount column, or export one row per "
+                           f"{entity.lower()}.")
         # A repeated invoice/bill number is normal (one line per item); a row that is
         # identical cell for cell, including unmapped columns, is rejected rather than
         # double-counted.

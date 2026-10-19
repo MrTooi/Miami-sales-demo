@@ -251,6 +251,24 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertIn("No job number column was chosen", page_text(at))
 
+    def test_payment_amount_chosen_by_hand_imports_nothing(self):
+        at = self.with_files("Invoice,Date,Customer,Payment Amount\nA,10/31/2026,X (fictional),40.00\n",
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        radio(at, "What kind of file is fictional_invoices.csv?").set_value("invoices").run()
+        next(s for s in at.selectbox if s.label == "Which column has the amount?").set_value("Payment Amount").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertTrue(any("money paid or received" in i.value for i in at.info))
+        self.assertNotIn("invoice line", page_text(at))
+
+    def test_repeated_invoice_total_lines_are_listed_not_imported(self):
+        at = self.with_files("Invoice,Date,Customer,Description,Invoice Total\n"
+                             "INV-1,10/31/2026,X (fictional),Banner,100.00\nINV-1,10/31/2026,X (fictional),Install,100.00\n",
+                             "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        text = page_text(at)
+        self.assertIn("2 rows of 2 couldn't be imported", text)
+        self.assertIn("No invoice lines were imported", text)
+        self.assertEqual([2, 3], list(at.dataframe[0].value["Row in file"]))
+
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertTrue(any("no rows" in i.value for i in at.info))

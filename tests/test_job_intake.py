@@ -155,6 +155,55 @@ class MappingTests(unittest.TestCase):
         self.assertEqual("Line Amount", ji.suggest_mapping(["Invoice", "Date", "Customer", "Line Amount"], "invoices")["amount"])
         self.assertEqual("Total", ji.suggest_mapping(["Invoice", "Date", "Customer", "Total"], "invoices")["amount"])
 
+    def test_money_paid_or_received_is_refused_as_the_amount_even_when_chosen_by_hand(self):
+        for kind, base in (("invoices", {"invoice_id": "Invoice", "date": "Date", "customer": "Customer"}),
+                           ("costs", {"date": "Date", "vendor": "Vendor"})):
+            for header in ("Payment Amount", "Payout Amount", "Amount Paid", "Amount Received", "Deposit",
+                           "Settlement Amount", "Transfer Amount"):
+                with self.subTest(kind=kind, header=header):
+                    headers = [*base.values(), header]
+                    problems = ji.validate_mapping({**base, "amount": header}, headers, kind)
+                    self.assertTrue(any("money paid or received" in p for p in problems), problems)
+                    _, rows = ji.read_csv((",".join(headers) + "\nA,10/31/2026,X,40.00\n").encode()
+                                          if kind == "invoices" else (",".join(headers) + "\n10/31/2026,X,40.00\n").encode())
+                    with self.assertRaises(ji.IntakeError):  # nothing is imported
+                        ji.intake(headers, rows, {**base, "amount": header}, kind, "MM/DD/YYYY")
+        # Ordinary amount columns are unaffected.
+        for header in ("Amount", "Total", "Line Amount", "Invoice Total"):
+            self.assertFalse(ji.is_paid_column(header), header)
+
+    def test_repeated_invoice_total_is_never_counted_on_each_line(self):
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Invoice Total\n"
+                                    b"INV-1,10/31/2026,Acme,Banner,100.00\nINV-1,10/31/2026,Acme,Install,100.00\n"
+                                    b"INV-2,10/31/2026,Acme,Decal,25.00\n")
+        mapping = ji.suggest_mapping(headers, "invoices")
+        self.assertEqual("Invoice Total", mapping["amount"])
+        result = ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY")
+        self.assertEqual([Decimal("25.00")], [r["amount"] for r in result.accepted])  # one-line invoice is fine
+        self.assertEqual([2, 3], [r["row"] for r in result.rejected])
+        self.assertTrue(all("whole invoice's total" in " ".join(r["reasons"]) for r in result.rejected))
+        self.assertIn("2 rows of 3 couldn't be imported", texts(ji.missing_report(result)))
+        # Choosing a line amount column instead imports every line.
+        lines = ji.read_csv(b"Invoice,Date,Customer,Line Amount,Invoice Total\n"
+                            b"INV-1,10/31/2026,Acme,40.00,100.00\nINV-1,10/31/2026,Acme,60.00,100.00\n")
+        result = ji.intake(*lines, {"invoice_id": "Invoice", "date": "Date", "customer": "Customer",
+                                    "amount": "Line Amount"}, "invoices", "MM/DD/YYYY")
+        self.assertEqual([Decimal("40.00"), Decimal("60.00")], [r["amount"] for r in result.accepted])
+
+    def test_repeated_bill_total_is_never_counted_on_each_line(self):
+        headers, rows = ji.read_csv(b"Bill No,Date,Vendor,Memo,Bill Total\n"
+                                    b"B-1,10/31/2026,Paper Co,Vinyl,300.00\nB-1,10/31/2026,Paper Co,Ink,300.00\n"
+                                    b"B-2,10/31/2026,Paper Co,Tape,12.00\n")
+        mapping = ji.suggest_mapping(headers, "costs")
+        result = ji.intake(headers, rows, mapping, "costs", "MM/DD/YYYY")
+        self.assertEqual([Decimal("12.00")], [r["amount"] for r in result.accepted])
+        self.assertEqual([2, 3], [r["row"] for r in result.rejected])
+        self.assertTrue(all("whole bill's total" in " ".join(r["reasons"]) for r in result.rejected))
+        # Without bill numbers, repeats can't be caught, so a bill total isn't accepted at all.
+        problems = ji.validate_mapping({"date": "Date", "vendor": "Vendor", "amount": "Bill Total"},
+                                       ["Date", "Vendor", "Bill Total"], "costs")
+        self.assertTrue(any("bill number column" in p for p in problems), problems)
+
     def test_competing_customer_and_job_columns_are_never_picked_silently(self):
         headers = ["Invoice", "Date", "Customer", "Client", "Amount", "Job", "Project"]
         mapping = ji.suggest_mapping(headers, "invoices")
