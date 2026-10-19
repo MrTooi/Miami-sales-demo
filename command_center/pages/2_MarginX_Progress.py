@@ -22,20 +22,22 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from command_center.progress_logic import (  # noqa: E402
+    UNIT_STEP_LABEL,
     ci_state,
-    latest_review,
     latest_weekly_checklist,
     next_action,
     parse_build_steps,
     parse_checklist,
     progress,
+    review_for_head,
     step_status,
 )
 
 REPO = "MrTooi/Miami-sales-demo"
 API = "https://api.github.com"
 ET = ZoneInfo("America/New_York")
-STATUS_ICON = {"DONE": "✅", "IN PROGRESS": "🔨", "NOT STARTED": "⬜"}
+PAGE = 100
+STATUS_ICON = {UNIT_STEP_LABEL: "🟦", "IN PROGRESS": "🔨", "NOT STARTED": "⬜"}
 
 st.set_page_config(page_title="MarginX Progress", page_icon="◈", layout="wide")
 
@@ -94,10 +96,13 @@ if st.button("Refresh now"):
     st.cache_data.clear()
     st.rerun()
 
-pulls_open, err_open = gh(f"/repos/{REPO}/pulls?state=open&per_page=50")
-pulls_closed, err_closed = gh(f"/repos/{REPO}/pulls?state=closed&per_page=50&sort=updated&direction=desc")
-issues, err_issues = gh(f"/repos/{REPO}/issues?state=open&per_page=50")
+pulls_open, err_open = gh(f"/repos/{REPO}/pulls?state=open&per_page={PAGE}")
+pulls_closed, err_closed = gh(f"/repos/{REPO}/pulls?state=closed&per_page={PAGE}&sort=updated&direction=desc")
+issues, err_issues = gh(f"/repos/{REPO}/issues?state=open&per_page={PAGE}")
 all_pulls = (pulls_open or []) + (pulls_closed or [])
+for name, rows in (("open PRs", pulls_open), ("closed PRs", pulls_closed), ("open issues", issues)):
+    if rows is not None and len(rows) >= PAGE:
+        st.warning(f"PARTIAL: only the first {PAGE} {name} were read; counts below may be incomplete.")
 
 # --- Needs you -------------------------------------------------------------
 st.header("Needs your attention")
@@ -106,23 +111,26 @@ if err_open:
 else:
     ready = [p for p in pulls_open if not p.get("draft")]
     if not ready:
-        st.success("No open pull requests waiting.")
+        st.info("No open, non-draft pull requests found.")
     for pr in ready:
         number, sha = pr["number"], pr["head"]["sha"]
-        comments, _ = gh(f"/repos/{REPO}/issues/{number}/comments?per_page=100")
-        runs, _ = gh(f"/repos/{REPO}/commits/{sha}/check-runs?per_page=50")
-        commit, _ = gh(f"/repos/{REPO}/commits/{sha}")
-        review = latest_review(comments or [])
-        head_time = ((commit or {}).get("commit") or {}).get("committer", {}).get("date")
-        fresh = bool(review and head_time and (review["at"] or "") >= head_time)
-        ci = ci_state(None if runs is None else runs.get("check_runs", []))
-        action = next_action(review, ci, fresh)
-        verdict = f"[{review['verdict']}]({review['url']})" if review else "none yet"
-        if not fresh and review:
-            verdict += " (older commit)"
+        comments, err_c = gh(f"/repos/{REPO}/issues/{number}/comments?per_page={PAGE}")
+        runs, err_r = gh(f"/repos/{REPO}/commits/{sha}/check-runs?per_page={PAGE}")
+        partial = err_c is not None or comments is None or len(comments) >= PAGE
+        review = None if partial else review_for_head(comments, sha)
+        ci = ci_state(None if err_r or runs is None else runs.get("check_runs", []),
+                      None if runs is None else runs.get("total_count"))
+        action = "Check reviews (comments could not be fully read)" if partial else next_action(review, ci)
+        if review:
+            source = "automated, verified" if review["kind"] == "automated" else "manual, source not verified"
+            verdict = f"[{review['verdict']}]({review['url']}) on `{sha[:7]}` ({source})"
+        else:
+            verdict = f"none on current commit `{sha[:7]}`"
         tone = st.success if action.startswith("Ready") else st.info if action.startswith("Needs") else st.warning
         tone(f"**[PR #{number}]({pr['html_url']}) {pr['title']}**  \n"
              f"Next: **{action}** · Review: {verdict} · Tests: {ci}")
+    st.caption("A PR shows as ready only with a verified automated PASS on its exact current commit and a "
+               "successful `unit-tests` check. Merging is always your decision.")
 
 # --- Build steps ---------------------------------------------------------
 st.header("MarginX build steps")
@@ -132,14 +140,15 @@ if not steps:
 elif err_open or err_closed:
     st.warning("UNKNOWN: could not read pull requests to work out step status.")
 else:
-    done = 0
+    merged = 0
     for step in steps:
         status, pr = step_status(step["number"], all_pulls)
-        done += status == "DONE"
+        merged += status == UNIT_STEP_LABEL
         link = f" · [PR #{pr['number']}]({pr['html_url']})" if pr else ""
         st.markdown(f"{STATUS_ICON[status]} **Step {step['number']}: {step['title']}** · {status}{link}")
-    st.progress(done / len(steps), text=f"{done} of {len(steps)} build steps merged")
-    st.caption("A step counts as done only when a PR titled “MarginX step N: …” is merged.")
+    st.progress(merged / len(steps), text=f"{merged} of {len(steps)} step PRs merged (completion not verified)")
+    st.caption("This counts merged PRs titled “MarginX step N: …”. A merged PR is not proof the step's "
+               "acceptance criteria are met; check the PR's review and tests.")
 
 # --- This week's checklist -------------------------------------------------
 weekly = None if err_issues else latest_weekly_checklist(issues or [])

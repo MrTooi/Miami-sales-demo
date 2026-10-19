@@ -1,8 +1,8 @@
 """Pure helpers for the MarginX Progress page (no network, no Streamlit).
 
 Every status comes from GitHub state: ticked checklist boxes, merged or open
-PRs, posted review verdicts, CI conclusions. Nothing is estimated or guessed;
-missing evidence shows as UNKNOWN or NOT STARTED.
+PRs, posted review comments, CI check runs. Nothing is estimated or guessed;
+missing or ambiguous evidence shows as UNKNOWN / NEEDS REVIEW, never green.
 """
 from __future__ import annotations
 
@@ -11,11 +11,21 @@ import re
 CHECKBOX = re.compile(r"^\s*[-*]\s+\[( |x|X)\]\s+(.*\S)\s*$")
 HEADING = re.compile(r"^##\s+(.*\S)\s*$")
 BOLD_LINE = re.compile(r"^\*\*(.+?)\*\*\s*$")
-# Matches both "**Verdict:** FAIL" and "**Verdict: FAIL — ...**". Only the first
-# verdict in a comment counts, so quoted examples further down are ignored.
-VERDICT = re.compile(r"\*\*Verdict:(?:\*\*)?\s*\**\s*(PASS WITH WARNINGS|PASS|FAIL)\b")
 STEP_TITLE = re.compile(r"^marginx step (\d+)\b", re.IGNORECASE)
 BUILD_STEP = re.compile(r"^(\d+)\.\s+\*\*(.+?)\*\*")
+
+# Automated D-004 reviews are posted by the workflow's bot account with a fixed shape.
+AUTOMATED_AUTHOR = "github-actions[bot]"
+AUTOMATED_HEADER = "## Automated ChatGPT review (D-004)"
+AUTOMATED_SHA = re.compile(r"Reviewed commit: `([0-9a-f]{7,40})`")
+AUTOMATED_QUALIFYING = re.compile(r"^\*\*Status: qualifying automated review — (PASS WITH WARNINGS|PASS|FAIL)\.\*\*", re.MULTILINE)
+AUTOMATED_INCOMPLETE = "**Status: REVIEW INCOMPLETE"
+# Manual reviews (ChatGPT via the owner's account) open with a heading naming the reviewed commit.
+MANUAL_HEADER = re.compile(r"^## Independent\b[^\n`]*\bChatGPT\b[^\n`]*\breview\b[^\n`]*`([0-9a-f]{7,40})`", re.IGNORECASE)
+MANUAL_VERDICT = re.compile(r"\*\*Verdict:(?:\*\*)?\s*\**\s*(PASS WITH WARNINGS|PASS|FAIL)\b")
+
+REQUIRED_CHECKS = ("unit-tests",)
+UNIT_STEP_LABEL = "STEP PR MERGED — completion unverified"
 
 
 def parse_checklist(markdown: str | None) -> list[dict]:
@@ -62,50 +72,93 @@ def parse_build_steps(spec_markdown: str | None) -> list[dict]:
 
 
 def step_status(step_number: int, pulls: list[dict]) -> tuple[str, dict | None]:
-    """Build PRs are titled 'MarginX step N: ...'. Merged wins over open; closed-unmerged is ignored."""
+    """Build PRs are titled 'MarginX step N: ...'.
+
+    A merged step PR proves only that a PR was merged, not that the step's
+    acceptance criteria were met, so it is never reported as DONE.
+    """
     matches = [p for p in pulls if (m := STEP_TITLE.match(p.get("title") or "")) and int(m.group(1)) == step_number]
     merged = [p for p in matches if p.get("merged_at")]
     if merged:
-        return "DONE", max(merged, key=lambda p: p["merged_at"])
+        return UNIT_STEP_LABEL, max(merged, key=lambda p: p["merged_at"])
     open_prs = [p for p in matches if p.get("state") == "open"]
     if open_prs:
         return "IN PROGRESS", open_prs[0]
     return "NOT STARTED", None
 
 
-def latest_review(comments: list[dict]) -> dict | None:
-    """Most recent comment carrying a review verdict (manual or automated)."""
+def _same_commit(reviewed: str, head_sha: str) -> bool:
+    return bool(reviewed) and len(reviewed) >= 7 and head_sha.lower().startswith(reviewed.lower())
+
+
+def classify_review(comment: dict) -> dict | None:
+    """Recognise a review comment and the commit it covers, or return None.
+
+    kind "automated": posted by the workflow bot in the D-004 shape (source verified).
+    kind "manual": an "Independent ChatGPT review" heading naming a commit; the
+    author can't be verified (it is posted through the owner's account).
+    """
+    body = comment.get("body") or ""
+    author = ((comment.get("user") or {}).get("login")) or ""
+    base = {"url": comment.get("html_url"), "at": comment.get("created_at")}
+    if body.startswith(AUTOMATED_HEADER):
+        if author != AUTOMATED_AUTHOR:
+            return None  # looks automated but wasn't posted by the workflow
+        sha = AUTOMATED_SHA.search(body)
+        if not sha:
+            return None
+        if AUTOMATED_INCOMPLETE in body:
+            return {**base, "kind": "automated", "sha": sha.group(1), "verdict": "INCOMPLETE"}
+        verdict = AUTOMATED_QUALIFYING.search(body)
+        if not verdict:
+            return None
+        return {**base, "kind": "automated", "sha": sha.group(1), "verdict": verdict.group(1)}
+    first_line = body.lstrip("﻿").strip().splitlines()[0] if body.strip() else ""
+    if header := MANUAL_HEADER.match(first_line):
+        verdict = MANUAL_VERDICT.search(body)
+        if not verdict:
+            return None
+        return {**base, "kind": "manual", "sha": header.group(1), "verdict": verdict.group(1)}
+    return None
+
+
+def review_for_head(comments: list[dict], head_sha: str) -> dict | None:
+    """The newest recognised review that covers exactly the PR's current head commit."""
     found = None
     for c in sorted(comments, key=lambda c: c.get("created_at") or ""):
-        body = c.get("body") or ""
-        if "**Status: REVIEW INCOMPLETE" in body:
-            found = {"verdict": "INCOMPLETE", "url": c.get("html_url"), "at": c.get("created_at")}
-        elif m := VERDICT.search(body):
-            found = {"verdict": m.group(1), "url": c.get("html_url"), "at": c.get("created_at")}
+        review = classify_review(c)
+        if review and _same_commit(review["sha"], head_sha):
+            found = review
     return found
 
 
-def ci_state(check_runs: list[dict] | None) -> str:
-    if check_runs is None:
+def ci_state(check_runs: list[dict] | None, total_count: int | None = None) -> str:
+    """PASSING only when every required check completed with 'success' on this commit."""
+    if check_runs is None or (total_count is not None and total_count > len(check_runs)):
         return "UNKNOWN"
-    if not check_runs:
-        return "NO CHECKS"
-    if any(r.get("status") != "completed" for r in check_runs):
-        return "RUNNING"
+    required = [r for r in check_runs if r.get("name") in REQUIRED_CHECKS]
     bad = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
-    if any(r.get("conclusion") in bad for r in check_runs):
+    if any(r.get("status") == "completed" and r.get("conclusion") in bad for r in required):
         return "FAILING"
-    return "PASSING"
+    if not required:
+        return "UNKNOWN"
+    if any(r.get("status") != "completed" for r in required):
+        return "RUNNING"
+    if all(r.get("conclusion") == "success" for r in required):
+        return "PASSING"
+    return "UNKNOWN"
 
 
-def next_action(review: dict | None, ci: str, reviewed_after_head: bool) -> str:
-    """Plain-language next step for an open PR."""
+def next_action(review: dict | None, ci: str) -> str:
+    """Plain-language next step for an open PR. Only a verified review can make it ready."""
     if ci == "FAILING":
         return "Claude: fix failing tests"
-    if review is None or not reviewed_after_head:
-        return "Needs ChatGPT review"
+    if review is None:
+        return "Needs ChatGPT review of the current commit"
     if review["verdict"] in ("FAIL", "INCOMPLETE"):
         return "Claude: fix review findings"
     if ci != "PASSING":
-        return "Waiting for tests"
+        return "Waiting for tests" if ci == "RUNNING" else "Check tests (status unknown)"
+    if review["kind"] != "automated":
+        return "Manual PASS on this commit: confirm it is ChatGPT's review, then decide"
     return "Ready for your merge decision"

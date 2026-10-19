@@ -2,17 +2,21 @@ from pathlib import Path
 import unittest
 
 from command_center.progress_logic import (
+    UNIT_STEP_LABEL,
     ci_state,
-    latest_review,
+    classify_review,
     latest_weekly_checklist,
     next_action,
     parse_build_steps,
     parse_checklist,
     progress,
+    review_for_head,
     step_status,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+HEAD = "a3905445ad07ffa1956c2b2345ab2dfb26e06ee6"
+OLD = "4ae7bcea78a163c923cc32c9d46a54e672dabefa"
 
 CHECKLIST = """## Goal this week
 Text.
@@ -32,7 +36,24 @@ Text.
 """
 
 
-class ProgressLogicTests(unittest.TestCase):
+def automated(sha, status="qualifying automated review — PASS.", author="github-actions[bot]", at="2026-10-19T05:00:00Z"):
+    body = (
+        "## Automated ChatGPT review (D-004)\n\n"
+        f"Model: `m` · Reviewed commit: `{sha}` · Diff truncated: no\n\n**Status: {status}** more text\n\n---\n\n**Verdict:** PASS"
+    )
+    return {"user": {"login": author}, "created_at": at, "html_url": "auto", "body": body}
+
+
+def manual(sha, verdict="PASS WITH WARNINGS", at="2026-10-19T05:00:00Z"):
+    body = f"## Independent manual ChatGPT re-review — PR #97 at `{sha}`\n\n**Verdict: {verdict} — notes.**"
+    return {"user": {"login": "MrTooi"}, "created_at": at, "html_url": "manual", "body": body}
+
+
+def run(name="unit-tests", status="completed", conclusion="success"):
+    return {"name": name, "status": status, "conclusion": conclusion}
+
+
+class ChecklistAndStepsTests(unittest.TestCase):
     def test_checklist_groups_by_section_and_subheading(self):
         groups = parse_checklist(CHECKLIST)
         self.assertEqual(
@@ -43,7 +64,6 @@ class ProgressLogicTests(unittest.TestCase):
         )
         self.assertEqual((1, 2), progress(groups[0]["items"]))
         self.assertEqual((1, 2), progress(groups[2]["items"]))
-        # Plain sub-bullets are not checklist items.
         self.assertNotIn("How do you know", str(groups))
 
     def test_empty_or_missing_checklist(self):
@@ -61,66 +81,111 @@ class ProgressLogicTests(unittest.TestCase):
         self.assertIsNone(latest_weekly_checklist([]))
 
     def test_build_steps_come_from_the_merged_spec(self):
-        spec = (ROOT / "docs" / "MVP_SPEC.md").read_text(encoding="utf-8")
-        steps = parse_build_steps(spec)
+        steps = parse_build_steps((ROOT / "docs" / "MVP_SPEC.md").read_text(encoding="utf-8"))
         self.assertGreaterEqual(len(steps), 5)
         self.assertEqual(list(range(1, len(steps) + 1)), [s["number"] for s in steps])
         self.assertIn("CSV upload", steps[0]["title"])
 
-    def test_step_status_needs_a_merged_step_pr(self):
+    def test_merged_step_pr_is_never_reported_as_done(self):
         pulls = [
-            {"title": "MarginX step 1: CSV upload", "state": "closed", "merged_at": "2026-10-20T00:00:00Z", "number": 1},
+            # Merged but only touched a README: still only "merged, unverified".
+            {"title": "MarginX step 1: README tweak", "state": "closed", "merged_at": "2026-10-20T00:00:00Z", "number": 1},
             {"title": "MarginX step 2: xlsx", "state": "open", "merged_at": None, "number": 2},
             {"title": "MarginX step 3: profit", "state": "closed", "merged_at": None, "number": 3},
             {"title": "docs: step 4 notes", "state": "closed", "merged_at": "2026-10-20T00:00:00Z", "number": 4},
         ]
-        self.assertEqual("DONE", step_status(1, pulls)[0])
+        self.assertEqual(UNIT_STEP_LABEL, step_status(1, pulls)[0])
+        self.assertIn("unverified", UNIT_STEP_LABEL)
+        self.assertNotEqual("DONE", step_status(1, pulls)[0])
         self.assertEqual("IN PROGRESS", step_status(2, pulls)[0])
-        self.assertEqual("NOT STARTED", step_status(3, pulls)[0])  # closed without merging
-        self.assertEqual("NOT STARTED", step_status(4, pulls)[0])  # title doesn't follow the convention
-        self.assertEqual("NOT STARTED", step_status(12, pulls)[0])
+        self.assertEqual("NOT STARTED", step_status(3, pulls)[0])
+        self.assertEqual("NOT STARTED", step_status(4, pulls)[0])
 
-    def test_latest_review_reads_manual_automated_and_incomplete(self):
-        comments = [
-            {"created_at": "2026-10-19T01:00:00Z", "body": "**Verdict:** **FAIL** — do not merge", "html_url": "a"},
-            {"created_at": "2026-10-19T02:00:00Z", "body": "## Fixes\nno verdict here", "html_url": "b"},
-            {"created_at": "2026-10-19T03:00:00Z", "body": "**Verdict:** PASS WITH WARNINGS", "html_url": "c"},
-        ]
-        self.assertEqual("PASS WITH WARNINGS", latest_review(comments)["verdict"])
-        incomplete = comments + [{"created_at": "2026-10-19T04:00:00Z", "body": "**Status: REVIEW INCOMPLETE — x**\n**Verdict:** PASS", "html_url": "d"}]
-        self.assertEqual("INCOMPLETE", latest_review(incomplete)["verdict"])
-        self.assertIsNone(latest_review([]))
 
-    def test_latest_review_uses_the_header_verdict_not_quoted_examples(self):
-        comment = {
-            "created_at": "2026-10-19T04:36:19Z",
-            "html_url": "x",
-            "body": "## Re-review\n\n**Verdict: FAIL — one remaining edge case.**\n\n"
-                    "This response would wrongly qualify:\n```text\n**Verdict:** PASS\n```",
-        }
-        self.assertEqual("FAIL", latest_review([comment])["verdict"])
-        # A fix note that only mentions the format has no verdict.
-        note = {"created_at": "2026-10-19T05:00:00Z", "html_url": "y",
-                "body": "the first line is the one valid `**Verdict:**` line; anything else is REVIEW INCOMPLETE"}
-        self.assertEqual("FAIL", latest_review([comment, note])["verdict"])
-        self.assertEqual("x", latest_review([comment, note])["url"])
+class ReviewBindingTests(unittest.TestCase):
+    def test_verified_automated_pass_on_exact_head_is_ready(self):
+        review = review_for_head([automated(HEAD)], HEAD)
+        self.assertEqual(("automated", "PASS"), (review["kind"], review["verdict"]))
+        self.assertEqual("Ready for your merge decision", next_action(review, "PASSING"))
 
-    def test_ci_state(self):
+    def test_quoted_or_fix_note_pass_is_not_a_review(self):
+        quoted = {"user": {"login": "MrTooi"}, "created_at": "2026-10-19T06:00:00Z", "html_url": "q",
+                  "body": f"## Fix notes for `{HEAD}`\n\nThis would wrongly qualify:\n```\n**Verdict:** PASS\n```"}
+        self.assertIsNone(classify_review(quoted))
+        self.assertIsNone(review_for_head([quoted], HEAD))
+        self.assertEqual("Needs ChatGPT review of the current commit", next_action(None, "PASSING"))
+
+    def test_spoofed_automated_comment_from_another_author_is_ignored(self):
+        self.assertIsNone(review_for_head([automated(HEAD, author="MrTooi")], HEAD))
+
+    def test_pass_on_an_older_commit_does_not_cover_a_new_head(self):
+        comments = [automated(OLD, at="2026-10-19T09:00:00Z"), manual(OLD, "PASS", at="2026-10-19T09:00:00Z")]
+        self.assertIsNone(review_for_head(comments, HEAD))
+
+    def test_newer_fail_on_head_overrides_older_pass_on_head(self):
+        comments = [automated(HEAD, at="2026-10-19T05:00:00Z"), manual(HEAD, "FAIL", at="2026-10-19T06:00:00Z")]
+        self.assertEqual("Claude: fix review findings", next_action(review_for_head(comments, HEAD), "PASSING"))
+
+    def test_review_incomplete_is_never_ready(self):
+        review = review_for_head([automated(HEAD, status="REVIEW INCOMPLETE — does not count")], HEAD)
+        self.assertEqual("INCOMPLETE", review["verdict"])
+        self.assertEqual("Claude: fix review findings", next_action(review, "PASSING"))
+
+    def test_manual_pass_on_head_is_not_green_ready(self):
+        review = review_for_head([manual(HEAD, "PASS WITH WARNINGS")], HEAD)
+        self.assertEqual("manual", review["kind"])
+        action = next_action(review, "PASSING")
+        self.assertNotEqual("Ready for your merge decision", action)
+        self.assertIn("confirm", action)
+
+    def test_manual_header_variants_are_recognised(self):
+        for heading in (
+            f"## Independent ChatGPT manual re-review — PR #97 at `{HEAD}`",
+            f"## Independent manual ChatGPT re-review — PR #97 at `{HEAD}`",
+            f"## Independent ChatGPT review — PR #97 (`{HEAD[:7]}`)",
+        ):
+            with self.subTest(heading):
+                comment = {"user": {"login": "MrTooi"}, "created_at": "x", "html_url": "h",
+                           "body": heading + "\n\n**Verdict: PASS WITH WARNINGS. Resolved.**"}
+                self.assertEqual(("manual", "PASS WITH WARNINGS"),
+                                 (classify_review(comment)["kind"], classify_review(comment)["verdict"]))
+        fix_note = {"user": {"login": "MrTooi"}, "created_at": "x", "html_url": "f",
+                    "body": f"## Fix for the second ChatGPT re-review FAIL, now at `{HEAD[:7]}` (Claude Code)\n\nPASS"}
+        self.assertIsNone(classify_review(fix_note))
+
+    def test_short_or_missing_sha_never_matches(self):
+        self.assertIsNone(review_for_head([manual("a39")], HEAD))
+        no_sha = {"user": {"login": "MrTooi"}, "created_at": "x", "html_url": "n",
+                  "body": "## Independent ChatGPT review — PR #97\n\n**Verdict: PASS**"}
+        self.assertIsNone(classify_review(no_sha))
+
+
+class CiStateTests(unittest.TestCase):
+    def test_passing_needs_a_successful_required_check(self):
+        self.assertEqual("PASSING", ci_state([run(), run(), run("ChatGPT review", conclusion="skipped")]))
+
+    def test_no_successful_test_is_never_passing(self):
+        self.assertEqual("UNKNOWN", ci_state([run(conclusion="skipped")]))
+        self.assertEqual("UNKNOWN", ci_state([run(conclusion="neutral"), run(conclusion="neutral")]))
+        self.assertEqual("UNKNOWN", ci_state([run(conclusion=None)]))
+        self.assertEqual("UNKNOWN", ci_state([run(), run(conclusion="skipped")]))
+        self.assertEqual("UNKNOWN", ci_state([run("lint")]))  # required check missing
+        self.assertEqual("UNKNOWN", ci_state([]))
         self.assertEqual("UNKNOWN", ci_state(None))
-        self.assertEqual("NO CHECKS", ci_state([]))
-        self.assertEqual("RUNNING", ci_state([{"status": "in_progress"}]))
-        self.assertEqual("FAILING", ci_state([{"status": "completed", "conclusion": "failure"}]))
-        self.assertEqual("PASSING", ci_state([{"status": "completed", "conclusion": "success"}, {"status": "completed", "conclusion": "skipped"}]))
 
-    def test_next_action_never_says_ready_without_a_fresh_passing_review_and_tests(self):
-        passed = {"verdict": "PASS"}
-        self.assertEqual("Ready for your merge decision", next_action(passed, "PASSING", True))
-        self.assertEqual("Needs ChatGPT review", next_action(passed, "PASSING", False))
-        self.assertEqual("Needs ChatGPT review", next_action(None, "PASSING", False))
-        self.assertEqual("Claude: fix review findings", next_action({"verdict": "FAIL"}, "PASSING", True))
-        self.assertEqual("Claude: fix review findings", next_action({"verdict": "INCOMPLETE"}, "PASSING", True))
-        self.assertEqual("Claude: fix failing tests", next_action(passed, "FAILING", True))
-        self.assertEqual("Waiting for tests", next_action(passed, "RUNNING", True))
+    def test_incomplete_check_list_is_unknown(self):
+        self.assertEqual("UNKNOWN", ci_state([run()], total_count=150))
+
+    def test_failures_and_running(self):
+        self.assertEqual("FAILING", ci_state([run(), run(conclusion="failure")]))
+        self.assertEqual("RUNNING", ci_state([run(status="in_progress", conclusion=None)]))
+        # A failing non-required job does not mark the tests as failing.
+        self.assertEqual("PASSING", ci_state([run(), run("ChatGPT PR review", conclusion="failure")]))
+
+    def test_unknown_tests_never_say_ready(self):
+        review = review_for_head([automated(HEAD)], HEAD)
+        self.assertNotEqual("Ready for your merge decision", next_action(review, "UNKNOWN"))
+        self.assertEqual("Claude: fix failing tests", next_action(review, "FAILING"))
 
 
 if __name__ == "__main__":
