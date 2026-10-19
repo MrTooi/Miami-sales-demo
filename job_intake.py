@@ -9,7 +9,6 @@ only; it does not calculate profit (build step 3, docs/MVP_SPEC.md).
 from __future__ import annotations
 
 import csv
-import hashlib
 import io
 import re
 from collections import Counter
@@ -152,8 +151,9 @@ def suggest_mapping(headers: list[str], kind: str) -> dict[str, str | None]:
     for fld in FIELDS[kind]:
         candidates = [_norm(fld.replace("_", " ")), *SYNONYMS.get(fld, ())]
         matches = [h for h, n in normalized.items() if n in candidates and h not in used]
-        if fld == "amount" and len(matches) > 1:
-            # Two plausible money columns (e.g. "Amount" and "Total"): never pick one silently.
+        if fld in ("amount", "date") and len(matches) > 1:
+            # Two plausible money or date columns (e.g. "Amount" and "Total", or "Date"
+            # and "Invoice Date"): never pick one silently; the owner is asked.
             mapping[fld] = None
             continue
         choice = next((h for c in candidates for h, n in normalized.items() if n == c and h not in used), None)
@@ -193,7 +193,13 @@ def suggest_date_format(values: list[str]) -> str | None:
     if not tied:
         return None
     if len(tied) == 1:
-        return tied[0]
+        # Only when no date is readable solely by another format: a file mixing two
+        # conventions (some dates only month-first, some only day-first) is asked about,
+        # because its ambiguous dates could belong to either.
+        chosen = DATE_FORMATS[tied[0]]
+        mixed = any(not _parse_date(v, chosen) and any(_parse_date(v, f) for f in DATE_FORMATS.values())
+                    for v in _clean(values))
+        return None if mixed else tied[0]
     # Formats that read every date as the same day (e.g. only "01/01/2026") make
     # no difference, so there is nothing to ask.
     readings = [[_parse_date(v, DATE_FORMATS[name]) for v in _clean(values)] for name in tied]
@@ -381,12 +387,6 @@ def missing_report(result: IntakeResult) -> list[dict]:
     distinct = f" ({_count(len(counts), entity)})" if counts and all(r.get(id_field) for r in accepted) else ""
     items.append({"level": "info", "text": f"{_count(len(accepted), noun)} imported{distinct}, dated {dates[0]} to {dates[-1]}."})
     return items
-
-
-def confirmation_key(data: bytes, kind: str, mapping: dict[str, str | None], date_format: str) -> str:
-    """Identifies exactly what the owner confirmed: this file, this mapping, this date format."""
-    choices = repr((kind, sorted((k, v or "") for k, v in mapping.items()), date_format)).encode("utf-8")
-    return "confirm-" + hashlib.sha256(hashlib.sha256(data).digest() + choices).hexdigest()[:24]
 
 
 def upload_allowed(use_sample: bool, has_upload: bool, confirmed_made_up: bool) -> bool:

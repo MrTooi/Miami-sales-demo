@@ -138,6 +138,14 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertIn("1 invoice line imported (1 invoice)", page_text(at))
 
+    def test_two_date_columns_ask_which_one_before_importing(self):
+        at = self.with_files("Invoice,Date,Invoice Date,Customer,Amount\nA,10/31/2026,09/30/2026,X,1.00\n",
+                             "Date,Payee,Amount\n10/31/2026,A,1.00\n")
+        self.assertNotIn("imported invoice lines", page_text(at))
+        next(s for s in at.selectbox if s.label == "Which column has the invoice date?").set_value("Invoice Date").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("dated 2026-09-30 to 2026-09-30", page_text(at))
+
     def test_file_that_fits_both_kinds_asks_before_importing(self):
         at = self.with_files("Invoice,Date,Customer,Vendor,Amount\nA,10/31/2026,X,Y,1.00\n",
                              "Date,Payee,Amount\n10/31/2026,A,1.00\n")

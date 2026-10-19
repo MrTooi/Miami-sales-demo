@@ -99,6 +99,10 @@ class MappingTests(unittest.TestCase):
         self.assertIsNone(ji.detect_kind(["Invoice", "Date", "Customer", "Vendor", "Amount"]))  # complete for both
         self.assertIsNone(ji.detect_kind(["A", "B"]))
 
+    def test_two_possible_date_columns_are_never_picked_silently(self):
+        self.assertIsNone(ji.suggest_mapping(["Invoice", "Date", "Invoice Date", "Customer", "Amount"], "invoices")["date"])
+        self.assertEqual("Invoice Date", ji.suggest_mapping(["Invoice", "Invoice Date", "Customer", "Amount"], "invoices")["date"])
+
     def test_two_possible_amount_columns_are_never_picked_silently(self):
         for headers in (["Invoice", "Date", "Customer", "Amount", "Total"], ["Invoice", "Date", "Customer", "Amt", "Total Amount"]):
             with self.subTest(headers=headers):
@@ -128,7 +132,9 @@ class MappingTests(unittest.TestCase):
 
     def test_date_format_is_chosen_only_when_one_format_reads_the_most_dates(self):
         self.assertEqual("MM/DD/YYYY", ji.suggest_date_format(["10/01/2026", "12/31/2026"]))
-        self.assertEqual("MM/DD/YYYY", ji.suggest_date_format(["10/01/2026", "10/31/2026", "2026-10-06"]))
+        # One date only ISO can read signals a second convention, so MarginX asks instead.
+        self.assertIsNone(ji.suggest_date_format(["10/01/2026", "10/31/2026", "2026-10-06"]))
+        self.assertIsNone(ji.suggest_date_format(["10/31/2026", "31/10/2026", "10/01/2026"]))  # month-first and day-first mixed
         self.assertEqual("YYYY-MM-DD", ji.suggest_date_format(["2026-10-01", "2026-10-02"]))
         self.assertIsNone(ji.suggest_date_format(["10/01/2026", "01/02/2026"]))  # fits MM/DD and DD/MM equally
         self.assertIsNone(ji.suggest_date_format(["10/01/2026", "2026-10-06"]))  # three-way tie
@@ -262,21 +268,6 @@ class DuplicateTests(unittest.TestCase):
         result = self.run_costs(b"Date,Payee,Amount\n10/01/2026,A,1.00\n10/01/2026,A,1.00\n")
         self.assertEqual(1, len(result.accepted))
         self.assertIn("Exact duplicate of row 2", result.rejected[0]["reasons"][0])
-
-
-class ConfirmationKeyTests(unittest.TestCase):
-    def test_any_change_to_file_mapping_or_date_format_needs_fresh_confirmation(self):
-        mapping = {"date": "Date", "vendor": "Payee", "amount": "Amount"}
-        base = ji.confirmation_key(b"Date,Payee,Amount\n10/01/2026,A,1.00\n", "costs", mapping, "MM/DD/YYYY")
-        self.assertEqual(base, ji.confirmation_key(b"Date,Payee,Amount\n10/01/2026,A,1.00\n", "costs", dict(mapping), "MM/DD/YYYY"))
-        changed = [
-            ji.confirmation_key(b"Date,Payee,Amount\n10/01/2026,A,9.00\n", "costs", mapping, "MM/DD/YYYY"),  # same headers, new file
-            ji.confirmation_key(b"Date,Payee,Amount\n10/01/2026,A,1.00\n", "costs", {**mapping, "memo": "Payee"}, "MM/DD/YYYY"),
-            ji.confirmation_key(b"Date,Payee,Amount\n10/01/2026,A,1.00\n", "costs", mapping, "DD/MM/YYYY"),
-            ji.confirmation_key(b"Date,Payee,Amount\n10/01/2026,A,1.00\n", "invoices", mapping, "MM/DD/YYYY"),
-        ]
-        self.assertNotIn(base, changed)
-        self.assertEqual(len(changed), len(set(changed)))
 
 
 class UploadGateTests(unittest.TestCase):
