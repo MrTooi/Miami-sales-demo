@@ -238,6 +238,9 @@ class DuplicateTests(unittest.TestCase):
         self.assertEqual({"invoice_id": "  FIC-1 ", "date": "10/01/2026", "customer": " Acme  Co ",
                           "amount": "1.00", "job_id": " J-5 "}, record["original"])
         self.assertEqual(("FIC-1", "J-5"), (record["invoice_id"], record["job_id"]))  # trimmed working values
+        # ...and the trimming is reported, never silent.
+        self.assertIn("3 values had extra spaces at the start or end, which MarginX ignores (for example row 2: '  FIC-1 ')",
+                      texts(ji.missing_report(result)))
 
     def test_identical_rows_are_rejected_once(self):
         result = self.run_costs(b"Date,Payee,Amount\n10/01/2026,A,1.00\n10/01/2026,A,1.00\n")

@@ -346,6 +346,12 @@ def missing_report(result: IntakeResult) -> list[dict]:
             if not any(is_labor(r.get("cost_type", "")) for r in accepted):
                 items.append({"level": "gap", "text": "No labor costs were found. If staff time goes into jobs, "
                               "profit will look higher than it really is until labor is added."})
+    # Trimming is visible, never silent: e.g. " J-5" and "J-5" are matched as the same job.
+    spaced = [(r, f) for r in accepted for f, v in r["original"].items() if v != v.strip()]
+    if spaced:
+        r, f = spaced[0]
+        items.append({"level": "info", "text": f"{_count(len(spaced), 'value')} had extra spaces at the start or end, "
+                      f"which MarginX ignores (for example row {r['row']}: {r['original'][f]!r})."})
     dates = sorted(r["date"] for r in accepted)
     items.append({"level": "info", "text": f"{_count(len(accepted), noun)} imported, dated {dates[0]} to {dates[-1]}."})
     return items
