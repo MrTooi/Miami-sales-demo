@@ -71,11 +71,12 @@ def parse_build_steps(spec_markdown: str | None) -> list[dict]:
     return steps
 
 
-def step_status(step_number: int, pulls: list[dict]) -> tuple[str, dict | None]:
+def step_status(step_number: int, pulls: list[dict], complete: bool = True) -> tuple[str, dict | None]:
     """Build PRs are titled 'MarginX step N: ...'.
 
     A merged step PR proves only that a PR was merged, not that the step's
-    acceptance criteria were met, so it is never reported as DONE.
+    acceptance criteria were met, so it is never reported as DONE. When the PR
+    list could not be read completely, an absent step PR is UNKNOWN, not NOT STARTED.
     """
     matches = [p for p in pulls if (m := STEP_TITLE.match(p.get("title") or "")) and int(m.group(1)) == step_number]
     merged = [p for p in matches if p.get("merged_at")]
@@ -84,11 +85,26 @@ def step_status(step_number: int, pulls: list[dict]) -> tuple[str, dict | None]:
     open_prs = [p for p in matches if p.get("state") == "open"]
     if open_prs:
         return "IN PROGRESS", open_prs[0]
-    return "NOT STARTED", None
+    return ("NOT STARTED" if complete else "UNKNOWN"), None
 
 
-def _same_commit(reviewed: str, head_sha: str) -> bool:
-    return bool(reviewed) and len(reviewed) >= 7 and head_sha.lower().startswith(reviewed.lower())
+def _same_commit(reviewed: str, head_sha: str, *, full: bool) -> bool:
+    """Automated reviews must name the full SHA; manual ones may use a 7+ character prefix."""
+    reviewed, head_sha = reviewed.lower(), head_sha.lower()
+    if full:
+        return len(reviewed) == 40 and reviewed == head_sha
+    return len(reviewed) >= 7 and head_sha.startswith(reviewed)
+
+
+def _normalized(body: str | None) -> str:
+    return (body or "").replace("﻿", "").strip()
+
+
+def _header_verdict(body: str) -> str | None:
+    """The single verdict stated before any fenced block; None if absent or conflicting."""
+    before_fence = body.split("```", 1)[0]
+    verdicts = {m.group(1) for m in MANUAL_VERDICT.finditer(before_fence)}
+    return verdicts.pop() if len(verdicts) == 1 else None
 
 
 def classify_review(comment: dict) -> dict | None:
@@ -98,7 +114,9 @@ def classify_review(comment: dict) -> dict | None:
     kind "manual": an "Independent ChatGPT review" heading naming a commit; the
     author can't be verified (it is posted through the owner's account).
     """
-    body = comment.get("body") or ""
+    body = _normalized(comment.get("body"))
+    if not body:
+        return None
     author = ((comment.get("user") or {}).get("login")) or ""
     base = {"url": comment.get("html_url"), "at": comment.get("created_at")}
     if body.startswith(AUTOMATED_HEADER):
@@ -113,12 +131,11 @@ def classify_review(comment: dict) -> dict | None:
         if not verdict:
             return None
         return {**base, "kind": "automated", "sha": sha.group(1), "verdict": verdict.group(1)}
-    first_line = body.lstrip("﻿").strip().splitlines()[0] if body.strip() else ""
-    if header := MANUAL_HEADER.match(first_line):
-        verdict = MANUAL_VERDICT.search(body)
+    if header := MANUAL_HEADER.match(body.splitlines()[0]):
+        verdict = _header_verdict(body)
         if not verdict:
             return None
-        return {**base, "kind": "manual", "sha": header.group(1), "verdict": verdict.group(1)}
+        return {**base, "kind": "manual", "sha": header.group(1), "verdict": verdict}
     return None
 
 
@@ -127,7 +144,7 @@ def review_for_head(comments: list[dict], head_sha: str) -> dict | None:
     found = None
     for c in sorted(comments, key=lambda c: c.get("created_at") or ""):
         review = classify_review(c)
-        if review and _same_commit(review["sha"], head_sha):
+        if review and _same_commit(review["sha"], head_sha, full=review["kind"] == "automated"):
             found = review
     return found
 

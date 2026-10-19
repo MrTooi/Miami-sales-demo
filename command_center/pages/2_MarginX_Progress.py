@@ -37,7 +37,8 @@ REPO = "MrTooi/Miami-sales-demo"
 API = "https://api.github.com"
 ET = ZoneInfo("America/New_York")
 PAGE = 100
-STATUS_ICON = {UNIT_STEP_LABEL: "🟦", "IN PROGRESS": "🔨", "NOT STARTED": "⬜"}
+MAX_PAGES = 10
+STATUS_ICON = {UNIT_STEP_LABEL: "🟦", "IN PROGRESS": "🔨", "NOT STARTED": "⬜", "UNKNOWN": "❔"}
 
 st.set_page_config(page_title="MarginX Progress", page_icon="◈", layout="wide")
 
@@ -72,6 +73,20 @@ def gh(path: str):
         return None, str(exc)
 
 
+def gh_all(path: str) -> tuple[list | None, bool, str | None]:
+    """Read every page of a list endpoint. Returns (rows, complete, error)."""
+    rows: list = []
+    sep = "&" if "?" in path else "?"
+    for page in range(1, MAX_PAGES + 1):
+        data, err = gh(f"{path}{sep}per_page={PAGE}&page={page}")
+        if err or not isinstance(data, list):
+            return (rows or None), False, err or "unexpected response"
+        rows.extend(data)
+        if len(data) < PAGE:
+            return rows, True, None
+    return rows, False, None
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def raw_text(path: str, ref: str = "main") -> str | None:
     try:
@@ -96,27 +111,29 @@ if st.button("Refresh now"):
     st.cache_data.clear()
     st.rerun()
 
-pulls_open, err_open = gh(f"/repos/{REPO}/pulls?state=open&per_page={PAGE}")
-pulls_closed, err_closed = gh(f"/repos/{REPO}/pulls?state=closed&per_page={PAGE}&sort=updated&direction=desc")
-issues, err_issues = gh(f"/repos/{REPO}/issues?state=open&per_page={PAGE}")
+pulls_open, open_complete, err_open = gh_all(f"/repos/{REPO}/pulls?state=open")
+pulls_closed, closed_complete, err_closed = gh_all(f"/repos/{REPO}/pulls?state=closed&sort=updated&direction=desc")
+issues, issues_complete, err_issues = gh_all(f"/repos/{REPO}/issues?state=open")
 all_pulls = (pulls_open or []) + (pulls_closed or [])
-for name, rows in (("open PRs", pulls_open), ("closed PRs", pulls_closed), ("open issues", issues)):
-    if rows is not None and len(rows) >= PAGE:
-        st.warning(f"PARTIAL: only the first {PAGE} {name} were read; counts below may be incomplete.")
+for name, complete, err in (("open PRs", open_complete, err_open), ("closed PRs", closed_complete, err_closed),
+                            ("open issues", issues_complete, err_issues)):
+    if not complete:
+        st.warning(f"PARTIAL: the {name} could not all be read ({err or 'too many pages'}); "
+                   "statuses that depend on them show UNKNOWN.")
 
 # --- Needs you -------------------------------------------------------------
 st.header("Needs your attention")
-if err_open:
+if pulls_open is None:
     st.warning(f"UNKNOWN: could not read open PRs ({err_open}).")
 else:
     ready = [p for p in pulls_open if not p.get("draft")]
     if not ready:
-        st.info("No open, non-draft pull requests found.")
+        st.info("No open, non-draft pull requests found." if open_complete else "UNKNOWN: open PRs were only partly read.")
     for pr in ready:
         number, sha = pr["number"], pr["head"]["sha"]
-        comments, err_c = gh(f"/repos/{REPO}/issues/{number}/comments?per_page={PAGE}")
+        comments, comments_complete, _ = gh_all(f"/repos/{REPO}/issues/{number}/comments")
         runs, err_r = gh(f"/repos/{REPO}/commits/{sha}/check-runs?per_page={PAGE}")
-        partial = err_c is not None or comments is None or len(comments) >= PAGE
+        partial = not comments_complete
         review = None if partial else review_for_head(comments, sha)
         ci = ci_state(None if err_r or runs is None else runs.get("check_runs", []),
                       None if runs is None else runs.get("total_count"))
@@ -137,12 +154,12 @@ st.header("MarginX build steps")
 steps = parse_build_steps(raw_text("docs/MVP_SPEC.md"))
 if not steps:
     st.warning("UNKNOWN: could not read the build order from docs/MVP_SPEC.md on main.")
-elif err_open or err_closed:
+elif pulls_open is None or pulls_closed is None:
     st.warning("UNKNOWN: could not read pull requests to work out step status.")
 else:
     merged = 0
     for step in steps:
-        status, pr = step_status(step["number"], all_pulls)
+        status, pr = step_status(step["number"], all_pulls, complete=open_complete and closed_complete)
         merged += status == UNIT_STEP_LABEL
         link = f" · [PR #{pr['number']}]({pr['html_url']})" if pr else ""
         st.markdown(f"{STATUS_ICON[status]} **Step {step['number']}: {step['title']}** · {status}{link}")
@@ -151,12 +168,12 @@ else:
                "acceptance criteria are met; check the PR's review and tests.")
 
 # --- This week's checklist -------------------------------------------------
-weekly = None if err_issues else latest_weekly_checklist(issues or [])
+weekly = None if issues is None else latest_weekly_checklist(issues)
 st.header("This week's checklist")
-if err_issues:
+if issues is None:
     st.warning(f"UNKNOWN: could not read issues ({err_issues}).")
 elif weekly is None:
-    st.info("No open weekly checklist issue found.")
+    st.info("No open weekly checklist issue found." if issues_complete else "UNKNOWN: issues were only partly read.")
 else:
     st.markdown(f"[#{weekly['number']} {weekly['title']}]({weekly['html_url']}) · boxes are ticked on GitHub")
     groups = parse_checklist(weekly.get("body"))
@@ -183,7 +200,7 @@ recent = sorted(
     (p for p in (pulls_closed or []) if p.get("merged_at") and p["merged_at"] >= cutoff),
     key=lambda p: p["merged_at"], reverse=True,
 )
-if err_closed:
+if pulls_closed is None:
     st.warning(f"UNKNOWN: could not read merged PRs ({err_closed}).")
 elif not recent:
     st.info("Nothing merged in the last 7 days.")

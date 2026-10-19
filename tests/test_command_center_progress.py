@@ -101,6 +101,12 @@ class ChecklistAndStepsTests(unittest.TestCase):
         self.assertEqual("NOT STARTED", step_status(3, pulls)[0])
         self.assertEqual("NOT STARTED", step_status(4, pulls)[0])
 
+    def test_absent_step_is_unknown_when_pr_list_is_incomplete(self):
+        pulls = [{"title": "MarginX step 2: xlsx", "state": "open", "merged_at": None, "number": 2}]
+        self.assertEqual("UNKNOWN", step_status(1, pulls, complete=False)[0])
+        # Evidence that is present still counts.
+        self.assertEqual("IN PROGRESS", step_status(2, pulls, complete=False)[0])
+
 
 class ReviewBindingTests(unittest.TestCase):
     def test_verified_automated_pass_on_exact_head_is_ready(self):
@@ -152,6 +158,29 @@ class ReviewBindingTests(unittest.TestCase):
         fix_note = {"user": {"login": "MrTooi"}, "created_at": "x", "html_url": "f",
                     "body": f"## Fix for the second ChatGPT re-review FAIL, now at `{HEAD[:7]}` (Claude Code)\n\nPASS"}
         self.assertIsNone(classify_review(fix_note))
+
+    def test_manual_review_uses_header_verdict_not_quoted_examples(self):
+        heading = f"## Independent ChatGPT review — PR #98 at `{HEAD}`\n\n"
+        quoted_first = heading + "This would wrongly pass:\n```text\n**Verdict:** PASS\n```\n\n**Verdict: FAIL**"
+        # The verdict must come before any fenced block; a quoted PASS first leaves no header verdict.
+        self.assertIsNone(classify_review({"body": quoted_first, "user": {}}))
+        fail_then_quote = heading + "**Verdict: FAIL.**\n\nExample:\n```\n**Verdict:** PASS\n```"
+        self.assertEqual("FAIL", classify_review({"body": fail_then_quote, "user": {}})["verdict"])
+
+    def test_conflicting_manual_verdicts_are_ignored(self):
+        body = f"## Independent ChatGPT review — PR #98 at `{HEAD}`\n\n**Verdict: PASS**\n\n**Verdict: FAIL**"
+        self.assertIsNone(classify_review({"body": body, "user": {}}))
+
+    def test_bom_only_or_empty_comment_is_safe(self):
+        for body in ("﻿", "", "  ﻿ \n", None):
+            with self.subTest(body=body):
+                self.assertIsNone(classify_review({"body": body, "user": {}}))
+        self.assertIsNone(review_for_head([{"body": "﻿", "user": {}}], HEAD))
+
+    def test_automated_review_needs_the_full_sha(self):
+        self.assertIsNone(review_for_head([automated(HEAD[:7])], HEAD))
+        self.assertIsNone(review_for_head([automated(HEAD[:39])], HEAD))
+        self.assertEqual("automated", review_for_head([automated(HEAD)], HEAD)["kind"])
 
     def test_short_or_missing_sha_never_matches(self):
         self.assertIsNone(review_for_head([manual("a39")], HEAD))
