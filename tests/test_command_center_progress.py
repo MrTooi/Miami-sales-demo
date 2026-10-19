@@ -78,6 +78,17 @@ class ChecklistAndStepsTests(unittest.TestCase):
         # A fence that never closes hides everything after it, as GitHub renders it.
         self.assertEqual([], parse_checklist("## Lane\n```\n- [x] hidden"))
 
+    def test_longer_fences_close_only_on_a_matching_fence(self):
+        cases = {
+            "four backticks with inner three": "````\n```\n- [x] example\n```\n````",
+            "tildes with inner backticks": "~~~~\n```\n- [x] example\n~~~~",
+            "closing fence with trailing text is not a close": "```\n- [x] example\n``` not a close\n- [x] still code\n```",
+        }
+        for name, block in cases.items():
+            with self.subTest(name):
+                groups = parse_checklist(f"## Lane\n{block}\n- [ ] Real task")
+                self.assertEqual((0, 1), progress([i for g in groups for i in g["items"]]))
+
     def test_empty_or_missing_checklist(self):
         self.assertEqual([], parse_checklist(None))
         self.assertEqual((0, 0), progress([]))
@@ -155,6 +166,19 @@ class ReviewBindingTests(unittest.TestCase):
     def test_pass_on_an_older_commit_does_not_cover_a_new_head(self):
         comments = [automated(OLD, at="2026-10-19T09:00:00Z"), manual(OLD, "PASS", at="2026-10-19T09:00:00Z")]
         self.assertIsNone(review_for_head(comments, HEAD))
+
+    def test_review_edited_to_fail_after_a_later_pass_wins(self):
+        for verdict, status in (("FAIL", None), ("INCOMPLETE", "REVIEW INCOMPLETE — does not count")):
+            with self.subTest(verdict):
+                if status:
+                    edited = automated(HEAD, status=status, at="2026-10-19T05:00:00Z")
+                else:
+                    edited = manual(HEAD, "FAIL", at="2026-10-19T05:00:00Z")
+                edited["updated_at"] = "2026-10-19T08:00:00Z"
+                later_pass = automated(HEAD, at="2026-10-19T06:00:00Z")
+                review = review_for_head([edited, later_pass], HEAD)
+                self.assertEqual(verdict, review["verdict"])
+                self.assertNotEqual("Ready for your merge decision", next_action(review, "PASSING"))
 
     def test_newer_fail_on_head_overrides_older_pass_on_head(self):
         comments = [automated(HEAD, at="2026-10-19T05:00:00Z"), manual(HEAD, "FAIL", at="2026-10-19T06:00:00Z")]

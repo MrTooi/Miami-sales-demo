@@ -30,22 +30,26 @@ REQUIRED_CHECKS = ("unit-tests",)
 UNIT_STEP_LABEL = "STEP PR MERGED — completion unverified"
 
 
-FENCE = re.compile(r"^\s*(```|~~~)")
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def _rendered_lines(markdown: str | None) -> list[str]:
-    """Lines GitHub would render as content: fenced code blocks and HTML comments removed."""
+    """Lines GitHub would render as content: fenced code blocks and HTML comments removed.
+
+    Follows the Markdown fence rules: a block closes only on a fence of the same
+    character, at least as long as the opening one, with nothing else on the line.
+    """
     text = re.sub(r"<!--.*?-->", "", markdown or "", flags=re.DOTALL)
     lines, fence = [], None
     for line in text.splitlines():
-        if m := FENCE.match(line):
-            if fence is None:
-                fence = m.group(1)
-            elif m.group(1) == fence:
-                fence = None
-            continue
+        m = FENCE.match(line)
         if fence is None:
+            if m:
+                fence = m.group(1)
+                continue
             lines.append(line)
+        elif m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not m.group(2).strip():
+            fence = None
     return lines
 
 
@@ -164,7 +168,10 @@ def classify_review(comment: dict) -> dict | None:
     if not body:
         return None
     author = ((comment.get("user") or {}).get("login")) or ""
-    base = {"url": comment.get("html_url"), "at": comment.get("created_at")}
+    # An edited comment counts as of its last edit, so a review changed to FAIL
+    # after a later PASS still wins.
+    at = max(comment.get("created_at") or "", comment.get("updated_at") or "")
+    base = {"url": comment.get("html_url"), "at": at}
     if body.startswith(AUTOMATED_HEADER):
         if author != AUTOMATED_AUTHOR:
             return None  # looks automated but wasn't posted by the workflow
@@ -197,7 +204,8 @@ def classify_review(comment: dict) -> dict | None:
 def review_for_head(comments: list[dict], head_sha: str) -> dict | None:
     """The newest recognised review that covers exactly the PR's current head commit."""
     found = None
-    for c in sorted(comments, key=lambda c: c.get("created_at") or ""):
+    last_edit = lambda c: max(c.get("created_at") or "", c.get("updated_at") or "")  # noqa: E731
+    for c in sorted(comments, key=last_edit):
         review = classify_review(c)
         if review is None:
             continue
