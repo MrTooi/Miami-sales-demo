@@ -576,6 +576,8 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
     lines_per_document = _lines_per_document(headers, records, mapping, kind, key_of) if per_document else Counter()
     types = _type_columns(headers, mapping)
     all_lines = _lines_per_document(headers, records, mapping, kind, _possible_document_key)
+    summaries = Counter(_possible_document_key({f: r.cells[i].strip() for f, i in index.items()}, kind)
+                        for r in records if len(r.cells) == len(headers) and _summary_label(r.cells, headers, mapping))
     per_day = _lines_per_vendor_day(headers, records, mapping) if answered_total and kind == "costs" else Counter()
     entity = "Invoice" if kind == "invoices" else "Bill"
     candidates = {} if _per_document_amounts(mapping, question, amount_scope) else _subtotal_rows(headers, records, mapping, kind)
@@ -619,7 +621,11 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
                            "not imported.")
         summary = _summary_label(rec.cells, headers, mapping)
         key = _possible_document_key(values, kind)
-        if summary and key and all_lines[key] >= 1:
+        if summary and key and not all_lines[key] and summaries[key] > 1:
+            # Only summary rows (e.g. "Subtotal" and "Total"): which one is the amount can't be told.
+            reasons.append(f"{_label(key, kind).capitalize()} has only summary rows ({summaries[key]}), "
+                           "so which one is its amount can't be told; none is counted.")
+        elif summary and key and all_lines[key] >= 1:
             # Only when the document has other lines (summary rows aren't counted among them):
             # a one-line invoice described "Total" is its own amount.
             reasons.append(f"Row is labeled '{summary}': a summary of {_label(key, kind)}'s other lines, "

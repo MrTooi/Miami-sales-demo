@@ -224,6 +224,15 @@ class MappingTests(unittest.TestCase):
         self.assertEqual([4], [r["row"] for r in result.rejected])
         self.assertIn("labeled 'Subtotal'", " ".join(result.rejected[0]["reasons"]))
 
+    def test_invoice_with_only_summary_rows_is_never_counted_twice(self):
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Amount\n"
+                                    b"A,10/31/2026,Acme,Subtotal,100.00\nA,10/31/2026,Acme,Total,100.00\n"
+                                    b"B,10/31/2026,Acme,Total,75.00\n")
+        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        self.assertEqual([Decimal("75.00")], [r["amount"] for r in result.accepted])  # one "Total" row stays
+        self.assertEqual([2, 3], [r["row"] for r in result.rejected])
+        self.assertTrue(all("only summary rows" in " ".join(r["reasons"]) for r in result.rejected))
+
     def test_unlabeled_sum_lines_are_asked_about_under_a_line_amount_header_too(self):
         headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Line Amount\n"
                                     b"INV-1,10/31/2026,Acme,Sign,40.00\nINV-1,10/31/2026,Acme,Install,60.00\n"

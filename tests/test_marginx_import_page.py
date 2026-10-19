@@ -392,6 +392,13 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertIn("3 invoice lines imported (1 invoice)", page_text(at))
 
+    def test_invoice_with_only_summary_rows_imports_nothing_for_it(self):
+        at = self.with_files("Invoice,Date,Customer,Description,Amount\nA,10/31/2026,X (fictional),Subtotal,100.00\n"
+                             "A,10/31/2026,X (fictional),Total,100.00\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("2 rows of 2 couldn't be imported", page_text(at))
+        self.assertIn("No invoice lines were imported", page_text(at))
+
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertTrue(any("no rows" in i.value for i in at.info))
