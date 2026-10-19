@@ -29,6 +29,8 @@ SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"
 SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")
 KIND_LABELS = {"invoices": "sales / invoices", "costs": "costs / bills"}
 NOT_MAPPED = "(not in this file)"
+# A file that is fully dealt with but adds nothing to profit (a bank statement, headers only).
+EXCLUDED = "excluded"
 LEVEL_LABELS = {"problem": "Problem", "gap": "Missing", "info": "Note"}
 # Deposits, transfers and payments are cash movements, not sales or costs (MVP spec).
 BANK_MESSAGE = ("MarginX can't read bank, card or payment statements yet: deposits, payments and transfers "
@@ -66,10 +68,11 @@ def describe_format(name: str, example: str | None) -> str:
     return f"{name}: {example} = {parsed:%B} {parsed.day}, {parsed.year}" if parsed else f"{name} (doesn't fit {example})"
 
 
-def show_file(position: int, name: str, data: bytes, same_as: str | None = None) -> ji.IntakeResult | None:
+def show_file(position: int, name: str, data: bytes, same_as: str | None = None) -> ji.IntakeResult | str | None:
     """Read one file and show its results, asking only what MarginX can't work out.
 
-    Returns what was imported, or None while a question is unanswered or nothing could be read.
+    Returns what was imported; EXCLUDED for a file that adds nothing (a bank statement, headers
+    only); or None while a question is unanswered or the file can't be read.
     """
     st.header(name)
     if same_as:
@@ -86,7 +89,7 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
         return
     if not records:
         st.info("This file has column headers but no rows, so there is nothing to import.")
-        return
+        return EXCLUDED
 
     detected = ji.detect_kind(headers)
     if detected is None:
@@ -97,7 +100,7 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
             return
         if kind == "bank":
             st.info(BANK_MESSAGE)
-            return
+            return EXCLUDED
     else:
         kind = detected
     settings = st.expander("How MarginX read this file (change anything that's wrong)")
@@ -107,7 +110,7 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
                         key=f"{key}-kind-{kind}")
     if kind == "bank":
         st.info(BANK_MESSAGE)
-        return
+        return EXCLUDED
 
     # Columns: suggested automatically; the owner is asked for required ones MarginX can't
     # find, and for optional ones where two columns could fit (e.g. "Job" and "Project").
@@ -225,9 +228,15 @@ def money_cell(amount) -> str:
     return "—" if amount is None else jp.format_money(amount)
 
 
-def show_profit(results: list[ji.IntakeResult]) -> None:
-    """Profit by job and customer, once there is exactly one sales file and one costs file."""
+def show_profit(results: list[ji.IntakeResult], pending: list[str]) -> None:
+    """Profit by job and customer, once every file is dealt with and there is exactly one sales
+    file and one costs file."""
     st.header("Profit by job")
+    if pending:
+        # A file still waiting for an answer (or unreadable) could hold sales or costs.
+        st.info("Profit by job waits until every file above is read: answer the questions for "
+                + ", ".join(pending) + ", or remove it.")
+        return
     invoices = [r for r in results if r.kind == "invoices"]
     costs = [r for r in results if r.kind == "costs"]
     if len(invoices) != 1 or len(costs) != 1:
@@ -240,8 +249,9 @@ def show_profit(results: list[ji.IntakeResult]) -> None:
             st.info(reason)
         return
     st.caption(report.basis)
-    st.caption(f"Sales dated {report.invoice_dates[0]} to {report.invoice_dates[1]}; "
-               f"costs dated {report.cost_dates[0]} to {report.cost_dates[1]}.")
+    st.caption(f"Imported sales lines are dated {report.invoice_dates[0]} to {report.invoice_dates[1]}; "
+               f"imported cost lines {report.cost_dates[0]} to {report.cost_dates[1]}. "
+               "Lines that couldn't be imported are listed with each file above.")
     counts = {s: sum(1 for j in report.jobs if j.status == s) for s in jp.STATUS_ORDER}
     st.text(f"{len(report.jobs)} jobs: {counts['complete']} complete, {counts['provisional']} provisional "
             f"(missing costs, shown with reasons), {counts['unavailable']} without a figure.")
@@ -270,10 +280,13 @@ def show_profit(results: list[ji.IntakeResult]) -> None:
 
 seen_files: dict[bytes, str] = {}
 results: list[ji.IntakeResult] = []
+pending: list[str] = []
 for file_position, (file_name, file_data) in enumerate(files):
     digest = hashlib.sha256(file_data).digest()
     result = show_file(file_position, file_name, file_data, seen_files.get(digest))
-    if result is not None:
+    if result is None:
+        pending.append(file_name)
+    elif result != EXCLUDED:
         results.append(result)
     seen_files.setdefault(digest, file_name)
-show_profit(results)
+show_profit(results, pending)

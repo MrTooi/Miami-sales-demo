@@ -404,7 +404,7 @@ class MarginXImportPageTests(unittest.TestCase):
 
     def test_sample_profit_by_job_after_answering_the_questions(self):
         at = self.run_page()
-        self.assertTrue(any("one sales file and one costs file" in i.value for i in at.info))  # not before answers
+        self.assertTrue(any("waits until every file above is read" in i.value for i in at.info))  # not before answers
         radio(at, SAMPLE_AMOUNT_QUESTION).set_value("line").run()
         radio(at, INVOICE_DATE_QUESTION).set_value("MM/DD/YYYY").run()
         self.assertFalse(at.exception, at.exception)
@@ -439,6 +439,28 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         job = self.profit_table(at).set_index("Job").loc["J-1"]
         self.assertEqual(("$34.50", "Complete", ""), (job["Direct contribution"], job["Status"], job["Why"]))
+
+    def test_profit_waits_for_a_third_unanswered_file(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        files = {"a_sales.csv": "Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                 "b_costs.csv": "Bill,Date,Vendor,Job,Type,Amount\nB-1,10/31/2026,Crew (fictional),J-1,Labor,10.00\n"
+                                "B-2,10/31/2026,Paper Co (fictional),J-1,Materials,10.00\n",
+                 "c_unclear.csv": "Num,Date,Name,Amount\nN-1,10/31/2026,Someone (fictional),50.00\n"}
+        for name, text in files.items():
+            Path(tmp.name, name).write_text(text, encoding="utf-8")
+        source = Path(PAGE).read_text(encoding="utf-8").replace(
+            'SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"', f"SAMPLES = Path({tmp.name!r})").replace(
+            'SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")', f"SAMPLE_FILES = {tuple(files)!r}")
+        at = run_source(source)
+        self.assertFalse(at.exception, at.exception)
+        self.assertTrue(any("waits until every file above is read" in i.value and "c_unclear.csv" in i.value
+                            for i in at.info))
+        self.assertFalse(any("Direct contribution" in d.value.columns for d in at.dataframe))
+        # Saying it's a bank statement settles it, and profit is calculated.
+        radio(at, "What kind of file is c_unclear.csv?").set_value("bank").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertEqual("Complete", self.profit_table(at).set_index("Job").loc["J-1", "Status"])
 
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
