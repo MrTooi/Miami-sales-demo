@@ -1,4 +1,5 @@
 from pathlib import Path
+import tempfile
 import unittest
 
 from streamlit.testing.v1 import AppTest
@@ -55,7 +56,7 @@ class MarginXImportPageTests(unittest.TestCase):
         at = self.run_page()
         at.selectbox(key="datefmt-invoices").set_value("MM/DD/YYYY").run()
         confirm_box(at).check().run()
-        at.selectbox(key="map-invoices-job_id").set_value("(not in this file)").run()
+        at.selectbox(key="map-invoices-job_id").select_index(0).run()  # "(not in this file)"
         self.assertFalse(confirm_box(at).value)
         self.assertNotIn("couldn't be imported", markdown_text(at))
 
@@ -66,6 +67,23 @@ class MarginXImportPageTests(unittest.TestCase):
         report = markdown_text(at)
         self.assertIn("3 of 8 imported costs aren't linked to a job", report)
         self.assertIn("No labor costs were found", report)
+
+    def test_a_header_named_like_the_no_column_choice_can_still_be_mapped(self):
+        # AppTest can't upload files, so point the page's sample folder at a temp file.
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "fictional_invoices.csv").write_text(
+                "Num,Date,(not in this file),Amount\nX-1,10/01/2026,Example Co (fictional),1.00\n", encoding="utf-8")
+            source = Path(PAGE).read_text(encoding="utf-8").replace(
+                'SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"', f"SAMPLES = Path({tmp!r})")
+            self.assertIn(repr(tmp), source)
+            at = AppTest.from_string(source, default_timeout=30)
+            at.run()
+            customer = at.selectbox(key="map-invoices-customer")
+            customer.select_index(customer.options.index("(not in this file)", 1)).run()
+            at.selectbox(key="datefmt-invoices").set_value("MM/DD/YYYY").run()  # 10/01 fits two formats
+            confirm_box(at).check().run()
+            self.assertFalse(at.exception, at.exception)
+            self.assertIn("1 invoice imported", markdown_text(at))
 
     def test_own_upload_requires_made_up_data_confirmation(self):
         at = self.run_page()

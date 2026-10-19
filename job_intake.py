@@ -63,6 +63,12 @@ DATE_FORMATS = {
 }
 
 LABOR_WORDS = ("labor", "labour", "wages", "payroll")
+_LABOR = re.compile(r"\b(?<!non[- ])(?<!non)(" + "|".join(LABOR_WORDS) + r")\b", re.IGNORECASE)
+
+
+def is_labor(cost_type: str) -> bool:
+    """A whole-word labor category; "Non-labor" or "nonlabor" doesn't count."""
+    return bool(_LABOR.search(cost_type or ""))
 FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 MAX_FILE_BYTES = 5_000_000
 
@@ -111,8 +117,9 @@ def read_csv(data: bytes) -> tuple[list[str], list[Record]]:
         raise IntakeError("File is empty.")
     try:
         reader = csv.reader(io.StringIO(text, newline=""), strict=True)
-        # Row numbers count records as a spreadsheet shows them (header = row 1),
-        # before blank lines are skipped, so they match the owner's file.
+        # Row numbers are record numbers as a spreadsheet shows them (header = row 1),
+        # counted before empty lines are skipped. A quoted cell spanning several text
+        # lines is still one row, so this can differ from a text editor's line number.
         table = [(number, row) for number, row in enumerate(reader, start=1) if not _is_blank_line(row)]
     except csv.Error as exc:
         raise IntakeError(f"File isn't valid CSV ({exc}). Check for unbalanced quotes.") from exc
@@ -279,7 +286,7 @@ def missing_report(result: IntakeResult) -> list[dict]:
             untyped = sum(1 for r in accepted if not r.get("cost_type"))
             if untyped:
                 items.append({"level": "gap", "text": f"{untyped} of {len(accepted)} imported costs have no cost type."})
-            if not any(any(w in r.get("cost_type", "").lower() for w in LABOR_WORDS) for r in accepted):
+            if not any(is_labor(r.get("cost_type", "")) for r in accepted):
                 items.append({"level": "gap", "text": "No labor costs were found. If staff time goes into jobs, "
                               "profit will look higher than it really is until labor is added."})
     dates = sorted(r["date"] for r in accepted)

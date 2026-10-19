@@ -55,6 +55,12 @@ class ReadCsvTests(unittest.TestCase):
         self.assertIn("1 cells", " ".join(result.rejected[1]["reasons"]))
         self.assertIn("1 cells", " ".join(result.rejected[2]["reasons"]))
 
+    def test_row_numbers_are_spreadsheet_records_even_with_multiline_cells(self):
+        headers, rows = ji.read_csv(b'Date,Payee,Amount\n10/01/2026,"two\nlines",1.00\n10/02/2026,,2.00\n')
+        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")
+        self.assertEqual(2, result.accepted[0]["row"])
+        self.assertEqual(3, result.rejected[0]["row"])  # spreadsheet row 3, though text line 4
+
     def test_wrong_cell_count_is_reported_per_row_not_dropped(self):
         headers, rows = ji.read_csv(b"Date,Payee,Amount\n10/01/2026,A,1.00\n10/02/2026,B\n")
         result = ji.intake(headers, rows, {"date": "Date", "vendor": "Payee", "amount": "Amount"}, "costs", "MM/DD/YYYY")
@@ -165,6 +171,15 @@ class CostIntakeTests(unittest.TestCase):
         self.assertIn("3 of 8 imported costs aren't linked to a job", report)
         self.assertIn("1 of 8 imported costs have no cost type", report)
         self.assertIn("No labor costs were found", report)
+
+    def test_labor_detection_is_whole_word_and_not_negated(self):
+        for value in ("Labor", "Direct labour", "Wages", "payroll - shop", "LABOR"):
+            self.assertTrue(ji.is_labor(value), value)
+        for value in ("Non-labor", "nonlabor", "Non labor", "Laboratory supplies", "Materials", "", None):
+            self.assertFalse(ji.is_labor(value), value)
+        headers, rows = ji.read_csv(b"Date,Payee,Type,Amount\n10/01/2026,A,Non-labor,1.00\n")
+        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")
+        self.assertIn("No labor costs were found", texts(ji.missing_report(result)))
 
     def test_labor_present_removes_the_labor_gap(self):
         headers, rows = ji.read_csv(b"Date,Payee,Type,Amount\n10/01/2026,Crew,Labor,100.00\n")

@@ -62,18 +62,19 @@ st.text(f"{len(records)} data rows, {len(headers)} columns: {', '.join(headers)}
 section_header("2. Confirm the columns", "MarginX suggests a match; check each one. Nothing is guessed silently.")
 suggested = ji.suggest_mapping(headers, kind)
 mapping: dict[str, str | None] = {}
-options = [NOT_MAPPED, *headers]
+# None is the "no column" choice, so any header text (even "(not in this file)") stays selectable.
+options: list[str | None] = [None, *headers]
 cols = st.columns(3)
 for i, (fld, (label, required)) in enumerate(ji.FIELDS[kind].items()):
     with cols[i % 3]:
         default = suggested.get(fld)
-        choice = st.selectbox(
+        mapping[fld] = st.selectbox(
             f"{label}{' *' if required else ' (optional)'}",
             options,
             index=options.index(default) if default in options else 0,
+            format_func=lambda h: NOT_MAPPED if h is None else h,
             key=f"map-{kind}-{fld}",
         )
-        mapping[fld] = None if choice == NOT_MAPPED else choice
 
 date_values = ji.column_values(headers, records, mapping["date"]) if mapping.get("date") else []
 date_guess = ji.suggest_date_format(date_values)
@@ -112,9 +113,11 @@ for item in ji.missing_report(result):
 
 if result.rejected:
     st.subheader(f"Rows that couldn't be imported ({len(result.rejected)})")
+    # Tables get the same formula protection as the download, because the table
+    # toolbar can also export CSV.
     st.dataframe(
-        pd.DataFrame([{"Row in file": r["row"], "Why": " ".join(r["reasons"]),
-                       "Original row": " | ".join(r["cells"])} for r in result.rejected]),
+        pd.DataFrame([{"Row in file": r["row"], "Why": ji.safe_cell(" ".join(r["reasons"])),
+                       "Original row": ji.safe_cell(" | ".join(r["cells"]))} for r in result.rejected]),
         hide_index=True, width="stretch",
     )
     st.download_button("Download these rows to fix (all original columns)", ji.rejected_rows_csv(result),
@@ -123,7 +126,8 @@ if result.rejected:
 if result.accepted:
     with st.expander(f"Imported rows ({len(result.accepted)})"):
         st.dataframe(
-            pd.DataFrame([{k: v for k, v in r.items() if k not in ("original", "cells")} | {"amount": f"{r['amount']:,.2f}"}
+            pd.DataFrame([{k: (ji.safe_cell(v) if isinstance(v, str) else v)
+                           for k, v in r.items() if k not in ("original", "cells")} | {"amount": f"{r['amount']:,.2f}"}
                           for r in result.accepted]),
             hide_index=True, width="stretch",
         )
