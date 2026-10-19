@@ -24,6 +24,9 @@ CATEGORIES = ("materials", "outsourced", "labor", "fees_overhead", "other", "unk
 CATEGORY_LABELS = {"materials": "Materials", "outsourced": "Outsourced work", "labor": "Labor",
                    "fees_overhead": "Fees & overhead on this job", "other": "Other job costs",
                    "unknown": "Cost type not given"}
+# Cost types that say the type isn't known: treated like a blank type.
+UNKNOWN_TYPES = {"unknown", "uncategorized", "uncategorised", "n a", "na", "none", "tbd", "to be determined",
+                 "ask my accountant", "unclassified", "not set", "pending"}
 FEE_OVERHEAD_WORDS = {"fee", "fees", "processing", "merchant", "overhead", "rent", "utilities", "utility",
                       "insurance", "admin", "administrative"}
 MATERIAL_WORDS = {"material", "materials", "supplies", "supply", "inventory", "stock", "substrate", "substrates",
@@ -42,7 +45,7 @@ BASIS = ("Direct job contribution: sales billed on each job's invoice lines (cre
 def cost_category(cost_type: str | None) -> str:
     """Materials, outsourced, labor, other, or unknown (blank), from the cost type text."""
     text = (cost_type or "").strip()
-    if not text:
+    if not text or re.sub(r"[^a-z0-9]+", " ", text.lower()).strip() in UNKNOWN_TYPES:
         return "unknown"
     if is_labor(text):
         return "labor"

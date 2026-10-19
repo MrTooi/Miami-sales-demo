@@ -208,6 +208,30 @@ class CompletenessTests(unittest.TestCase):
         self.assertIn("count only when they are recorded against a job", report.basis)
         self.assertEqual("fees_overhead", jp.cost_category("Merchant fees"))
 
+    def test_unknown_type_markers_keep_a_job_provisional(self):
+        for marker in (b"Unknown", b"Uncategorized", b"N/A", b"Ask My Accountant"):
+            with self.subTest(marker=marker):
+                job = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,10.00\n"
+                                  b"B-2,10/01/2026,Paper Co,J-1,Materials,10.00\nB-3,10/01/2026,Ink Co,J-1," + marker
+                                  + b",5.00\n").jobs[0]
+                self.assertEqual(("provisional", Decimal("5.00")), (job.status, job.costs["unknown"]))
+        self.assertEqual("other", jp.cost_category("Delivery"))
+
+    def test_credit_memo_signs(self):
+        costs = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,10.00\n"
+                 b"B-2,10/01/2026,Paper Co,J-1,Materials,10.00\n")
+        report = self.report(costs, b"Invoice,Date,Customer,Job,Type,Amount\nI-1,10/01/2026,Bakery,J-1,Invoice,100.00\n"
+                                    b"I-2,10/01/2026,Bakery,J-1,Credit Memo,-20.00\n")
+        self.assertEqual(("complete", Decimal("80.00")), (report.jobs[0].status, report.jobs[0].sales))
+        # A positive credit memo is never added to sales; the job can't be complete.
+        report = self.report(costs, b"Invoice,Date,Customer,Job,Type,Amount\nI-1,10/01/2026,Bakery,J-1,Invoice,100.00\n"
+                                    b"I-2,10/01/2026,Bakery,J-1,Credit Memo,20.00\n")
+        self.assertEqual(("provisional", Decimal("100.00")), (report.jobs[0].status, report.jobs[0].sales))
+        # Supplier credits: a positive one is unclear, a negative one is a negative cost; neither is imported.
+        for amount in (b"5.00", b"-5.00"):
+            report = self.report(costs + b"B-3,10/01/2026,Paper Co,J-1,Vendor Credit," + amount + b"\n")
+            self.assertEqual(("provisional", Decimal("20.00")), (report.jobs[0].status, report.jobs[0].total_costs))
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))

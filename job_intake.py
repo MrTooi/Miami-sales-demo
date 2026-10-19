@@ -482,6 +482,15 @@ def _cash_movement_type(cells: tuple[str, ...], type_columns: list[int]) -> str 
     return None
 
 
+def _credit_memo(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
+    """The row's type text when it is a credit memo or credit note."""
+    for i in type_columns:
+        words = set(_norm(cells[i]).split())
+        if "credit" in words and words & {"memo", "note"}:
+            return cells[i].strip()
+    return None
+
+
 def _unclear_credit(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
     """The row's type text when it is a credit of unclear kind ("Credit", "Vendor Credit"): it
     could be a customer or supplier adjustment or money received, so it is never imported
@@ -647,6 +656,12 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             # Real money may be missing here, so this is not counted as "not a line".
             reasons.append(f"Type '{unclear}' could be a customer or supplier credit or money received; "
                            "not imported. Use 'Credit Memo' for credits on invoices, and leave bank credits out.")
+        memo = _credit_memo(rec.cells, types)
+        if memo and amount is not None and amount > 0:
+            # A credit lowers what was billed; a positive one would raise it. Which sign is
+            # right can't be told, so it is never imported.
+            reasons.append(f"Type '{memo}' has a positive amount ({values['amount']}); a credit should reduce "
+                           "the total, so it isn't imported. Check the sign where the data comes from.")
         summary = _summary_label(rec.cells, headers, mapping)
         key = _possible_document_key(values, kind)
         if summary and key and not all_lines[key] and summaries[key] > 1:
