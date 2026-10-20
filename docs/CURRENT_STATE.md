@@ -65,7 +65,7 @@ Internal code names (`marginx_ui.py`, `marginx_insights.py`, `marginx_pilot.py`,
 - **Real customer data is prohibited** until step 3b is done and the owner records the real-data decision (**D-007 or later**; real data approved for a named pilot shop).
 
 ## Next actions, in order
-1. After Abrey's software note (due Wed 2026-10-21): **step 3b**, the real export layouts plus the high-priority follow-ups, guided by what shops actually use. Get one real QuickBooks Online report layout first: it confirms or corrects #116. Candidates to validate in conversations first: labor hours × rate (as an estimate), how-to-export instructions, profit by product type, quoted vs. actual.
+1. After Abrey's software note (due Wed 2026-10-21): **step 3b**, the real export layouts plus the high-priority follow-ups, guided by what shops actually use. Get one real QuickBooks Online report **layout** first (the column names and row shapes, for example from the QuickBooks test drive or an export filled only with made-up entries, **not** a shop's real records): it confirms or corrects #116. Real customer data stays prohibited until the money-length limitation is fixed and the owner's real-data decision is recorded. Candidates to validate in conversations first: labor hours × rate (as an estimate), how-to-export instructions, profit by product type, quoted vs. actual.
 2. Small follow-ups (non-blocking):
    - clamp the customer sales-bar width for a customer with net-negative sales (cosmetic; from the #108 review)
    - optional test additions from the #113 and #115 reviews (see those PRs)
