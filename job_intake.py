@@ -361,12 +361,14 @@ def _header_row(table: list[tuple[int, list[str]]]) -> int:
     return 0
 
 
+# Anything written like a number, valid money or not: 12.345, (45.00), 1.2E3, 15%, $ 1 250.
+NUMBER_LIKE = re.compile(r"(?i)^[\s$+\-(]*\d[\d\s.,]*(e[+-]?\d+)?\)?\s*%?$")
+
+
 def _looks_like_data(text: str) -> bool:
-    try:
-        money(text)
-        return True
-    except ValueError:
-        return any(_parse_date(text, fmt) for fmt in DATE_FORMATS.values())
+    """True for a number (valid money or not) or a date: such a cell may be money, so it is never
+    taken for a title, a column name or a heading."""
+    return bool(NUMBER_LIKE.match(text.strip())) or any(_parse_date(text.strip(), fmt) for fmt in DATE_FORMATS.values())
 
 
 def _xlsx_rows(data: bytes) -> list[tuple[int, list[str]]]:
@@ -916,7 +918,8 @@ def _layout_rows(headers: list[str], records: list[Record], mapping: dict[str, s
     - a total row (see _total_row) whose amount equals the sum of the rows directly above it,
       back to the start of the file or to a heading or total row. "Total for X" below a heading
       "X" must equal exactly the rows under that heading.
-    - a heading: a row with one filled cell and no amount, closed by such a "Total for <its text>".
+    - a heading: a row with one filled cell, not a number or date, and no amount, closed by such
+      a "Total for <its text>". One that is never closed is rejected, not skipped.
     - the report's footer ("Accrual basis ..." or "Cash basis ..."), alone on the file's last row.
     Every other row, including one that only looks like a total or heading, is checked as usual,
     so anything unclear is rejected and counted as possibly missing money, never skipped.
@@ -944,7 +947,8 @@ def _layout_rows(headers: list[str], records: list[Record], mapping: dict[str, s
                 starts.add(running)
                 continue
         filled = [c.strip() for c in cells if c.strip()]
-        if len(cells) == len(headers) and len(filled) == 1 and not cells[amount_at].strip():
+        if len(cells) == len(headers) and len(filled) == 1 and not cells[amount_at].strip() \
+                and not _looks_like_data(filled[0]):
             if FOOTER_ROW.match(filled[0]) and position == len(records) - 1:
                 layout[rec.row] = f"The report's footer ('{filled[0]}'), not a sale or cost."
             else:

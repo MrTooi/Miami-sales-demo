@@ -310,6 +310,7 @@ class ReportLayoutTests(unittest.TestCase):
             "a total that doesn't add up": ("Total", "", "", "", "99.00"),
             "a total with no amount": ("TOTAL", "", "", "", ""),
             "a lone name never closed by a total": ("Total Fitness (fictional)", "", "", "", ""),
+            "a lone number in the wrong column": ("500.00", "", "", "", ""),
         }
         for what, row in cases.items():
             records = [ji.Record(2, line), ji.Record(3, row)]
@@ -343,6 +344,16 @@ class ReportLayoutTests(unittest.TestCase):
         self.assertTrue(all(r["money_missing"] for r in result.rejected))
         self.assertEqual(["INV-1", "INV-2", "INV-3"], [r["invoice_id"] for r in result.accepted])
 
+    def test_a_number_or_date_is_never_a_heading_even_when_a_total_closes_it(self):
+        # "500.00" in the invoice column may be a misplaced amount; a zero "Total for 500.00" mustn't hide it.
+        headers = ["Invoice", "Date", "Customer", "Job", "Amount"]
+        for lone in ("500.00", "12.345", "10/02/2026"):
+            records = [ji.Record(2, (lone, "", "", "", "")), ji.Record(3, (f"Total for {lone}", "", "", "", "0.00"))]
+            result = ji.intake(headers, records, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+            self.assertEqual([], [r["row"] for r in result.skipped if r["row"] == 2], lone)
+            self.assertIn(2, [r["row"] for r in result.rejected], lone)
+            self.assertTrue(next(r for r in result.rejected if r["row"] == 2)["money_missing"], lone)
+
     def test_a_footer_is_skipped_only_on_the_last_row(self):
         headers = ["Invoice", "Date", "Customer", "Job", "Amount"]
         line = ("INV-1", "10/02/2026", "Bakery (fictional)", "J-1", "100.00")
@@ -365,12 +376,16 @@ class ReportLayoutTests(unittest.TestCase):
 
     def test_an_amount_or_date_above_the_column_names_is_never_skipped_as_a_title(self):
         header = ",Date,Invoice,Customer,Job,Amount"
-        for above in ("100.00", "\"$1,250.00\"", "-45", "10/02/2026"):
+        # Valid money or not (12.345 has too many decimals), anything written like a number or a date is refused.
+        for above in ("100.00", "\"$1,250.00\"", "-45", "10/02/2026", "12.345", "(45.00)", "1.2E3", "15%"):
             data = "\n".join(["Sales report (fictional)", above, header,
                               ",10/02/2026,INV-1,Bakery (fictional),J-1,40.00"]).encode()
             with self.assertRaisesRegex(ji.IntakeError, "Row 2, above the column names, holds .* which looks like an "
                                                         "amount or a date, not a title"):
                 ji.read_file("sales.csv", data)
+        with self.assertRaisesRegex(ji.IntakeError, "Row 1, above the column names, holds '12.345'"):
+            ji.read_file("sales.xlsx", raw_xlsx('<row r="1"><c r="A1"><v>12.345</v></c></row>'
+                                                + RAW_HEADER.replace('r="1"', 'r="2"').replace('1"', '2"')))
         with self.assertRaisesRegex(ji.IntakeError, "Row 1, above the column names, holds '100'"):
             ji.read_file("sales.xlsx", raw_xlsx('<row r="1"><c r="A1"><v>100</v></c></row>'
                                                 + RAW_HEADER.replace('r="1"', 'r="2"').replace('1"', '2"')))
