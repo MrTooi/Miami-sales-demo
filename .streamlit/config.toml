@@ -11,3 +11,6 @@ showErrorDetails = "none"
 [server]
 # Matches job_intake.MAX_FILE_BYTES (5 MB): larger uploads are refused before they are read.
 maxUploadSize = 5
+# A closed browser tab's session, with its uploaded files, may be dropped after 10 seconds
+# instead of the default 2 minutes.
+disconnectedSessionTTL = 10

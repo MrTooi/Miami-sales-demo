@@ -17,15 +17,17 @@ Run this in the project folder.
 
 Mac:
 ```bash
-MARGINX_PILOT=1 streamlit run app.py --server.address localhost
+MARGINX_PILOT=1 streamlit run marginx_pilot.py --server.address localhost
 ```
 
 Windows (PowerShell):
 ```powershell
-$env:MARGINX_PILOT="1"; streamlit run app.py --server.address localhost
+$env:MARGINX_PILOT="1"; streamlit run marginx_pilot.py --server.address localhost
 ```
 
-Open the **MarginX Import** page. It must say **"Pilot session on this laptop"**. If it says "made-up data only", pilot mode isn't on: stop, don't use real files, and check the command.
+`marginx_pilot.py` opens **only** the MarginX page. The older Ledger demo (`app.py`) is turned off whenever pilot mode is set, because it keeps imports in a file on the laptop. Never upload a shop's files anywhere else.
+
+The page must say **"Pilot session on this laptop"**. If it says "made-up data only", pilot mode isn't on: stop, don't use real files, and check the command.
 
 Pilot mode only works with `--server.address localhost`, opened in a browser on this same laptop at `http://localhost:8501`. This keeps other computers from reaching the app. Never run pilot mode on a shared or public server.
 
@@ -38,7 +40,7 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
 6. **No screenshots or photos of the screen.**
 
 ## Before you leave (don't skip this)
-- [ ] Click **End session and clear everything** in MarginX.
+- [ ] Click **End session and clear everything** in MarginX. It should say the uploaded files "were deleted from MarginX's memory". If it says it **couldn't confirm** that, go straight to the next step.
 - [ ] Close the browser tab, then stop MarginX: press Ctrl+C in the terminal and close the terminal. Error details can appear there.
 - [ ] **Delete the shop's files from the laptop.** Check Downloads, the Desktop and wherever AirDrop saved them. **Then empty the Trash/Recycle Bin.**
 - [ ] **Delete the files from the USB drive**, or give the drive to the owner.
@@ -53,7 +55,7 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
 ## What this setup does and doesn't protect
 - **It does:**
   - Files stay on one laptop and in memory only.
-  - Nothing is saved by MarginX.
+  - Nothing is saved by MarginX. **End session** deletes the uploaded files from MarginX's memory and checks that they're gone, and says so only if the check passes. A closed tab's files are dropped within about 10 seconds; stopping MarginX drops everything.
   - No usage data is sent anywhere.
   - Error pages show no file contents.
   - Real files are refused unless pilot mode is on, the app listens on this computer only, and the browser visit itself looks local (no proxy or tunnel signs).

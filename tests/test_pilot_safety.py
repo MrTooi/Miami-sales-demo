@@ -1,5 +1,6 @@
 from decimal import Decimal
 from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -9,7 +10,8 @@ import job_intake as ji
 import pilot_safety as ps
 from finance_engine import money
 
-PAGE = str(Path(__file__).resolve().parents[1] / "pages" / "1_MarginX_Import.py")
+ROOT = Path(__file__).resolve().parents[1]
+PAGE = str(ROOT / "pages" / "1_MarginX_Import.py")
 CONFIG = Path(__file__).resolve().parents[1] / ".streamlit" / "config.toml"
 
 
@@ -42,6 +44,94 @@ class PilotModeTests(unittest.TestCase):
         self.assertTrue(ps.upload_allowed(True, False, False))
         self.assertFalse(ps.upload_allowed(False, True, False))
         self.assertTrue(ps.upload_allowed(False, True, True))
+
+
+class UploadReleaseTests(unittest.TestCase):
+    """End session deletes uploads from Streamlit's real in-memory upload storage (pinned 1.65.0)."""
+
+    def manager_with_files(self):
+        from streamlit.runtime.memory_uploaded_file_manager import MemoryUploadedFileManager
+        from streamlit.runtime.uploaded_file_manager import UploadedFileRec
+
+        manager = MemoryUploadedFileManager("/_stcore/upload_file")
+        for session, file_id in (("visit", "f1"), ("visit", "f2"), ("other", "f3")):
+            manager.add_file(session, UploadedFileRec(file_id, f"{file_id}.csv", "text/csv",
+                                                      b"Date,Vendor,Amount\n10/31/2026,Shop A (fictional),12.00\n"))
+        return manager
+
+    def test_end_session_deletes_only_this_sessions_uploads_and_confirms_it(self):
+        manager = self.manager_with_files()
+        self.assertEqual(2, len(manager.get_files("visit", ["f1", "f2"])))
+        self.assertTrue(ps.release_uploads(manager, "visit"))
+        self.assertEqual([], manager.get_files("visit", ["f1", "f2"]))  # a later session can't get them
+        self.assertNotIn("visit", manager.file_storage)
+        self.assertEqual(1, len(manager.get_files("other", ["f3"])))  # another browser session is untouched
+
+    def test_a_deletion_that_cant_be_checked_is_never_claimed(self):
+        self.assertFalse(ps.release_uploads(None, "visit"))
+        self.assertFalse(ps.release_uploads(self.manager_with_files(), None))
+
+        class NoStorage:
+            def remove_session_files(self, session_id):
+                pass
+        self.assertFalse(ps.release_uploads(NoStorage(), "visit"))
+
+        class Failing:
+            file_storage = {}
+            def remove_session_files(self, session_id):
+                raise RuntimeError("boom")
+        self.assertFalse(ps.release_uploads(Failing(), "visit"))
+
+    def test_the_streamlit_internals_relied_on_are_present(self):
+        # If an upgrade removes these, this test fails and End session falls back to "couldn't confirm".
+        from streamlit.runtime import Runtime
+        from streamlit.runtime.memory_uploaded_file_manager import MemoryUploadedFileManager
+        from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx  # noqa: F401
+        self.assertTrue(hasattr(Runtime, "uploaded_file_mgr"))
+        self.assertTrue(callable(getattr(MemoryUploadedFileManager, "remove_session_files", None)))
+        self.assertIn("file_storage", MemoryUploadedFileManager("/x").__dict__)
+        self.assertIn("streamlit==1.65.0", (ROOT / "requirements.txt").read_text(encoding="utf-8"))
+
+
+class LegacyAppTests(unittest.TestCase):
+    """The older Ledger demo (app.py) can't take real files around the pilot gate."""
+
+    def run_app(self, environ):
+        with mock.patch.dict("os.environ", environ):
+            at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=60)
+            at.run()
+        return at
+
+    def ledger_dbs(self):
+        return {p.name for p in Path(tempfile.gettempdir()).glob("ledger-*.db")}
+
+    def test_pilot_mode_turns_the_legacy_app_off_and_creates_no_database(self):
+        before = self.ledger_dbs()
+        at = self.run_app({"MARGINX_PILOT": "1"})
+        self.assertFalse(at.exception, at.exception)
+        self.assertTrue(any("turned off during pilot sessions" in e.value for e in at.error))
+        self.assertEqual(0, len(at.get("file_uploader")))
+        self.assertEqual(before, self.ledger_dbs())
+
+    def test_outside_pilot_mode_legacy_uploads_need_the_made_up_box(self):
+        at = self.run_app({"MARGINX_PILOT": "0"})
+        self.assertFalse(at.exception, at.exception)
+        self.assertEqual(0, len(at.get("file_uploader")))
+        next(c for c in at.checkbox if c.label == ps.MADE_UP_TEXT).check().run()
+        self.assertGreaterEqual(len(at.get("file_uploader")), 2)
+
+
+class PilotEntryPointTests(unittest.TestCase):
+    def test_the_pilot_entry_point_opens_only_marginx(self):
+        source = (ROOT / "marginx_pilot.py").read_text(encoding="utf-8")
+        self.assertEqual(1, source.count("st.Page("))
+        self.assertIn('"pages/1_MarginX_Import.py"', source)
+        with mock.patch.dict("os.environ", {"MARGINX_PILOT": "0"}):
+            at = AppTest.from_file(str(ROOT / "marginx_pilot.py"), default_timeout=30)
+            at.run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertEqual(["MarginX: check your data"], [t.value for t in at.title])
+        self.assertFalse(any("Ledger" in t.value for t in at.title))
 
 
 class StrictMoneyTests(unittest.TestCase):
@@ -79,8 +169,9 @@ class SafeSettingsTests(unittest.TestCase):
 
     def test_marginx_code_never_writes_files_or_logs_contents(self):
         root = Path(__file__).resolve().parents[1]
-        for name in ("job_intake.py", "job_profit.py", "pilot_safety.py", "pages/1_MarginX_Import.py"):
+        for name in ("job_intake.py", "job_profit.py", "pilot_safety.py", "pages/1_MarginX_Import.py", "marginx_pilot.py"):
             source = (root / name).read_text(encoding="utf-8")
+            # A guard against obvious regressions, not proof: app.py's demo storage is covered by LegacyAppTests.
             for forbidden in ("open(", "write_text", "write_bytes", "to_csv", "sqlite", "logging", "print("):
                 self.assertNotIn(forbidden, source, f"{name} uses {forbidden}")
 
@@ -124,7 +215,10 @@ class PilotPageTests(unittest.TestCase):
         self.assertTrue(at.checkbox[0].value)
         next(b for b in at.button if b.label == "End session and clear everything").click().run()
         self.assertFalse(at.exception, at.exception)
-        self.assertTrue(any("Session ended" in s.value for s in at.success))
+        # AppTest has no real upload storage, so the deletion can't be confirmed here: the page must
+        # then say so instead of claiming it (the confirmed path is tested in UploadReleaseTests).
+        self.assertTrue(any("couldn't confirm the uploaded files were deleted" in w.value for w in at.warning))
+        self.assertFalse(any("deleted from MarginX's memory" in s.value for s in at.success))
         self.assertTrue(at.toggle[0].value)  # back to the samples: the previous answers are gone
         self.assertEqual(1, at.session_state["session_number"])
 

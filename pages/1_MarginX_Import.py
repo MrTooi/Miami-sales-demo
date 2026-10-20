@@ -69,13 +69,33 @@ else:
 # "End session" forgets every file, answer and result: the session's state is cleared and the
 # upload box gets a new key, so nothing from the visit stays in the app.
 session = st.session_state.get("session_number", 0)
+def _release_uploads() -> bool:
+    """Delete this browser session's uploaded files from Streamlit's memory and confirm it."""
+    try:
+        from streamlit.runtime import Runtime
+        from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
+
+        ctx = get_script_run_ctx()
+        manager = Runtime.instance().uploaded_file_mgr if Runtime.exists() else None
+        return ps.release_uploads(manager, ctx.session_id if ctx else None)
+    except Exception:
+        return False
+
+
 if st.button("End session and clear everything"):
+    released = _release_uploads()
     st.session_state.clear()
     st.session_state["session_number"] = session + 1
-    st.session_state["just_ended"] = True
+    st.session_state["just_ended"] = "released" if released else "unconfirmed"
     st.rerun()
-if st.session_state.pop("just_ended", False):
-    st.success("Session ended. Nothing from it is kept in MarginX.")
+ended = st.session_state.pop("just_ended", None)
+if ended == "released":
+    st.success("Session ended. The uploaded files, answers and results were deleted from MarginX's memory. "
+               "Close this browser tab and stop MarginX when the visit is over.")
+elif ended:
+    # Never claim a deletion that couldn't be checked.
+    st.warning("Answers and results were cleared, but MarginX couldn't confirm the uploaded files were deleted "
+               "from memory. Close this browser tab now and stop MarginX (Ctrl+C) to finish clearing.")
 st.session_state["session_number"] = session
 
 use_samples = st.toggle("Try it with the made-up sample files", value=not PILOT, key=f"samples-{session}")

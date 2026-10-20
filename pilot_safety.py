@@ -22,8 +22,9 @@ LOCAL_ADDRESSES = {"localhost", "127.0.0.1", "::1"}
 
 CONSENT_TEXT = (
     "I own or manage this business and agree to MarginX reading these files on this laptop, with me present. "
-    "The files are read in memory only and are not saved, uploaded or kept after this session. I can stop at any "
-    "time, and I can ask for the session to be ended right away."
+    "The files go only to MarginX on this laptop, never to an outside server; they are read in memory only and "
+    "are not saved or kept after this session. I can stop at any time, and I can ask for the session to be "
+    "ended right away."
 )
 MADE_UP_TEXT = "These files are made-up (no real customer, invoice or bank data)."
 
@@ -59,6 +60,25 @@ def request_is_local(headers: Mapping[str, str] | None) -> bool:
     else:
         name = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
     return name in LOCAL_ADDRESSES
+
+
+def release_uploads(manager, session_id: str | None) -> bool:
+    """Delete every file this session uploaded from Streamlit's upload storage, then check.
+
+    Returns True only when the storage can be inspected and holds nothing for the session.
+    Relies on Streamlit's in-memory upload manager (pinned streamlit==1.65.0, see
+    requirements.txt): remove_session_files() and its file_storage dict. If either is
+    missing, nothing can be confirmed and False is returned, so the page never claims a
+    deletion it couldn't check.
+    """
+    if manager is None or not session_id:
+        return False
+    try:
+        manager.remove_session_files(session_id)
+        storage = manager.file_storage
+    except Exception:
+        return False
+    return isinstance(storage, dict) and not storage.get(session_id)
 
 
 def upload_allowed(use_sample: bool, has_upload: bool, confirmed: bool) -> bool:
