@@ -83,22 +83,37 @@ class MoneySizeTests(unittest.TestCase):
             self.assertEqual(Decimal(value), money(text), text)
         self.assertEqual(MAX_MONEY, money(MAX_MONEY))
         self.assertEqual(Decimal(-999999999999), money(-999999999999))
+        # Size is judged by value, not length: leading zeros don't make an amount large.
+        for text, value in (("0" * 41 + "1", "1"), ("0" * 5000, "0"), ("-" + "0" * 100 + "12.50", "-12.50"),
+                            ("$" + "0" * 60 + "999999999999.99", "999999999999.99")):
+            self.assertEqual(Decimal(value), money(text), text[:20])
+        self.assertEqual("12.50", str(money("0012.50")))  # cents kept as written
 
     def test_larger_amounts_are_refused_never_rounded(self):
         too_large = ["1,000,000,000,000.00", "-1000000000000", "$1000000000000.01", "1" * 30, "9" * 30 + ".99",
-                     "1" * 5000, 10 ** 30, -(10 ** 12), Decimal("1E+12"), Decimal("1000000000000.00")]
+                     "1" * 5000, 10 ** 30, -(10 ** 12), 10 ** 5000, -(10 ** 5000), Decimal("1E+12"),
+                     Decimal("1000000000000.00"), Decimal("1E+1000000"), Decimal("-1E+1000000")]
         # Checked by the too_large flag, as callers do: data_pipeline.analyze reloads finance_engine,
         # which replaces the AmountTooLarge class, but the flag survives.
-        for value in too_large:
-            with self.assertRaises(ValueError, msg=repr(value)[:40]) as caught:
+        for number, value in enumerate(too_large):
+            with self.assertRaises(ValueError, msg=f"case {number}") as caught:
                 money(value)
-            self.assertTrue(getattr(caught.exception, "too_large", False), repr(value)[:40])
+            self.assertTrue(getattr(caught.exception, "too_large", False), f"case {number}")
         # AmountTooLarge is a ValueError, so every existing caller already refuses it.
         self.assertTrue(issubclass(AmountTooLarge, ValueError))
         # Long text that isn't an amount at all is still "not an amount", not "too large".
         with self.assertRaises(ValueError) as caught:
             money("this is not an amount, it is just a long line of text")
         self.assertFalse(getattr(caught.exception, "too_large", False))
+        # Still refused as invalid, as before: more than two decimals, two signs, European commas.
+        for text in ("1.230", "-$-5", "12,50", "0" * 50 + "1.234"):
+            with self.assertRaises(ValueError) as caught:
+                money(text)
+            self.assertFalse(getattr(caught.exception, "too_large", False), text[:20])
+        # A huge whole number's message never tries to print all of it.
+        with self.assertRaises(ValueError) as caught:
+            money(10 ** 5000)
+        self.assertLess(len(str(caught.exception)), 100)
 
     def test_the_too_large_reason_survives_the_engine_being_reloaded(self):
         import importlib
