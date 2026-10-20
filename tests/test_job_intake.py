@@ -701,6 +701,26 @@ class FormulaSafetyTests(unittest.TestCase):
 
 
 class AmountTooLargeIntakeTests(unittest.TestCase):
+    def test_an_oversized_cost_keeps_its_job_from_being_complete(self):
+        import job_profit as jp
+        sales_headers = ["Invoice", "Date", "Customer", "Job", "Amount"]
+        sales = ji.intake(sales_headers, [ji.Record(2, ("INV-1", "10/02/2026", "Bakery (fictional)", "J-1", "2400.00"))],
+                          ji.suggest_mapping(sales_headers, "invoices"), "invoices", "MM/DD/YYYY")
+        cost_headers = ["Bill", "Date", "Vendor", "Job", "Type", "Amount"]
+        rows = [("B-1", "10/01/2026", "Supply (fictional)", "J-1", "Materials", "600.00"),
+                ("B-2", "10/02/2026", "Crew (fictional)", "J-1", "Labor", "480.00")]
+        def report(extra):
+            records = [ji.Record(n, r) for n, r in enumerate(rows + extra, start=2)]
+            costs = ji.intake(cost_headers, records, ji.suggest_mapping(cost_headers, "costs"), "costs", "MM/DD/YYYY")
+            return jp.job_profit(sales, costs)
+        # Control: with every cost readable, J-1 is Complete.
+        self.assertEqual("complete", next(j for j in report([]).jobs if j.job_id == "J-1").status)
+        # With a cost over the cap, J-1 isn't Complete, and the rejected cost line is counted.
+        oversized = report([("B-3", "10/03/2026", "Supply (fictional)", "J-1", "Materials", "9" * 30)])
+        j1 = next(j for j in oversized.jobs if j.job_id == "J-1")
+        self.assertNotEqual("complete", j1.status)
+        self.assertEqual(1, oversized.rejected_cost_lines)
+
     def test_an_amount_over_the_cap_is_rejected_with_its_own_reason_and_counts_as_missing_money(self):
         import job_intake as ji
         headers = ["Invoice", "Date", "Customer", "Job", "Amount"]

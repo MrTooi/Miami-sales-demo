@@ -105,6 +105,11 @@ class MoneySizeTests(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             money("this is not an amount, it is just a long line of text")
         self.assertFalse(getattr(caught.exception, "too_large", False))
+        # Digits other than the ordinary 0-9 aren't a U.S. amount, whatever their value.
+        for text in ("٠" * 13 + "1", "١٢٫٥٠", "１２.５０", "12.5٠"):
+            with self.assertRaises(ValueError) as caught:
+                money(text)
+            self.assertFalse(getattr(caught.exception, "too_large", False), text)
         # Still refused as invalid, as before: more than two decimals, two signs, European commas.
         for text in ("1.230", "-$-5", "12,50", "0" * 50 + "1.234"):
             with self.assertRaises(ValueError) as caught:

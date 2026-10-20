@@ -5,8 +5,9 @@ from decimal import Decimal, InvalidOperation
 
 # U.S. amounts only: commas strictly as thousands separators ("1,234.56"), a dot for cents.
 # "12,50", "1,5" or "1.234,56" could be European style (12.50) or a typo, so they are refused
-# rather than read as 1250 or 15 (issue #36).
-_US_AMOUNT = re.compile(r"^[+-]?\$?[+-]?(\d+|\d{1,3}(,\d{3})+)(\.\d+)?$")
+# rather than read as 1250 or 15 (issue #36). Digits are the ordinary 0-9 only (re.ASCII): other
+# scripts' digits ("٠١٢") aren't how U.S. amounts are written, and size is judged on 0-9 below.
+_US_AMOUNT = re.compile(r"^[+-]?\$?[+-]?(\d+|\d{1,3}(,\d{3})+)(\.\d+)?$", re.ASCII)
 
 # The largest amount accepted, positive or negative: just under one trillion dollars. Python's
 # Decimal keeps 28 significant digits by default, so a sum of amounts this size stays exact for
