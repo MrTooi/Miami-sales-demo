@@ -615,6 +615,16 @@ class CompletenessTests(unittest.TestCase):
                                           b"I-1,10/01/2026,Bakery,J-1,Signs,60.00\nI-1,10/01/2026,Bakery,J-1,Service: Total,40.00\n")
         self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "complete")  # "Service: Total" is a real line
 
+    def test_unlinked_sales_under_a_look_alike_name_keep_jobs_provisional(self):
+        for name in (b"bakery", b"BAKERY", b"Bakery ", b"Bak-ery"):
+            with self.subTest(name=name):
+                report = self.report(self.LINKED, b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n"
+                                                  b"I-2,10/01/2026," + name + b",,-20.00\n")
+                job = {j.job_id: j for j in report.jobs}["J-1"]
+                self.assertEqual(("provisional", Decimal("50.00")), (job.status, job.contribution))  # never Complete
+                self.assertIn("with no job number that may belong to this job", " ".join(job.reasons))
+                self.assertEqual(Decimal("-20.00"), report.unlinked_sales)  # disclosed, never merged or allocated
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))

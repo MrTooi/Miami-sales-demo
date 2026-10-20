@@ -179,13 +179,14 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
     customers: dict[str, set[str]] = defaultdict(set)
     invoice_lines: dict[str, int] = defaultdict(int)
     billed: set[str] = set()  # jobs with at least one positive sale (not only credits)
-    no_job_sales: dict[str, list[Decimal]] = defaultdict(list)  # customer -> amounts of sales with no job
+    # Sales with no job number, by look-alike customer name (see _fold), so "bakery" counts for "Bakery".
+    no_job_sales: dict[str, list[Decimal]] = defaultdict(list)
     for line in invoices.accepted:
         job = line.get("job_id", "")
         if not job:
             report.unlinked_sales += line["amount"]
             report.unlinked_sales_lines += 1
-            no_job_sales[line["customer"]].append(line["amount"])
+            no_job_sales[_fold(line["customer"])].append(line["amount"])
             continue
         sales[job] += line["amount"]
         customers[job].add(line["customer"])
@@ -274,10 +275,12 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
             if len(customers[job]) > 1:
                 reasons.append("Billed to more than one customer: " + ", ".join(sorted(customers[job])) + ".")
             for name in sorted(customers[job]):
-                # The customer's sales without a job number may belong to this job; never spread over jobs.
-                if no_job_sales.get(name):
-                    reasons.append(f"{name} has {len(no_job_sales[name])} sales line(s) worth "
-                                   f"{format_money(sum(no_job_sales[name], ZERO))} with no job number that may "
+                # The customer's (or a look-alike name's) sales without a job number may belong to
+                # this job; never spread over jobs.
+                unlinked = no_job_sales.get(_fold(name))
+                if unlinked:
+                    reasons.append(f"{name} has {len(unlinked)} sales line(s) worth "
+                                   f"{format_money(sum(unlinked, ZERO))} with no job number that may "
                                    "belong to this job.")
             if unlinked_job_costs:
                 reasons.append(f"{len(unlinked_job_costs)} cost line(s) worth "
