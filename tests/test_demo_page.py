@@ -17,10 +17,11 @@ spec.loader.exec_module(build)
 
 # Display-only HTML: text, layout, a table, an inline drawing and the details/summary breakdowns.
 ALLOWED_TAGS = {"title", "meta", "style", "main", "div", "span", "b", "small", "h3", "table", "tr", "td",
-                "details", "summary", "i", "svg", "path"}
+                "details", "summary", "i", "img"}
 ALLOWED_ATTRIBUTES = {"name", "content", "class", "style",  # meta, classes, inline styles
-                      "width", "height", "viewbox", "fill", "aria-hidden", "d", "stroke", "stroke-width",
-                      "stroke-linejoin"}  # the brand mark's inline SVG
+                      "src", "alt"}  # the embedded logo, checked below
+# The only image allowed: the MargenX logo embedded as PNG data, so it loads nothing from outside.
+LOGO_DATA = "data:image/png;base64,"
 
 
 class _Inventory(HTMLParser):
@@ -31,6 +32,7 @@ class _Inventory(HTMLParser):
     def handle_starttag(self, tag, attrs):
         self.tags.add(tag)
         self.attributes.update(name for name, _ in attrs)
+        self.image_sources = getattr(self, "image_sources", []) + [v for n, v in attrs if n == "src"]
 
 
 class DemoPageTests(unittest.TestCase):
@@ -47,6 +49,20 @@ class DemoPageTests(unittest.TestCase):
         self.assertIn("Sales dated Oct 2 to Oct 23, 2026", self.page)
         self.assertIn("<title>MargenX Demo Shop</title>", self.page)
 
+    def test_header_shows_the_real_margenx_logo(self):
+        import base64
+        logo = base64.b64encode((ROOT / "assets" / "margenx-logo.png").read_bytes()).decode("ascii")
+        self.assertIn(f'<img class="mx-logo" src="{LOGO_DATA}{logo}" alt="MargenX logo">', self.page)
+        self.assertNotIn("<svg", self.page)  # the old placeholder mark is gone
+
+    def test_logo_file_is_a_valid_png_of_the_expected_size(self):
+        from PIL import Image
+        with Image.open(ROOT / "assets" / "margenx-logo.png") as image:
+            image.verify()  # raises if the file is corrupt or not really a PNG
+        with Image.open(ROOT / "assets" / "margenx-logo.png") as image:
+            self.assertEqual(("PNG", (108, 120)), (image.format, image.size))
+            self.assertIn(image.mode, {"P", "RGBA"})  # has transparency for the mint background
+
     def test_page_says_the_data_is_made_up(self):
         self.assertIn("Every name and number here is invented.", self.page)
         self.assertIn("Example data only", self.page)
@@ -59,7 +75,10 @@ class DemoPageTests(unittest.TestCase):
         self.assertEqual(set(), found.tags - ALLOWED_TAGS, "unexpected tags")
         self.assertEqual(set(), found.attributes - ALLOWED_ATTRIBUTES, "unexpected attributes")
         self.assertFalse(any(a.startswith("on") for a in found.attributes))
-        lowered = self.page.lower()
+        self.assertEqual(1, len(found.image_sources))  # just the logo
+        self.assertTrue(all(src.startswith(LOGO_DATA) for src in found.image_sources))
+        # Checked with the logo's embedded data left out, so its random-looking letters can't hide or fake a match.
+        lowered = re.sub(re.escape(LOGO_DATA) + r"[A-Za-z0-9+/=]+", "", self.page).lower()
         # Nothing that loads or sends anything from CSS or text: no url(), @import, protocol or
         # protocol-relative address, and no data: or javascript: scheme.
         for forbidden in ("url(", "@import", "javascript:", "data:", "upload"):

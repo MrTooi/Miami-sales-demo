@@ -48,7 +48,7 @@ LEVEL_LABELS = {"problem": "Problem", "gap": "Missing", "info": "Note"}
 BANK_MESSAGE = ("MargenX can't read bank, card or payment statements yet: deposits, payments and transfers "
                 "aren't sales or costs. Export your invoices and your bills from your accounting software instead.")
 
-st.set_page_config(page_title=f"{ui.BRAND} | Where your money is made", page_icon="▰", layout="wide")
+st.set_page_config(page_title=f"{ui.BRAND} | Where your money is made", page_icon=str(ui.LOGO_PATH), layout="wide")
 ui.apply_brand()
 
 def _request_headers():
