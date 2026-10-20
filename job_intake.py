@@ -210,6 +210,8 @@ MAX_FILE_BYTES = 5_000_000
 MAX_XLSX_UNPACKED_BYTES = 50_000_000
 MAX_ROWS = 50_000
 MAX_COLUMNS = 100
+# An Excel number is written out in full only up to this many digits before or after the decimal point.
+MAX_NUMBER_DIGITS = 20
 # Report exports (for example QuickBooks Online) put title lines above the column names. The column
 # names are looked for within this many non-empty lines at the top.
 MAX_TITLE_LINES = 12
@@ -342,11 +344,18 @@ def _column_letter(index: int) -> str:
 def _header_row(table: list[tuple[int, list[str]]]) -> int:
     """Where the column names are: the first line with two or more filled cells, none of them a
     number or a date, when every line above it is a title (one filled cell at most). If the lines
-    above don't look like titles, the first line is taken, as in a plain export."""
+    above don't look like titles, the first line is taken, as in a plain export. A line above the
+    column names that holds an amount or a date may be money, so it refuses the file instead of
+    being skipped as a title."""
     for position, (_, cells) in enumerate(table[:MAX_TITLE_LINES + 1]):
         filled = [c.strip() for c in cells if c.strip()]
         if len(filled) >= 2:
             if position and all(not _looks_like_data(c) for c in filled):
+                for number, above in table[:position]:
+                    title = next(c.strip() for c in above if c.strip())
+                    if _looks_like_data(title):
+                        raise IntakeError(f"Row {number}, above the column names, holds '{title}', which looks like "
+                                          "an amount or a date, not a title. Remove it or export the file again.")
                 return position
             return 0
     return 0
@@ -441,7 +450,10 @@ def _exact_cell_parser():
 
         def parse_cell(self, element):
             cell = super().parse_cell(element)
-            if element.find(formula_tag) is not None and element.find(value_tag) is None:
+            # A formula's saved result is its <v>. An empty one is a real result only for text ("str":
+            # =IF(..., "")); for a number, true/false or error it means no result was saved.
+            saved = element.find(value_tag)
+            if element.find(formula_tag) is not None and (saved is None or not saved.text and element.get("t") != "str"):
                 cell["value"] = _Unavailable("a formula with no saved result")
             elif cell["data_type"] == "e":
                 cell["value"] = _Unavailable(f"an error ({cell['value']})")
@@ -464,6 +476,10 @@ def _cell_text(value, where: str = "") -> str:
     if isinstance(value, Decimal):
         if not value.is_finite():
             raise IntakeError(f"Cell {where} holds '{value}', which isn't a number Excel can show.")
+        if value.adjusted() > MAX_NUMBER_DIGITS or value.as_tuple().exponent < -MAX_NUMBER_DIGITS:
+            # Written out in full, 1E1000000000 would be a billion characters. Kept in its short stored
+            # form instead, which no money or date check accepts, so the row is rejected with a reason.
+            return str(value)
         return format(value, "f")  # the stored digits exactly: 1.2345E3 -> "1234.5", 12.50 stays "12.50"
     if isinstance(value, float):
         # Numbers are read as Decimal above; a float here would already be rounded, so it is refused.

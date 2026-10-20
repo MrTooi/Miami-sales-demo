@@ -126,6 +126,15 @@ class ExcelReadingTests(unittest.TestCase):
             result, _ = intake("sales.xlsx", raw_sale(f'<c r="E2"><v>{stored}</v></c>'), "invoices", "YYYY-MM-DD")
             self.assertEqual([Decimal(read)], [r["amount"] for r in result.accepted], stored)
             self.assertEqual(read, result.accepted[0]["original"]["amount"])
+        # A huge or tiny exponent is kept in its short stored form, never written out in full (1E1000000000
+        # would be a billion characters), and no money check accepts it: the row is rejected with a reason.
+        for stored, kept in (("1E1000000000", "1E+1000000000"), ("-1E1000000000", "-1E+1000000000"),
+                             ("1E-1000000000", "1E-1000000000"), ("1.4210854715202004E-14", "1.4210854715202004E-14")):
+            result, _ = intake("sales.xlsx", raw_sale(f'<c r="E2"><v>{stored}</v></c>'), "invoices", "YYYY-MM-DD")
+            self.assertEqual([], result.accepted, stored)
+            self.assertIn(f"Amount '{kept}' isn't a valid dollar amount", result.rejected[0]["reasons"][0])
+            self.assertTrue(result.rejected[0]["money_missing"])
+        self.assertEqual("123456789012345678901", ji._cell_text(Decimal("1.23456789012345678901E20"), "E2"))
         # A float can never reach the money check.
         with self.assertRaisesRegex(ji.IntakeError, "couldn't be read exactly"):
             ji._cell_text(0.1 + 0.2, "E2")
@@ -139,6 +148,13 @@ class ExcelReadingTests(unittest.TestCase):
         with self.assertRaisesRegex(ji.IntakeError, "Cell A3 holds a formula with no saved result"):
             ji.read_file("sales.xlsx", raw_xlsx(RAW_HEADER + text_cells(2, "INV-1", "2026-10-02", "A", "J-1", "1.00")
                                                 + f'<row r="3">{formula_row}</row>'))
+        # An empty saved value is no result for a number, so it refuses the file too, for one cell or a whole row.
+        with self.assertRaisesRegex(ji.IntakeError, "Cell E2 holds a formula with no saved result"):
+            ji.read_file("sales.xlsx", raw_sale('<c r="E2"><f>C2*D2</f><v/></c>'))
+        empty_row = "".join(f'<c r="{c}3"><f>{c}2</f><v></v></c>' for c in "ABCDE")
+        with self.assertRaisesRegex(ji.IntakeError, "Cell A3 holds a formula with no saved result"):
+            ji.read_file("sales.xlsx", raw_xlsx(RAW_HEADER + text_cells(2, "INV-1", "2026-10-02", "A", "J-1", "1.00")
+                                                + f'<row r="3">{empty_row}</row>'))
         with self.assertRaisesRegex(ji.IntakeError, r"Cell C2 holds an error \(#REF!\)"):
             ji.read_file("sales.xlsx", raw_xlsx(RAW_HEADER + '<row r="2"><c r="A2" t="inlineStr"><is><t>INV-1</t></is></c>'
                                                 '<c r="C2" t="e"><v>#REF!</v></c><c r="E2"><v>5</v></c></row>'))
@@ -323,6 +339,21 @@ class ReportLayoutTests(unittest.TestCase):
         result = ji.intake(headers, records, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
         self.assertEqual([], result.skipped)
         self.assertEqual([3, 4], [r["row"] for r in result.rejected])
+
+    def test_an_amount_or_date_above_the_column_names_is_never_skipped_as_a_title(self):
+        header = ",Date,Invoice,Customer,Job,Amount"
+        for above in ("100.00", "\"$1,250.00\"", "-45", "10/02/2026"):
+            data = "\n".join(["Sales report (fictional)", above, header,
+                              ",10/02/2026,INV-1,Bakery (fictional),J-1,40.00"]).encode()
+            with self.assertRaisesRegex(ji.IntakeError, "Row 2, above the column names, holds .* which looks like an "
+                                                        "amount or a date, not a title"):
+                ji.read_file("sales.csv", data)
+        with self.assertRaisesRegex(ji.IntakeError, "Row 1, above the column names, holds '100'"):
+            ji.read_file("sales.xlsx", raw_xlsx('<row r="1"><c r="A1"><v>100</v></c></row>'
+                                                + RAW_HEADER.replace('r="1"', 'r="2"').replace('1"', '2"')))
+        # Words are still titles.
+        data = b"Sales report (fictional)\nOctober 2026\n" + header.encode() + b"\n,10/02/2026,INV-1,A,J-1,40.00\n"
+        self.assertIn("Skipped 2 title lines", ji.read_file("sales.csv", data)[2][0])
 
     def test_plain_csv_files_read_exactly_as_before(self):
         data = b"Invoice,Date,Customer,Job,Amount\nINV-1,10/02/2026,Bakery (fictional),J-1,100.00\n"
