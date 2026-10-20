@@ -28,7 +28,7 @@ SAMPLES = ROOT / "sample_data" / "marginx"
 DEMO_FILES = {"invoices": "demo_sign_shop_invoices.csv", "costs": "demo_sign_shop_costs.csv"}
 TITLE = "MargenX Demo Shop"
 NOTICE = ("Online demo with a made-up sign shop. Every name and number here is invented. "
-          "To see your own jobs, ask us about early access.")
+          "It's an example of what MargenX shows.")
 
 # The page's own layout around the app's styles: a centred column with a safe side gutter on phones.
 PAGE_CSS = """
@@ -89,8 +89,8 @@ def build_page() -> str:
         f"{header}"
         f'<div class="mx-notice"><b>{escape(head)}.</b> {escape(rest)}</div>'
         f"{results}{notes_html}"
-        '<div class="mx-cta"><div class="h">Try it early, at no cost</div>'
-        '<div class="d">One hour with your own sales and cost reports. We’re inviting a few Miami shops first.</div></div>'
+        '<div class="mx-cta"><div class="h">Interested?</div>'
+        '<div class="d">Ask the person who shared this page.</div></div>'
         "</main>\n"
     )
 

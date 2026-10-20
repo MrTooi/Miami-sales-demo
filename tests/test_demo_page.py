@@ -67,7 +67,18 @@ class DemoPageTests(unittest.TestCase):
         self.assertEqual([], re.findall(r"(?:https?:)?//[a-z0-9.-]+\.[a-z]", lowered))
 
     def test_clicking_a_job_or_customer_still_opens_its_breakdown(self):
-        self.assertGreaterEqual(self.page.count("<details"), 12)  # 8 jobs + 4 customers in the demo shop
+        # Every job and every customer in the engine's report has its own details element whose hidden
+        # breakdown matches the engine: the job's "Sold for" line, the customer's own jobs.
+        report = build.demo_report()
+        blocks = re.findall(r"<details class=\"mx-d\">(.*?)</details>", self.page)
+        self.assertEqual(len(report.jobs) + len(report.customers), len(blocks))
+        for job in report.jobs:
+            block = next(b for b in blocks if f"· {job.job_id}</small>" in b)
+            self.assertIn(f'<td>Sold for</td><td class="r">{mi.money(job.sales)}</td>', block)
+        for customer in report.customers:
+            block = next(b for b in blocks if f'<div class="n">{customer.customer}<' in b)
+            for job_id in customer.jobs:
+                self.assertIn(f"· {job_id}</td>", block)
 
     def test_script_writes_the_file(self):
         with tempfile.TemporaryDirectory() as tmp:
