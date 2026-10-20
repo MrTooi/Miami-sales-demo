@@ -130,8 +130,13 @@ class PilotEntryPointTests(unittest.TestCase):
             at = AppTest.from_file(str(ROOT / "marginx_pilot.py"), default_timeout=30)
             at.run()
         self.assertFalse(at.exception, at.exception)
-        self.assertEqual(["MarginX: check your data"], [t.value for t in at.title])
-        self.assertFalse(any("Ledger" in t.value for t in at.title))
+        page = " ".join(m.value for m in at.markdown)
+        # The MarginX header (product name and tagline), not the Ledger demo, in any capitalisation.
+        import marginx_ui as ui
+        self.assertIn(f"{ui.BRAND[:-1]}<b>{ui.BRAND[-1]}</b>", page)
+        self.assertIn(ui.TAGLINE, page)
+        self.assertNotIn("ledger", page.lower())
+        self.assertEqual([], [t.value for t in at.title])
 
 
 class StrictMoneyTests(unittest.TestCase):

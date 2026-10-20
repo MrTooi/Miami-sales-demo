@@ -27,8 +27,9 @@ if _REPO_ROOT not in sys.path:
 
 import job_intake as ji  # noqa: E402
 import job_profit as jp  # noqa: E402
+import marginx_insights as mi  # noqa: E402
+import marginx_ui as ui  # noqa: E402
 import pilot_safety as ps  # noqa: E402
-from ui_theme import apply_theme  # noqa: E402
 
 SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"
 SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")
@@ -47,8 +48,8 @@ LEVEL_LABELS = {"problem": "Problem", "gap": "Missing", "info": "Note"}
 BANK_MESSAGE = ("MarginX can't read bank, card or payment statements yet: deposits, payments and transfers "
                 "aren't sales or costs. Export your invoices and your bills from your accounting software instead.")
 
-st.set_page_config(page_title="MarginX | Check your data", page_icon="▰", layout="wide")
-apply_theme()
+st.set_page_config(page_title=f"{ui.BRAND} | Where your money is made", page_icon="▰", layout="wide")
+ui.apply_brand()
 
 def _request_headers():
     try:
@@ -59,7 +60,7 @@ def _request_headers():
 
 PILOT = ps.pilot_mode(os.environ, st.get_option("server.address"), _request_headers())
 
-st.title("MarginX: check your data")
+ui.header(PILOT)
 if PILOT:
     st.warning(
         "**Pilot session on this laptop.** A pilot shop's own files may be used only with the shop owner present "
@@ -88,7 +89,8 @@ def _release_uploads() -> bool:
         return False
 
 
-if st.button("End session and clear everything"):
+controls, end_col = st.columns([3, 1.5])
+if end_col.button("End session and clear everything", width="stretch"):
     released = _release_uploads()
     st.session_state.clear()
     st.session_state["session_number"] = session + 1
@@ -105,11 +107,12 @@ elif ended:
                "from memory. Close this browser tab now and stop MarginX (Ctrl+C) to finish clearing.")
 st.session_state["session_number"] = session
 
-use_samples = st.toggle("Try it with the made-up sample files", value=not PILOT, key=f"samples-{session}")
+use_samples = controls.toggle("Try it with the made-up sample files", value=not PILOT, key=f"samples-{session}")
 files: list[tuple[str, bytes]] = []
 if use_samples:
-    sample_set = st.radio("Which made-up files?", list(SAMPLE_SET_LABELS), index=list(SAMPLE_SET_LABELS).index(DEFAULT_SAMPLE_SET),
-                          format_func=SAMPLE_SET_LABELS.get, horizontal=True, key=f"sampleset-{session}")
+    sample_set = controls.radio("Which made-up files?", list(SAMPLE_SET_LABELS),
+                                index=list(SAMPLE_SET_LABELS).index(DEFAULT_SAMPLE_SET),
+                                format_func=SAMPLE_SET_LABELS.get, horizontal=True, key=f"sampleset-{session}")
     chosen = DEMO_FILES if sample_set == "demo" else SAMPLE_FILES
     files = [(name, (SAMPLES / name).read_bytes()) for name in chosen]
 else:
@@ -123,7 +126,13 @@ else:
         if ps.upload_allowed(False, bool(uploads), confirmed):
             files = [(u.name, u.getvalue()) for u in uploads]
 if not files:
+    ui.steps(1)
     st.stop()
+
+# Results go at the top, above the files: they're what the owner came for. The steps and
+# results are filled in once every file has been read.
+steps_area = st.container()
+results_area = st.container()
 
 
 def describe_format(name: str, example: str | None) -> str:
@@ -140,18 +149,18 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
     Returns what was imported; EXCLUDED for a file that adds nothing (a bank statement, headers
     only); or None while a question is unanswered or the file can't be read.
     """
-    st.header(name)
+    ui.file_title(name)
     if same_as:
         # Each file is checked on its own and nothing is added up across files yet,
         # but a repeated upload is pointed out rather than reported as if it were new.
-        st.warning(f"{name} is identical to {same_as}. Its rows are the same rows, not new ones; "
+        st.warning(f"{ui.md_text(name)} is identical to {ui.md_text(same_as)}. Its rows are the same rows, not new ones; "
                    "upload it only once.")
     # Each file in the list gets its own widget namespace, even if two files are identical.
     key = f"f{position}-{hashlib.sha256(name.encode('utf-8') + data).hexdigest()[:12]}"
     try:
         headers, records = ji.read_csv(data)
     except ji.IntakeError as exc:
-        st.error(f"This file can't be read: {exc}")
+        st.error(f"This file can't be read: {ui.md_text(exc)}")
         return
     if not records:
         st.info("This file has column headers but no rows, so there is nothing to import.")
@@ -159,7 +168,7 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
 
     detected = ji.detect_kind(headers)
     if detected is None:
-        kind = st.radio(f"What kind of file is {name}?", [*KIND_LABELS, "bank"],
+        kind = st.radio(f"What kind of file is {ui.md_text(name)}?", [*KIND_LABELS, "bank"],
                         format_func=lambda k: KIND_LABELS.get(k, "a bank, card or payment statement"),
                         index=None, key=f"{key}-kind-ask")
         if kind is None:
@@ -192,7 +201,7 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
             # Answers are positions, so "neither" can't be confused with "not answered yet".
             candidates = ambiguous[fld]
             pick = st.radio(f"Which column has the {label.lower()}?", range(len(candidates) + 1), index=None,
-                            format_func=lambda i, c=candidates: c[i] if i < len(c) else "Neither of these",
+                            format_func=lambda i, c=candidates: ui.md_text(c[i]) if i < len(c) else "Neither of these",
                             key=f"{key}-{kind}-which-{fld}")
             if pick is None:
                 return
@@ -212,7 +221,7 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
     problems = ji.validate_mapping(mapping, headers, kind)
     if problems:
         for p in problems:
-            st.info(p)
+            st.info(ui.md_text(p))
         return
 
     # Amount meaning: asked when an invoice or bill has several lines and the amount
@@ -225,7 +234,8 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
         # grouped (or which column is the amount) asks again instead of reusing an old answer.
         asked = hashlib.sha256(repr((sorted(mapping.items(), key=str), scope)).encode("utf-8")).hexdigest()[:12]
         amount_scope = st.radio(
-            f"In {name}, {scope['label']} has {scope['lines']} lines. What is '{mapping['amount']}' "
+            f"In {ui.md_text(name)}, {ui.md_text(scope['label'])} has {scope['lines']} lines. "
+            f"What is '{ui.md_text(mapping['amount'])}' "
             "on each line?", ji.AMOUNT_SCOPES, index=None,
             format_func={"line": "That line's own amount (count every line)",
                          "document": f"The whole {what}'s total, repeated on each line"}.get,
@@ -240,7 +250,8 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
     asked_sums = hashlib.sha256(repr((sorted(mapping.items(), key=str), amount_scope)).encode("utf-8")).hexdigest()[:12]
     for item in ji.subtotal_questions(headers, records, mapping, kind, amount_scope):
         answer = st.radio(
-            f"In {name}, row {item['row']} of {item['label']} shows {item['amount']}, which equals its other "
+            f"In {ui.md_text(name)}, row {item['row']} of {ui.md_text(item['label'])} shows "
+            f"{ui.md_text(item['amount'])}, which equals its other "
             "lines added together. Is it a subtotal?", (False, True), index=None,
             format_func={False: "No, it's a real line (count it)", True: "Yes, a subtotal (don't count it)"}.get,
             key=f"{key}-{kind}-subtotal-{asked_sums}-{item['row']}")
@@ -258,13 +269,14 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
     if date_format is None:
         question = ji.date_question(values)
         if question:
-            date_format = st.radio(f"In {name}, what date is {question['example']}?", list(question["options"]),
+            date_format = st.radio(f"In {ui.md_text(name)}, what date is {ui.md_text(question['example'])}?",
+                                   list(question["options"]),
                                    format_func=question["options"].get, index=None, key=f"{date_key}-ask")
         else:
             # Dates use mixed styles, or none could be read: let the owner pick the main
             # format. Rows it can't read are then listed with reasons, never dropped.
-            date_format = st.radio(f"Which date format does {name} mainly use?", formats,
-                                   format_func=lambda f: describe_format(f, example), index=None,
+            date_format = st.radio(f"Which date format does {ui.md_text(name)} mainly use?", formats,
+                                   format_func=lambda f: ui.md_text(describe_format(f, example)), index=None,
                                    key=f"{date_key}-pick")
         if date_format is None:
             return
@@ -275,9 +287,13 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
 
     result = ji.intake(headers, records, mapping, kind, date_format, amount_scope, subtotals)
     st.caption(f"Read as {KIND_LABELS[kind]}, dates as {date_format}.")
-    for item in ji.missing_report(result):
-        # Report text can quote values from the file, so it is shown as plain text.
-        st.text(f"{LEVEL_LABELS[item['level']]}: {item['text']}")
+    report = ji.missing_report(result)
+    problems_found = sum(1 for item in report if item["level"] != "info")
+    with st.expander(f"What MarginX found in this file ({problems_found} to look at)" if problems_found
+                     else "What MarginX found in this file"):
+        for item in report:
+            # Report text can quote values from the file, so it is shown as plain text.
+            st.text(f"{LEVEL_LABELS[item['level']]}: {item['text']}")
 
     if result.rejected:
         with st.expander(f"Rows that couldn't be used ({len(result.rejected)})"):
@@ -294,30 +310,48 @@ def money_cell(amount) -> str:
     return "—" if amount is None else jp.format_money(amount)
 
 
-def show_profit(results: list[ji.IntakeResult], pending: list[str]) -> None:
+def _period(report: jp.ProfitReport) -> str:
+    """"Sales dated Oct 2 to Oct 23, 2026", from the imported sales lines' dates."""
+    from datetime import date
+    first, last = (date.fromisoformat(d) for d in report.invoice_dates)
+    start = f"{first:%b} {first.day}" + ("" if first.year == last.year else f", {first.year}")
+    return f"Sales dated {start} to {last:%b} {last.day}, {last.year}"
+
+
+def show_profit(results: list[ji.IntakeResult], pending: list[str]) -> bool:
     """Profit by job and customer, once every file is dealt with and there is exactly one sales
-    file and one costs file."""
-    st.header("Profit by job")
+    file and one costs file. Returns True when results were shown."""
     if pending:
         # A file still waiting for an answer (or unreadable) could hold sales or costs.
-        st.info("Profit by job waits until every file above is read: answer the questions for "
-                + ", ".join(pending) + ", or remove it.")
-        return
+        st.info("Your results appear here once every file below is read: answer the questions for "
+                + ", ".join(ui.md_text(n) for n in pending) + ", or remove it.")
+        return False
     invoices = [r for r in results if r.kind == "invoices"]
     costs = [r for r in results if r.kind == "costs"]
     if len(invoices) != 1 or len(costs) != 1:
-        st.info("Profit by job needs exactly one sales file and one costs file, each fully read above. "
-                "Answer any questions above, or upload one of each.")
-        return
+        st.info("Profit by job needs exactly one sales file and one costs file, each fully read below. "
+                "Answer any questions below, or upload one of each.")
+        return False
     report = jp.job_profit(invoices[0], costs[0])
     if not report.available:
         for reason in report.reasons:
-            st.info(reason)
-        return
+            st.info(ui.md_text(reason))
+        return False
+    ui.results(report, mi.summarize(report), mi.attention(report), _period(report))
+    for note in report.notes:
+        # The overhead note is already shown as the "after overhead" line; the rest stay visible here.
+        if "overhead or fee line" not in note:
+            st.caption(ui.md_text(note))
+    with st.expander("All the details: every job, customer and how the figures are worked out"):
+        _details(report)
+    return True
+
+
+def _details(report: jp.ProfitReport) -> None:
     st.caption(report.basis)
     st.caption(f"Imported sales lines are dated {report.invoice_dates[0]} to {report.invoice_dates[1]}; "
                f"imported cost lines {report.cost_dates[0]} to {report.cost_dates[1]}. "
-               "Lines that couldn't be imported are listed with each file above.")
+               "Lines that couldn't be imported are listed with each file below, under Your files.")
     st.caption("'Complete' means these files have the job's sales, labor and materials or outsourced work, every "
                "cost typed and nothing failed to import. MarginX can't tell whether the files cover every cost "
                "of the job, so check that they span the whole job.")
@@ -350,6 +384,7 @@ def show_profit(results: list[ji.IntakeResult], pending: list[str]) -> None:
 seen_files: dict[bytes, str] = {}
 results: list[ji.IntakeResult] = []
 pending: list[str] = []
+ui.section("Your files")
 for file_position, (file_name, file_data) in enumerate(files):
     digest = hashlib.sha256(file_data).digest()
     result = show_file(file_position, file_name, file_data, seen_files.get(digest))
@@ -358,4 +393,7 @@ for file_position, (file_name, file_data) in enumerate(files):
     elif result != EXCLUDED:
         results.append(result)
     seen_files.setdefault(digest, file_name)
-show_profit(results, pending)
+with results_area:
+    shown = show_profit(results, pending)
+with steps_area:
+    ui.steps(3 if shown else 2)
