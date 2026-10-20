@@ -37,9 +37,9 @@ class HeadlineTests(unittest.TestCase):
             b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/01/2026,B,J-2,60.00\n",
             b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1 + b"B-3,10/01/2026,Landlord,,Rent,10.00\n"))
         self.assertIn("From 1 of 2 jobs · 50% of their sales", html)
-        self.assertIn('0 of 1</div><div class="s">jobs with a figure', html)  # jobs losing money
+        self.assertIn('0 of 1</div><div class="s">jobs with complete costs', html)  # jobs losing money
         self.assertIn("A total after them isn't shown yet", html)
-        self.assertIn("The job total leaves out 1 job without a figure", html)
+        self.assertIn("The totals leave out 1 job without a figure", html)
         self.assertNotIn("these files leave", html)
         self.assertNotIn("real profit only if", html)
 
@@ -74,6 +74,28 @@ class HeadlineTests(unittest.TestCase):
             + b"B-3,10/01/2026,Crew,J-3,Labor,50.00\nB-4,10/01/2026,Paper,J-3,Materials,10.00\n"))
         self.assertIn('<i class="neg" style="width:20%">', html)  # C lost $20: a visible red bar
         self.assertIn("Not listed, no figure yet: B.", html)  # B has sales but no costs
+
+    def test_rows_that_could_not_be_read_are_disclosed_and_withhold_the_after_costs_total(self):
+        html = render(report_from(
+            b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/01/2026,A,J-2,50.0x\n",
+            b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1 + b"B-3,10/01/2026,Landlord,,Rent,10.00\n"
+            b"B-4,10/01/2026,Paper,J-1,Materials,abc\n"))
+        self.assertIn("2 jobs · 1 row couldn&#x27;t be read and isn&#x27;t included", html)  # Sales card
+        self.assertIn("1 sales row and 1 cost row couldn&#x27;t be read and aren&#x27;t included", html)
+        self.assertIn("A total after them isn't shown yet", html)
+        self.assertIn("The totals leave out 1 job without a figure and 2 rows that couldn&#x27;t be read", html)
+        self.assertNotIn("these files leave", html)
+        self.assertNotIn("Sales minus every cost", html)
+
+    def test_a_possible_loss_is_not_counted_as_a_confirmed_one(self):
+        html = render(report_from(
+            b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/01/2026,A,J-1,50.0x\n",
+            b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,60.00\n"
+            b"B-2,10/01/2026,Paper,J-1,Materials,60.00\n"))
+        self.assertIn('<div class="l">Jobs losing money</div><div class="v amber">—</div>'
+                      '<div class="s">No job has complete costs yet · 1 may have lost money, still needs a check</div>', html)
+        self.assertIn("Job J-1 may have lost $20", html)
+        self.assertNotIn("J-1 lost", html)
 
     def test_demo_shop(self):
         html = render(report_from((SAMPLES / "demo_sign_shop_invoices.csv").read_bytes(),

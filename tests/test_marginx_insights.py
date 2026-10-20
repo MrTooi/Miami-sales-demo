@@ -127,7 +127,8 @@ class AttentionTests(unittest.TestCase):
         self.assertEqual([
             ("loss", "Rush banner (next-day) · J-105 lost $140"),
             ("warn", "Vehicle wrap · J-107 kept only 4%"),
-            ("warn", "Bayside Realty (fictional) is your biggest customer, but keeps only 13%"),
+            # Palm Gym needs a check (J-108 has no labor), so the claim is limited to complete customers.
+            ("warn", "Of customers with complete figures, Bayside Realty (fictional) is the biggest, but keeps only 13%"),
             ("warn", "Class schedule banners · J-108 needs a check"),
         ], [(i.level, i.title) for i in items])
         self.assertEqual("Sold for $600, cost $740. To cover its job costs it needed $740; at your usual 30% margin, "
@@ -146,7 +147,7 @@ class AttentionTests(unittest.TestCase):
                              b"B-2,10/01/2026,Paper,J-1,Materials,120.00\nB-3,10/01/2026,Crew,J-2,Labor,5.00\n"
                              b"B-4,10/01/2026,Paper,J-2,Materials,5.00\n")
         titles = [i.title for i in mi.attention(report)]
-        self.assertIn("Of customers with a figure, A is the biggest, but keeps only 10%", titles)
+        self.assertIn("Of customers with complete figures, A is the biggest, but keeps only 10%", titles)
         self.assertFalse(any("your biggest customer" in t for t in titles))
 
     def test_thin_customer_gap_is_measured_before_rounding(self):
@@ -162,6 +163,32 @@ class AttentionTests(unittest.TestCase):
         self.assertFalse(any("biggest" in t for t in titles("346.00", "60.00")))
         # 35% vs 50% overall: exactly 15 points, flagged.
         self.assertIn("A is your biggest customer, but keeps only 35%", titles("350.00", "50.00"))
+
+    def test_a_loss_on_a_job_that_needs_a_check_is_possible_not_confirmed(self):
+        # $100 sale read, a $50 sale that couldn't be read, $120 of costs: shows -$20, but the missing
+        # sale would make it +$30.
+        report = report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/01/2026,A,J-1,50.0x\n",
+                             b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,60.00\n"
+                             b"B-2,10/01/2026,Paper,J-1,Materials,60.00\n")
+        summary = mi.summarize(report)
+        self.assertEqual((0, 1, 1), (summary.losing_jobs, summary.possible_losses, summary.rejected_sales_lines))
+        items = mi.attention(report)
+        self.assertEqual([("warn", "Job J-1 may have lost $20")], [(i.level, i.title) for i in items])
+        self.assertEqual("The rows MarginX could read show sold for $100, cost $120. Not confirmed: 1 of its sales "
+                         "lines couldn't be imported (listed above).", items[0].detail)
+        self.assertIsNone(summary.after_unlinked_costs)
+
+    def test_missing_costs_elsewhere_never_inflate_the_customer_benchmark(self):
+        # A ($1,000, 30%) and C ($500, 60%) are complete; B ($500, 98%) has no labor recorded.
+        # Complete customers only: 40% overall, A is 10 points below, so nothing is flagged.
+        # With B's understated costs counted, the benchmark would be 54.5% and A would be flagged.
+        report = report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,1000.00\n"
+                             b"I-2,10/01/2026,B,J-2,500.00\nI-3,10/01/2026,C,J-3,500.00\n",
+                             b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,400.00\n"
+                             b"B-2,10/01/2026,Paper,J-1,Materials,300.00\nB-3,10/01/2026,Paper,J-2,Materials,10.00\n"
+                             b"B-4,10/01/2026,Crew,J-3,Labor,100.00\nB-5,10/01/2026,Paper,J-3,Materials,100.00\n")
+        self.assertEqual("provisional", next(c for c in report.customers if c.customer == "B").status)
+        self.assertFalse(any("biggest" in i.title for i in mi.attention(report)))
 
     def test_no_thin_customer_finding_when_margins_are_close(self):
         report = report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,1000.00\nI-2,10/01/2026,B,J-2,500.00\n",

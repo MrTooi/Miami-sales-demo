@@ -142,6 +142,9 @@ class ProfitReport:
     # The part of unlinked_costs that isn't clear overhead or fees: it may belong to jobs.
     unlinked_job_costs: Decimal = ZERO
     unlinked_job_cost_lines: int = 0
+    # Rows in each file that couldn't be imported (display only): totals from these files leave them out.
+    rejected_sales_lines: int = 0
+    rejected_cost_lines: int = 0
     invoice_dates: tuple[str, str] | None = None
     cost_dates: tuple[str, str] | None = None
     basis: str = BASIS
@@ -369,6 +372,8 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
     if linked_fees:
         report.notes.append(f"{format_money(linked_fees)} of fees or overhead were recorded against jobs and are "
                             "subtracted from those jobs (column 'Fees & overhead on this job').")
+    report.rejected_sales_lines = len(invoices.rejected)
+    report.rejected_cost_lines = len(costs.rejected)
     report.unlinked_job_costs = sum(unlinked_job_costs, ZERO)
     report.unlinked_job_cost_lines = len(unlinked_job_costs)
     for job in report.jobs:

@@ -32,14 +32,19 @@ class Summary:
     jobs_without_figure: int     # unavailable jobs: left out of the total, not counted as zero
     unlinked_sales: Decimal      # sales lines with no job number: in sales, not in any job's figure
     unlinked_sales_lines: int
-    losing_jobs: int
+    complete_jobs: int
+    losing_jobs: int             # complete jobs that lost money: confirmed by complete records
+    possible_losses: int         # jobs that need a check and show a loss so far: not confirmed
     jobs_to_check: int           # provisional or unavailable
+    rejected_sales_lines: int    # rows that couldn't be read: not in sales or any total
+    rejected_cost_lines: int
     figure_is_provisional: bool  # any job counted in the total isn't complete
     unlinked_costs: Decimal      # costs in the file not tied to any job
     overhead_costs: Decimal      # the part of unlinked_costs that is clear overhead or fees (rent...)
     unassigned_job_costs: Decimal  # the rest: costs with no job number that may belong to jobs
     # Sales minus every cost in these files, or None when some sales aren't in the job total
-    # (jobs without a figure, sales without a job number): a total then would be wrong, so it's withheld.
+    # (jobs without a figure, sales without a job number) or some rows couldn't be read: a total
+    # then could be wrong, so it's withheld.
     after_unlinked_costs: Decimal | None
     usual_margin: Decimal | None   # share kept across complete jobs (0.30 = 30%), when there are enough
 
@@ -128,6 +133,7 @@ def summarize(report: ProfitReport) -> Summary:
     left = sum((j.contribution for j in counted), ZERO)
     without_figure = len(report.jobs) - len(counted)
     partial = bool(without_figure or report.unlinked_sales_lines or not counted)
+    unread = bool(report.rejected_sales_lines or report.rejected_cost_lines)
     return Summary(
         sales=sum((j.sales for j in report.jobs), ZERO) + report.unlinked_sales,
         left_after_job_costs=left,
@@ -138,13 +144,17 @@ def summarize(report: ProfitReport) -> Summary:
         jobs_without_figure=without_figure,
         unlinked_sales=report.unlinked_sales,
         unlinked_sales_lines=report.unlinked_sales_lines,
-        losing_jobs=sum(1 for j in counted if j.contribution < 0),
+        complete_jobs=sum(1 for j in counted if j.status == "complete"),
+        losing_jobs=sum(1 for j in counted if j.status == "complete" and j.contribution < 0),
+        possible_losses=sum(1 for j in counted if j.status != "complete" and j.contribution < 0),
+        rejected_sales_lines=report.rejected_sales_lines,
+        rejected_cost_lines=report.rejected_cost_lines,
         jobs_to_check=sum(1 for j in report.jobs if j.status != "complete"),
         figure_is_provisional=any(j.status != "complete" for j in counted),
         unlinked_costs=report.unlinked_costs,
         overhead_costs=report.unlinked_costs - report.unlinked_job_costs,
         unassigned_job_costs=report.unlinked_job_costs,
-        after_unlinked_costs=None if partial else left - report.unlinked_costs,
+        after_unlinked_costs=None if partial or unread else left - report.unlinked_costs,
         usual_margin=usual_margin(report),
     )
 
@@ -152,37 +162,36 @@ def summarize(report: ProfitReport) -> Summary:
 def _thin_biggest_customer(report: ProfitReport) -> Insight | None:
     """The biggest customer by sales, when it keeps a much smaller share than the business.
 
-    Customer figures leave out jobs without a figure, jobs billed to more than one customer and sales
-    with no job number. When any of those exist, a bigger customer may be hidden, so the claim is
-    worded as "of customers with a figure" rather than "your biggest customer".
+    Only customers whose figures are complete are used, for both the biggest customer and the
+    business-wide share it's compared with: missing costs elsewhere would inflate that benchmark and
+    make a correctly costed customer look bad. When any customer or sale is left out (no figure,
+    needs a check, billed to more than one customer, no job number), a bigger customer may be hidden,
+    so the claim is worded as "of customers with complete figures" rather than "your biggest customer".
     """
-    customers = report.customers
-    counted = [c for c in customers if c.contribution is not None and c.sales > 0]
-    if len(counted) < 2:
+    complete = [c for c in report.customers if c.status == "complete" and c.sales > 0]
+    if len(complete) < 2:
         return None
-    total_sales = sum((c.sales for c in counted), ZERO)
-    biggest = max(counted, key=lambda c: (c.sales, c.customer))
+    total_sales = sum((c.sales for c in complete), ZERO)
+    biggest = max(complete, key=lambda c: (c.sales, c.customer))
     # The gap is measured on exact shares; only the percentages shown are rounded.
-    gap_points = (sum((c.contribution for c in counted), ZERO) / total_sales
+    gap_points = (sum((c.contribution for c in complete), ZERO) / total_sales
                   - biggest.contribution / biggest.sales) * 100
     if gap_points < THIN_GAP_POINTS:
         return None
     share = percent(biggest.contribution, biggest.sales)
-    all_sales_counted = (not report.unlinked_sales_lines
-                         and all(j.contribution is not None and len(j.customers) == 1 for j in report.jobs))
-    # The comparison uses a customer whose figures are complete, so it is never flattered by missing costs.
-    others = [c for c in counted if c is not biggest and c.status == "complete"]
-    detail = f"{money(biggest.sales)} in sales, {money(biggest.contribution)} left after job costs."
-    if others:
-        best = max(others, key=lambda c: (c.contribution / c.sales, c.customer))
-        detail += f" {best.customer} keeps {percent(best.contribution, best.sales)}%."
-    if biggest.status != "complete":
-        detail += " Some of its jobs still need a check."
-    if all_sales_counted:
+    everything_complete = (not report.unlinked_sales_lines
+                           and all(c.status == "complete" for c in report.customers)
+                           and all(j.status == "complete" and len(j.customers) == 1 for j in report.jobs))
+    others = [c for c in complete if c is not biggest]
+    best = max(others, key=lambda c: (c.contribution / c.sales, c.customer))
+    detail = (f"{money(biggest.sales)} in sales, {money(biggest.contribution)} left after job costs. "
+              f"{best.customer} keeps {percent(best.contribution, best.sales)}%.")
+    if everything_complete:
         title = f"{biggest.customer} is your biggest customer, but keeps only {share}%"
     else:
-        title = f"Of customers with a figure, {biggest.customer} is the biggest, but keeps only {share}%"
-        detail += " Some sales aren't in any customer's figure yet, so another customer may be bigger."
+        title = f"Of customers with complete figures, {biggest.customer} is the biggest, but keeps only {share}%"
+        detail += (" Customers whose figures still need a check aren't compared, so another customer may be "
+                   "bigger.")
     return Insight("warn", title, detail)
 
 
@@ -190,12 +199,18 @@ def attention(report: ProfitReport) -> list[Insight]:
     """What needs the owner's attention, most important first."""
     items: list[Insight] = []
     usual = usual_margin(report)
-    for job in sorted((j for j in report.jobs if j.contribution is not None and j.contribution < 0),
-                      key=lambda j: (j.contribution, j.job_id)):
+    losing = [j for j in report.jobs if j.contribution is not None and j.contribution < 0]
+    # A complete job's loss is confirmed by its records.
+    for job in sorted((j for j in losing if j.status == "complete"), key=lambda j: (j.contribution, j.job_id)):
         detail = f"Sold for {money(job.sales)}, cost {money(job.total_costs)}." + _price_sentence(job, usual)
-        if job.status != "complete":
-            detail += " Some of its costs still need a check."
         items.append(Insight("loss", f"{job_name(job)} lost {money(-job.contribution)}", detail))
+    # A job that needs a check only shows a loss so far: a missing sale or cost could change it either way.
+    possible = sorted((j for j in losing if j.status != "complete"), key=lambda j: (j.contribution, j.job_id))
+    for job in possible:
+        why = " ".join(job.reasons) if job.reasons else "Some of its records are missing."
+        items.append(Insight("warn", f"{job_name(job)} may have lost {money(-job.contribution)}",
+                             f"The rows MarginX could read show sold for {money(job.sales)}, cost "
+                             f"{money(job.total_costs)}. Not confirmed: {why}"))
     # Complete jobs that made money but kept less than half the usual margin.
     if usual is not None and usual > 0:
         thin_jobs = sorted((j for j in report.jobs if j.status == "complete" and j.sales > 0
@@ -208,7 +223,7 @@ def attention(report: ProfitReport) -> list[Insight]:
     thin = _thin_biggest_customer(report)
     if thin:
         items.append(thin)
-    to_check = [j for j in report.jobs if j.status == "provisional"]
+    to_check = [j for j in report.jobs if j.status == "provisional" and j not in possible]
     for job in to_check[:MAX_CHECK_ITEMS]:
         reason = job.reasons[0] if job.reasons else "Some of its costs are missing."
         items.append(Insight("warn", f"{job_name(job)} needs a check",

@@ -183,13 +183,27 @@ def _plural(n: int, word: str) -> str:
 
 
 def _left_out(summary: Summary) -> list[str]:
-    """What the job total leaves out, in words ("4 jobs without a figure", "$385.50 of sales with no job number")."""
+    """What the totals leave out, in words ("4 jobs without a figure", "2 rows that couldn't be read")."""
     parts = []
     if summary.jobs_without_figure:
         parts.append(f"{_plural(summary.jobs_without_figure, 'job')} without a figure")
     if summary.unlinked_sales_lines:
         parts.append(f"{money(summary.unlinked_sales)} of sales with no job number")
+    unread = summary.rejected_sales_lines + summary.rejected_cost_lines
+    if unread:
+        parts.append(f"{_plural(unread, 'row')} that couldn't be read")
     return parts
+
+
+def _unread_note(summary: Summary) -> str:
+    """Says which file's rows couldn't be read, so a total is never taken for the whole file."""
+    parts = []
+    if summary.rejected_sales_lines:
+        parts.append(f"{_plural(summary.rejected_sales_lines, 'sales row')}")
+    if summary.rejected_cost_lines:
+        parts.append(f"{_plural(summary.rejected_cost_lines, 'cost row')}")
+    one = summary.rejected_sales_lines + summary.rejected_cost_lines == 1
+    return f"{' and '.join(parts)} couldn't be read and {'isn' if one else 'aren'}'t included" if parts else ""
 
 
 def _metrics(summary: Summary) -> list[tuple[str, str, str, str]]:
@@ -200,6 +214,9 @@ def _metrics(summary: Summary) -> list[tuple[str, str, str, str]]:
     sales_note = _plural(summary.jobs, "job")
     if summary.unlinked_sales_lines:
         sales_note += f" · {money(summary.unlinked_sales)} with no job number"
+    if summary.rejected_sales_lines:
+        sales_note += (f" · {_plural(summary.rejected_sales_lines, 'row')} couldn't be read and "
+                       f"{'isn' if summary.rejected_sales_lines == 1 else 'aren'}'t included")
     if summary.jobs_with_figure:
         cover = (f"From {summary.jobs_with_figure} of {summary.jobs} jobs" if summary.figure_is_partial
                  else f"From all {_plural(summary.jobs, 'job')}")
@@ -208,15 +225,26 @@ def _metrics(summary: Summary) -> list[tuple[str, str, str, str]]:
             left_note.append(f"{summary.share_percent}% of their sales")
         if summary.figure_is_provisional:
             left_note.append("some still need a check")
+        if summary.rejected_sales_lines or summary.rejected_cost_lines:
+            left_note.append(_unread_note(summary))
         left = (_money(summary.left_after_job_costs), " · ".join(left_note))
     else:
         left = ("—", "No job has a figure yet")
-    losing = f"{summary.losing_jobs} of {summary.jobs_with_figure}"
+    # Only complete jobs count as confirmed losses; a loss so far on a job that needs a check is "may have".
+    if summary.complete_jobs:
+        losing = f"{summary.losing_jobs} of {summary.complete_jobs}"
+        losing_note = [] if summary.complete_jobs == summary.jobs else ["jobs with complete costs"]
+    else:
+        losing, losing_note = "—", ["No job has complete costs yet"]
+    if summary.possible_losses:
+        more = " more" if summary.complete_jobs else ""
+        needs = "needs" if summary.possible_losses == 1 else "need"
+        losing_note.append(f"{summary.possible_losses}{more} may have lost money, still {needs} a check")
     return [
         ("Sales", _money(summary.sales), sales_note, ""),
         ("Left after job costs", left[0], left[1], ""),
-        ("Jobs losing money", losing, "jobs with a figure" if summary.figure_is_partial else "",
-         "red" if summary.losing_jobs else "green"),
+        ("Jobs losing money", losing, " · ".join(losing_note),
+         "red" if summary.losing_jobs else ("amber" if summary.possible_losses else "green")),
         ("Jobs that need a check", str(summary.jobs_to_check),
          "missing costs or figures" if summary.jobs_to_check else "all jobs complete",
          "amber" if summary.jobs_to_check else "green"),
@@ -240,9 +268,11 @@ def _after_costs(summary: Summary) -> tuple[str, str] | None:
         of_which = " (they have no job number and may belong to jobs)"
     costs = f"{_money(summary.unlinked_costs)} of costs not tied to any job{escape(of_which)}"
     if summary.after_unlinked_costs is None:
-        missing = " and ".join(_left_out(summary)) or "some sales"
+        parts = _left_out(summary)
+        missing = (", ".join(parts[:-1]) + " and " + parts[-1]) if len(parts) > 1 else (parts[0] if parts
+                                                                                         else "some sales")
         return (f"There are {costs}. A total after them isn't shown yet",
-                f"The job total leaves out {missing}, so a total after these costs would be wrong.")
+                f"The totals leave out {missing}, so a total after these costs could be wrong.")
     note = ("Sales minus every cost in these files, before tax. If any costs are missing from the files, "
             "your real profit is lower.")
     if summary.figure_is_provisional:
