@@ -399,6 +399,96 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertIn("2 rows of 2 couldn't be imported", page_text(at))
         self.assertIn("No invoice lines were imported", page_text(at))
 
+    def profit_table(self, at):
+        return next(d.value for d in at.dataframe if "Direct contribution" in d.value.columns and "Job" in d.value.columns)
+
+    def test_sample_profit_by_job_after_answering_the_questions(self):
+        at = self.run_page()
+        self.assertTrue(any("waits until every file above is read" in i.value for i in at.info))  # not before answers
+        radio(at, SAMPLE_AMOUNT_QUESTION).set_value("line").run()
+        radio(at, INVOICE_DATE_QUESTION).set_value("MM/DD/YYYY").run()
+        self.assertFalse(at.exception, at.exception)
+        jobs = self.profit_table(at).set_index("Job")
+        self.assertEqual(("$1,250.00", "$410.00", "$840.00", "Provisional"),
+                         tuple(jobs.loc["J-501", ["Sales", "Materials", "Direct contribution", "Status"]]))
+        # The $160 vinyl and $85 toner bills have no job number; the $230 power bill is overhead.
+        self.assertEqual("No labor recorded. 2 cost line(s) worth $245.00 have no job number and may belong to "
+                         "this job.", jobs.loc["J-501", "Why"])
+        self.assertEqual(("—", "Unavailable"), tuple(jobs.loc["J-506", ["Direct contribution", "Status"]]))
+        self.assertTrue(any("Direct job contribution" in c.value and "not cash received" in c.value for c in at.caption))
+        # J-507 and J-508 only have lines that failed to import: listed, with no figure.
+        self.assertIn("7 jobs: 0 complete, 3 provisional", page_text(at))
+        self.assertEqual(("—", "Unavailable"), tuple(jobs.loc["J-508", ["Direct contribution", "Status"]]))
+        notes = page_text(at)
+        self.assertIn("aren't linked to a job", notes)
+        customers = next(d.value for d in at.dataframe if "Customer" in d.value.columns and "Jobs" in d.value.columns)
+        bakery = customers.set_index("Customer").loc["Example Bakery (fictional)"]
+        self.assertEqual(("$995.00", "Provisional"), (bakery["Direct contribution"], bakery["Status"]))
+        gym = customers.set_index("Customer").loc["Demo Gym (fictional)"]
+        self.assertEqual(("—", "—", "—", "Unavailable"), tuple(gym[["Sales", "Costs", "Direct contribution", "Status"]]))
+
+    def test_profit_needs_job_numbers_in_both_files(self):
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                             "Date,Vendor,Type,Amount\n10/31/2026,Paper Co (fictional),Materials,40.00\n")
+        self.assertFalse(at.exception, at.exception)
+        self.assertTrue(any("costs file has no job number column" in i.value for i in at.info))
+        self.assertFalse(any("Direct contribution" in d.value.columns for d in at.dataframe))
+
+    def test_complete_job_shows_an_exact_figure(self):
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                             "Date,Vendor,Job,Type,Amount\n10/31/2026,Paper Co (fictional),J-1,Materials,40.00\n"
+                             "10/31/2026,Crew (fictional),J-1,Labor,25.50\n")
+        self.assertFalse(at.exception, at.exception)
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("$34.50", "Complete", ""), (job["Direct contribution"], job["Status"], job["Why"]))
+
+    def test_profit_waits_for_a_third_unanswered_file(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        files = {"a_sales.csv": "Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                 "b_costs.csv": "Bill,Date,Vendor,Job,Type,Amount\nB-1,10/31/2026,Crew (fictional),J-1,Labor,10.00\n"
+                                "B-2,10/31/2026,Paper Co (fictional),J-1,Materials,10.00\n",
+                 "c_unclear.csv": "Num,Date,Name,Amount\nN-1,10/31/2026,Someone (fictional),50.00\n"}
+        for name, text in files.items():
+            Path(tmp.name, name).write_text(text, encoding="utf-8")
+        source = Path(PAGE).read_text(encoding="utf-8").replace(
+            'SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"', f"SAMPLES = Path({tmp.name!r})").replace(
+            'SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")', f"SAMPLE_FILES = {tuple(files)!r}")
+        at = run_source(source)
+        self.assertFalse(at.exception, at.exception)
+        self.assertTrue(any("waits until every file above is read" in i.value and "c_unclear.csv" in i.value
+                            for i in at.info))
+        self.assertFalse(any("Direct contribution" in d.value.columns for d in at.dataframe))
+        # Saying it's a bank statement settles it, and profit is calculated.
+        radio(at, "What kind of file is c_unclear.csv?").set_value("bank").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertEqual("Complete", self.profit_table(at).set_index("Job").loc["J-1", "Status"])
+
+    def test_positive_credit_memo_never_shows_a_complete_figure(self):
+        costs = ("Bill,Date,Vendor,Job,Type,Amount\nB-1,10/31/2026,Crew (fictional),J-1,Labor,20.00\n"
+                 "B-2,10/31/2026,Paper Co (fictional),J-1,Materials,20.00\n")
+        at = self.with_files("Invoice,Date,Customer,Job,Type,Amount\nI-1,10/31/2026,Bakery (fictional),J-1,Invoice,100.00\n"
+                             "I-2,10/31/2026,Bakery (fictional),J-1,Credit Memo,50.00\n", costs)
+        self.assertFalse(at.exception, at.exception)
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("$60.00", "Provisional"), (job["Direct contribution"], job["Status"]))  # never $110
+        self.assertIn("couldn't be imported", job["Why"])
+        at = self.with_files("Invoice,Date,Customer,Job,Type,Amount\nI-1,10/31/2026,Bakery (fictional),J-1,Invoice,100.00\n"
+                             "I-2,10/31/2026,Bakery (fictional),J-1,Credit Memo,-50.00\n", costs)
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("$10.00", "Complete"), (job["Direct contribution"], job["Status"]))
+        self.assertTrue(any("can't tell whether the files cover every cost" in c.value for c in at.caption))
+
+    def test_payment_processing_fee_is_subtracted_on_the_page(self):
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                             "Bill,Date,Vendor,Job,Type,Amount\nB-1,10/31/2026,Crew (fictional),J-1,Labor,20.00\n"
+                             "B-2,10/31/2026,Paper Co (fictional),J-1,Materials,30.00\n"
+                             "B-3,10/31/2026,Square (fictional),J-1,Payment processing fees,2.90\n")
+        self.assertFalse(at.exception, at.exception)
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("$2.90", "$47.10", "Complete"),
+                         (job["Fees & overhead on this job"], job["Direct contribution"], job["Status"]))
+
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertTrue(any("no rows" in i.value for i in at.info))

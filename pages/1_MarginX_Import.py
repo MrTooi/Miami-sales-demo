@@ -22,12 +22,15 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 import job_intake as ji  # noqa: E402
+import job_profit as jp  # noqa: E402
 from ui_theme import apply_theme  # noqa: E402
 
 SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"
 SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")
 KIND_LABELS = {"invoices": "sales / invoices", "costs": "costs / bills"}
 NOT_MAPPED = "(not in this file)"
+# A file that is fully dealt with but adds nothing to profit (a bank statement, headers only).
+EXCLUDED = "excluded"
 LEVEL_LABELS = {"problem": "Problem", "gap": "Missing", "info": "Note"}
 # Deposits, transfers and payments are cash movements, not sales or costs (MVP spec).
 BANK_MESSAGE = ("MarginX can't read bank, card or payment statements yet: deposits, payments and transfers "
@@ -65,8 +68,12 @@ def describe_format(name: str, example: str | None) -> str:
     return f"{name}: {example} = {parsed:%B} {parsed.day}, {parsed.year}" if parsed else f"{name} (doesn't fit {example})"
 
 
-def show_file(position: int, name: str, data: bytes, same_as: str | None = None) -> None:
-    """Read one file and show its results, asking only what MarginX can't work out."""
+def show_file(position: int, name: str, data: bytes, same_as: str | None = None) -> ji.IntakeResult | str | None:
+    """Read one file and show its results, asking only what MarginX can't work out.
+
+    Returns what was imported; EXCLUDED for a file that adds nothing (a bank statement, headers
+    only); or None while a question is unanswered or the file can't be read.
+    """
     st.header(name)
     if same_as:
         # Each file is checked on its own and nothing is added up across files yet,
@@ -82,7 +89,7 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
         return
     if not records:
         st.info("This file has column headers but no rows, so there is nothing to import.")
-        return
+        return EXCLUDED
 
     detected = ji.detect_kind(headers)
     if detected is None:
@@ -93,7 +100,7 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
             return
         if kind == "bank":
             st.info(BANK_MESSAGE)
-            return
+            return EXCLUDED
     else:
         kind = detected
     settings = st.expander("How MarginX read this file (change anything that's wrong)")
@@ -103,7 +110,7 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
                         key=f"{key}-kind-{kind}")
     if kind == "bank":
         st.info(BANK_MESSAGE)
-        return
+        return EXCLUDED
 
     # Columns: suggested automatically; the owner is asked for required ones MarginX can't
     # find, and for optional ones where two columns could fit (e.g. "Job" and "Project").
@@ -214,10 +221,75 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
                                "Original row": ji.safe_cell(" | ".join(r["cells"]))} for r in result.rejected]),
                 hide_index=True, width="stretch",
             )
+    return result
+
+
+def money_cell(amount) -> str:
+    return "—" if amount is None else jp.format_money(amount)
+
+
+def show_profit(results: list[ji.IntakeResult], pending: list[str]) -> None:
+    """Profit by job and customer, once every file is dealt with and there is exactly one sales
+    file and one costs file."""
+    st.header("Profit by job")
+    if pending:
+        # A file still waiting for an answer (or unreadable) could hold sales or costs.
+        st.info("Profit by job waits until every file above is read: answer the questions for "
+                + ", ".join(pending) + ", or remove it.")
+        return
+    invoices = [r for r in results if r.kind == "invoices"]
+    costs = [r for r in results if r.kind == "costs"]
+    if len(invoices) != 1 or len(costs) != 1:
+        st.info("Profit by job needs exactly one sales file and one costs file, each fully read above. "
+                "Answer any questions above, or upload one of each.")
+        return
+    report = jp.job_profit(invoices[0], costs[0])
+    if not report.available:
+        for reason in report.reasons:
+            st.info(reason)
+        return
+    st.caption(report.basis)
+    st.caption(f"Imported sales lines are dated {report.invoice_dates[0]} to {report.invoice_dates[1]}; "
+               f"imported cost lines {report.cost_dates[0]} to {report.cost_dates[1]}. "
+               "Lines that couldn't be imported are listed with each file above.")
+    st.caption("'Complete' means these files have the job's sales, labor and materials or outsourced work, every "
+               "cost typed and nothing failed to import. MarginX can't tell whether the files cover every cost "
+               "of the job, so check that they span the whole job.")
+    counts = {s: sum(1 for j in report.jobs if j.status == s) for s in jp.STATUS_ORDER}
+    st.text(f"{len(report.jobs)} jobs: {counts['complete']} complete, {counts['provisional']} provisional "
+            f"(missing costs, shown with reasons), {counts['unavailable']} without a figure.")
+    shown = [c for c in jp.CATEGORIES if any(j.costs[c] for j in report.jobs)]
+    # Text from the files is formula-safe, because the table toolbar can export CSV.
+    st.dataframe(pd.DataFrame([{
+        "Job": ji.safe_cell(j.job_id), "Customer": ji.safe_cell(", ".join(j.customers)),
+        "Sales": money_cell(j.sales if j.invoice_lines else None),
+        **{jp.CATEGORY_LABELS[c]: money_cell(j.costs[c]) for c in shown},
+        "Direct contribution": money_cell(j.contribution), "Status": jp.STATUS_LABELS[j.status],
+        "Why": ji.safe_cell(" ".join(j.reasons)),
+    } for j in report.jobs]), hide_index=True, width="stretch")
+
+    st.subheader("By customer")
+    st.dataframe(pd.DataFrame([{
+        "Customer": ji.safe_cell(c.customer), "Jobs": ji.safe_cell(", ".join(c.jobs)),
+        # A customer with no figure shows no amounts at all, not a misleading $0.00.
+        "Sales": money_cell(c.sales if c.contribution is not None else None),
+        "Costs": money_cell(c.total_costs if c.contribution is not None else None),
+        "Direct contribution": money_cell(c.contribution), "Status": jp.STATUS_LABELS[c.status],
+        "Why": ji.safe_cell(" ".join(c.reasons)),
+    } for c in report.customers]), hide_index=True, width="stretch")
+    for note in report.notes:
+        st.text(f"Note: {note}")
 
 
 seen_files: dict[bytes, str] = {}
+results: list[ji.IntakeResult] = []
+pending: list[str] = []
 for file_position, (file_name, file_data) in enumerate(files):
     digest = hashlib.sha256(file_data).digest()
-    show_file(file_position, file_name, file_data, seen_files.get(digest))
+    result = show_file(file_position, file_name, file_data, seen_files.get(digest))
+    if result is None:
+        pending.append(file_name)
+    elif result != EXCLUDED:
+        results.append(result)
     seen_files.setdefault(digest, file_name)
+show_profit(results, pending)

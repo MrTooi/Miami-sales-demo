@@ -66,13 +66,24 @@ DATE_FORMATS = {
     "DD/MM/YYYY": "%d/%m/%Y",
 }
 
-LABOR_WORDS = ("labor", "labour", "wages", "payroll")
-_LABOR = re.compile(r"\b(?<!non[- ])(?<!non)(" + "|".join(LABOR_WORDS) + r")\b", re.IGNORECASE)
+# Whole cost types (after any "Parent:" account prefix) that are labor. Only an exact match
+# counts, so "Non-labor", "No labor" or "Labor fees" never confirm labor. Shared with job_profit.
+LABOR_TYPES = {
+    "labor", "labour", "wages", "payroll", "direct labor", "direct labour", "contract labor", "contract labour",
+    "labor costs", "labour costs", "job labor", "shop labor", "production labor", "installation labor",
+    "install labor", "design labor", "salaries and wages", "wages and salaries", "payroll expenses",
+}
 
 
-def is_labor(cost_type: str) -> bool:
-    """A whole-word labor category; "Non-labor" or "nonlabor" doesn't count."""
-    return bool(_LABOR.search(cost_type or ""))
+def cost_type_name(cost_type: str | None) -> str:
+    """A cost type reduced to its own name: the part after any "Parent:" account prefix, in
+    lower case, punctuation as spaces ("Cost of Goods Sold:Job Labor" -> "job labor")."""
+    return re.sub(r"[^a-z0-9]+", " ", (cost_type or "").split(":")[-1].lower()).strip()
+
+
+def is_labor(cost_type: str | None) -> bool:
+    """True only when the whole type is a recognized labor name."""
+    return cost_type_name(cost_type) in LABOR_TYPES
 
 
 # Header words that point to one kind of file. "bill to" (an invoice field) is
@@ -110,10 +121,82 @@ DOCUMENT_TOTALS = {"invoice total", "bill total", "invoice amount", "bill amount
 
 # Columns whose cells say what kind of transaction a row is ("Type: Payment").
 TYPE_HEADERS = {"type", "transaction type", "txn type", "trans type", "entry type", "document type", "doc type"}
-# Row types that are cash movements, not sales or costs. ("Check" is an ordinary way to
-# pay an expense, and credit memos are legitimate negative invoice lines, so neither is here.)
+# Words that signal money moving. A row type containing one is never guessed at: it must be
+# exactly a known cash-movement type (not a line) or exactly a known fee type (a cost);
+# anything else ("Payout net of fees") is unclear and rejected as possibly missing money.
 ROW_CASH_WORDS = {"payment", "payments", "deposit", "deposits", "transfer", "transfers", "payout", "payouts",
                   "settlement", "settlements", "withdrawal", "withdrawals", "receipt", "received"}
+# Whole row types that are cash movements, not sales or costs. ("Check" is an ordinary way to
+# pay an expense, and credit memos are legitimate negative invoice lines, so neither is here.)
+CASH_MOVEMENT_TYPES = {
+    "payment", "payments", "deposit", "deposits", "bank deposit", "transfer", "transfers", "bank transfer",
+    "funds transfer", "payout", "payouts", "settlement", "settlements", "withdrawal", "withdrawals", "receipt",
+    "received", "receive payment", "received payment", "payment received", "customer payment", "invoice payment",
+    "bill payment", "bill payment check", "bill payment credit card", "bill pmt check", "bill pmt cc",
+    "bank credit", "credit card payment", "loan payment",
+}
+# Whole row types that are fees for moving money: ordinary costs.
+FEE_TYPES = {
+    "bank service charge", "bank service charges", "payment processing fee", "payment processing fees", "processing fee", "processing fees", "merchant fee",
+    "merchant fees", "transfer fee", "transfer fees", "payout fee", "payout fees", "wire fee", "wire fees",
+    "bank fee", "bank fees", "bank charges", "service charge", "service charges", "transaction fee",
+    "transaction fees", "credit card fees", "card processing fees", "deposit fee", "deposit fees",
+}
+# Whole row types that are sales lines. In a sales file, a "Type" column value must be one of
+# these (or a known cash movement, which is left out): anything else, such as a fee, a bank
+# credit or an estimate, is never counted as a sale.
+# Whole credit-memo types: allowed sales lines, but only with a negative amount (see intake).
+CREDIT_MEMO_TYPES = {"credit memo", "credit memos", "credit note", "credit notes"}
+INVOICE_LINE_TYPES = {"invoice", "invoices", "sale", "sales", "sales receipt", "sales receipts"} | CREDIT_MEMO_TYPES
+# Account parents that hold sales or income, never costs ("Income:Revenue").
+SALES_ACCOUNT_PARENTS = {"income", "revenue", "sales", "other income", "sales income", "operating income"}
+# Words that make an account name an expense even when it mentions sales, revenue or income
+# ("Sales commissions", "Income tax", "Cost of sales", "Sales tax expense").
+EXPENSE_ACCOUNT_WORDS = {"tax", "taxes", "expense", "expenses", "cost", "costs", "commission", "commissions",
+                         "marketing", "promotion", "promotions", "travel", "salaries", "wages"}
+# Words of balance-sheet accounts: buying stock, owing money or holding cash is not spending it
+# on a job ("Inventory Asset", "Sales Tax Payable", "Accounts Payable", "Undeposited Funds",
+# "Cash", "Checking", "Savings", "Petty Cash").
+BALANCE_SHEET_WORDS = {"asset", "assets", "payable", "payables", "receivable", "receivables", "undeposited",
+                       "liability", "liabilities", "equity", "loan", "loans", "prepaid", "accrued", "deferred",
+                       "accumulated", "cash", "checking", "savings", "petty"}
+# Inventory names, and the parent-account words that make them a cost ("Cost of Goods Sold:Inventory").
+INVENTORY_TYPES = {"inventory", "inventory purchases", "stock", "stock purchases"}
+COST_PARENT_WORDS = {"cost", "costs", "cogs", "expense", "expenses"}
+
+
+def _is_income_account(name: str) -> bool:
+    """An income account name ("Sales of Product Income", "Product Sales", "Sales Revenue",
+    "Services Income"), never a cost; names with an expense word ("Sales commissions", "Income
+    tax", "Cost of sales") are expenses."""
+    words = set(name.split())
+    if name in SALES_ACCOUNT_PARENTS:
+        return True
+    return bool(words & {"income", "revenue", "revenues", "sales"}) and not words & EXPENSE_ACCOUNT_WORDS
+
+
+# Sales-document names that don't establish an incurred cost when used as a cost category.
+SALES_DOCUMENT_TYPES = INVOICE_LINE_TYPES | {"income", "revenue", "sales income", "estimate", "estimates"}
+# Whole cost types for card purchases: ordinary expenses, though they mention "credit"/"debit".
+# A bare "Credit Card" or "Debit Card" is the card's account (a balance), not a purchase.
+CARD_CHARGE_TYPES = {
+    "credit card charge", "credit card charges", "credit card expense", "credit card purchase",
+    "debit card charge", "debit card purchase",
+}
+# Whole transaction types that are posted costs. In a costs file, a "Type"-style column that is
+# not the cost category must hold one of these (or a fee, card charge or known cash movement):
+# anything else, such as an estimate or a purchase order, is not an incurred cost.
+COST_LINE_TYPES = {
+    "bill", "bills", "vendor bill", "expense", "expenses", "check", "checks", "cheque", "cheques", "purchase",
+    "purchases", "cash expense", "cash purchase",
+}
+# Words that make any cost type a document that isn't a posted cost (an estimate, a quote, an order).
+NON_POSTING_WORDS = {"estimate", "estimates", "quote", "quotes", "quotation", "proposal", "po", "order", "orders",
+                     "draft"}
+# Words that, in a cost file's type, mean money moving, a bank or a credit. Such a type must be
+# exactly a known cash movement, fee or card charge; otherwise it is never guessed at.
+SUSPECT_COST_TYPE_WORDS = ROW_CASH_WORDS | {"credit", "credits", "bank", "ach", "wire", "refund", "refunds",
+                                            "debit", "debits"}
 # Description/memo/type text marking a summary row rather than a line of its own.
 SUMMARY_LABELS = {"subtotal", "sub total", "total", "invoice total", "bill total", "grand total", "total due",
                   "amount due", "balance due", "total amount"}
@@ -391,7 +474,12 @@ def _possible_document_key(values: dict[str, str], kind: str) -> tuple[str, ...]
     key = _document_key(values, kind)
     if key or kind == "invoices":
         return key
-    return (values.get("vendor", ""), values.get("date", ""), "") if values.get("vendor") else None
+    return (values.get("vendor", ""), _day(values.get("date", "")), "") if values.get("vendor") else None
+
+
+def _day(text: str) -> str:
+    """A date's text without leading zeros, so "10/1/2026" and "10/01/2026" group as one day."""
+    return re.sub(r"(?<!\d)0+(?=\d)", "", text.strip())
 
 
 def _label(key: tuple[str, ...], kind: str) -> str:
@@ -404,7 +492,7 @@ def _lines_per_vendor_day(headers: list[str], records: list[Record], mapping: di
     """Cost lines per (vendor, date), numbered or not, without exact duplicate rows."""
     index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
     rows = {r.cells for r in records if len(r.cells) == len(headers) and _is_line(r.cells, headers, mapping)}
-    return Counter((cells[index["vendor"]].strip(), cells[index["date"]].strip()) for cells in rows
+    return Counter((cells[index["vendor"]].strip(), _day(cells[index["date"]])) for cells in rows
                    if "vendor" in index and "date" in index and cells[index["vendor"]].strip())
 
 
@@ -466,19 +554,87 @@ def _type_columns(headers: list[str], mapping: dict[str, str | None]) -> list[in
     return found
 
 
-def _cash_movement_type(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
-    """The row's type text when it names a payment, transfer, deposit, payout or settlement."""
+def _cash_movement_type(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]) -> str | None:
+    """The row's type text when it is plainly money moving, not a line: at least one type value
+    is exactly a known cash movement ("Payment", "Transfer", "Bill Payment (Check)", "Bank
+    Credit"), every transaction-type column is filled in and agrees, and the cost category, if
+    any, is blank or agrees. Otherwise _unrecognized_type decides ("Invoice" + "Payment", or
+    "Payment" with a blank transaction type, is unresolved)."""
+    category = headers.index(mapping["cost_type"]) if mapping.get("cost_type") in headers else None
+    transaction = [_norm(cells[i]) for i, h in enumerate(headers) if _norm(h) in TYPE_HEADERS and i != category]
+    values = transaction + ([_norm(cells[category])] if category is not None and _norm(cells[category]) else [])
+    if values and all(v in CASH_MOVEMENT_TYPES for v in values):
+        return next(cells[i].strip() for i in _type_columns(headers, mapping) if _norm(cells[i]))
+    return None
+
+
+def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None],
+                       kind: str) -> str | None:
+    """The row's type text (or "(blank)") when it can't be trusted as a line, failing closed.
+    Called only for rows that aren't plainly a cash movement, so any cash-movement value found
+    here conflicts with another type column ("Invoice" + "Payment") and is unresolved.
+
+    - sales file, any "Type"-style column: must be a recognized sale type; blank is unresolved;
+    - costs file, transaction-type column (a "Type"-style column that isn't the cost category):
+      must be a posted cost (Bill, Expense, Check...), fee or card charge; blank is unresolved;
+    - costs file, cost category: any real category or a blank is fine, unless it names an
+      estimate, quote or order, is a cash movement or a sales document ("Invoice", "Sale"), or
+      mentions money moving, a bank or a credit without being exactly a known fee or card charge.
+    """
+    category = headers.index(mapping["cost_type"]) if kind == "costs" and mapping.get("cost_type") in headers else None
+    allowed = INVOICE_LINE_TYPES if kind == "invoices" else COST_LINE_TYPES | FEE_TYPES | CARD_CHARGE_TYPES
+    for i, h in enumerate(headers):
+        text = _norm(cells[i])
+        if i == category:
+            # Read as an account path ("Parent:Category"): the category's own name decides, and
+            # a sales/income parent ("Income:Revenue") is never a cost.
+            name = cost_type_name(cells[i])
+            parts = [_norm(part) for part in cells[i].split(":")]
+            # Every part of the path is checked: an income or balance-sheet account, or an
+            # estimate/order, anywhere in it ("Purchase Order:Materials") is never a cost.
+            # A part that is exactly a posted-cost type ("Cash Expense", "Cash Purchase") is a cost,
+            # though it mentions cash; bare "Cash" or "Checking" is still a bank account.
+            if any(_is_income_account(part) or (set(part.split()) & (BALANCE_SHEET_WORDS | NON_POSTING_WORDS)
+                                                and part not in COST_LINE_TYPES)
+                   for part in parts):
+                return cells[i].strip()
+            # Money-moving, bank or credit words are checked in every part too ("Transfer:Materials"),
+            # except a part that is itself a known fee or card charge ("Operating Expenses:Bank fees").
+            if any(part in CASH_MOVEMENT_TYPES or (set(part.split()) & SUSPECT_COST_TYPE_WORDS
+                                                   and part not in FEE_TYPES and part not in CARD_CHARGE_TYPES)
+                   for part in parts):
+                return cells[i].strip()
+            if name in SALES_DOCUMENT_TYPES:
+                return cells[i].strip()
+            # "Inventory" anywhere in the path may be stock still on the shelf (an asset), not used on
+            # a job ("Inventory", "Inventory:Materials"): it counts only when another part of the path
+            # is a cost account ("Cost of Goods Sold:Inventory").
+            inventory = [k for k, part in enumerate(parts) if part in INVENTORY_TYPES]
+            if inventory and not any(set(part.split()) & COST_PARENT_WORDS
+                                     for k, part in enumerate(parts) if k not in inventory):
+                return cells[i].strip()
+        elif _norm(h) in TYPE_HEADERS and text not in allowed:
+            return cells[i].strip() or "(blank)"
+    return None
+
+
+def _credit_memo(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
+    """The row's type text when it is a credit memo or note (singular or plural)."""
     for i in type_columns:
-        if set(_norm(cells[i]).split()) & ROW_CASH_WORDS:
+        if _norm(cells[i]) in CREDIT_MEMO_TYPES:
             return cells[i].strip()
     return None
 
 
 def _summary_label(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]) -> str | None:
-    """The row's label when its description, memo or type says it is a subtotal or total."""
-    columns = [headers.index(mapping[f]) for f in ("description", "memo") if mapping.get(f) in headers]
+    """The row's label when its description, memo, type or cost category says it is a subtotal
+    or total (a category is read by its own name, so "Totals:Grand Total" counts too)."""
+    columns = [headers.index(mapping[f]) for f in ("description", "memo", "cost_type") if mapping.get(f) in headers]
+    category = headers.index(mapping["cost_type"]) if mapping.get("cost_type") in headers else None
     for i in [*columns, *(i for i, h in enumerate(headers) if _norm(h) in TYPE_HEADERS)]:
-        if _norm(cells[i]) in SUMMARY_LABELS:
+        # Only the cost category is an account path; "Service: Total" in a description is text.
+        name = cost_type_name(cells[i]) if i == category else _norm(cells[i])
+        if name in SUMMARY_LABELS:
             return cells[i].strip()
     return None
 
@@ -486,7 +642,7 @@ def _summary_label(cells: tuple[str, ...], headers: list[str], mapping: dict[str
 def _is_line(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]) -> bool:
     """False for rows rejected on their own (payments/transfers, labeled subtotals), which
     therefore don't make a document multi-line."""
-    return not (_cash_movement_type(cells, _type_columns(headers, mapping)) or _summary_label(cells, headers, mapping))
+    return not (_cash_movement_type(cells, headers, mapping) or _summary_label(cells, headers, mapping))
 
 
 def _per_document_amounts(mapping: dict[str, str | None], question: dict | None, amount_scope: str | None) -> bool:
@@ -521,7 +677,7 @@ def _subtotal_rows(headers: list[str], records: list[Record], mapping: dict[str,
         seen.add(r.cells)
         # Labeled summary rows and cash movements are rejected on their own, so they are
         # neither asked about nor counted among a document's lines.
-        if _summary_label(r.cells, headers, mapping) or _cash_movement_type(r.cells, types):
+        if _summary_label(r.cells, headers, mapping) or _cash_movement_type(r.cells, headers, mapping):
             continue
         values = {f: r.cells[i].strip() for f, i in index.items()}
         key = _possible_document_key(values, kind)
@@ -589,7 +745,7 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
     for rec in records:
         number = rec.row
         if len(rec.cells) != len(headers):
-            result.rejected.append({"row": number, "cells": rec.cells, "values": {},
+            result.rejected.append({"row": number, "cells": rec.cells, "values": {}, "money_missing": True,
                                     "reasons": [f"Row has {len(rec.cells)} cells, header has {len(headers)}."]})
             continue
         values = {f: rec.cells[i].strip() for f, i in index.items()}
@@ -614,11 +770,35 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             # checked against the document's other lines.
             reasons.append(f"No {entity.lower()} number, and '{mapping['amount']}' is a whole "
                            f"{entity.lower()}'s total, so it can't be checked against other lines.")
-        movement = _cash_movement_type(rec.cells, types)
+        # Reasons that mean the row isn't a line at all (a payment, a summary, a duplicate):
+        # nothing is missing when it is left out. Any other reason means real money is.
+        not_a_line = 0
+        movement = _cash_movement_type(rec.cells, headers, mapping)
         if movement:
+            not_a_line += 1
             what = "sale" if kind == "invoices" else "cost"
             reasons.append(f"Type '{movement}' is a payment, transfer or deposit (money moving), not a {what}; "
                            "not imported.")
+        unrecognized = None if movement else _unrecognized_type(rec.cells, headers, mapping, kind)
+        if unrecognized == "(blank)":
+            # Real money may be missing here, so this is not counted as "not a line".
+            what = "sale" if kind == "invoices" else "posted cost"
+            reasons.append(f"The transaction type is blank, so whether this row is a {what} can't be told; "
+                           "not imported. Fill in its type where the data comes from.")
+        elif unrecognized and kind == "invoices":
+            reasons.append(f"Type '{unrecognized}' isn't a sale type MarginX recognizes (Invoice, Sales Receipt, "
+                           "Credit Memo), or the row's type columns disagree, so it isn't counted as a sale. If it "
+                           "is one, fix its type where the data comes from.")
+        elif unrecognized:
+            reasons.append(f"Type '{unrecognized}' isn't a recognized posted cost (a bill, expense, check, card "
+                           "charge or fee), or the row's type columns disagree: it may be money moving, a credit, "
+                           "an estimate or an order, so it isn't imported.")
+        memo = _credit_memo(rec.cells, types)
+        if memo and amount is not None and amount > 0:
+            # A credit lowers what was billed; a positive one would raise it. Which sign is
+            # right can't be told, so it is never imported.
+            reasons.append(f"Type '{memo}' has a positive amount ({values['amount']}); a credit should reduce "
+                           "the total, so it isn't imported. Check the sign where the data comes from.")
         summary = _summary_label(rec.cells, headers, mapping)
         key = _possible_document_key(values, kind)
         if summary and key and not all_lines[key] and summaries[key] > 1:
@@ -628,9 +808,17 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
         elif summary and key and all_lines[key] >= 1:
             # Only when the document has other lines (summary rows aren't counted among them):
             # a one-line invoice described "Total" is its own amount.
+            not_a_line += 1
             reasons.append(f"Row is labeled '{summary}': a summary of {_label(key, kind)}'s other lines, "
                            "not a line of its own; not counted again.")
+        elif summary and kind == "costs" and mapping.get("cost_type") in headers and \
+                cost_type_name(rec.cells[headers.index(mapping["cost_type"])]) in SUMMARY_LABELS:
+            # A cost categorized "Grand Total" with nothing to summarize: what it is can't be told,
+            # so it is never counted and money may be missing.
+            reasons.append(f"Category '{summary}' is a summary label, not a cost, so what this row is can't be "
+                           "told; not imported.")
         if number in candidates and subtotals[number]:
+            not_a_line += 1
             reasons.append(f"Subtotal of {_label(candidates[number][0], kind)} (the owner said so); "
                            "its lines are already counted.")
         unnumbered = document is not None and len(document) == 3
@@ -647,11 +835,15 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
         # identical cell for cell, including unmapped columns, is rejected rather than
         # double-counted.
         if rec.cells in seen_rows:
-            reasons.append(f"Exact duplicate of row {seen_rows[rec.cells]}; not imported twice.")
+            # Counted once, but two real identical lines can't be told from an accidental copy,
+            # so money may be missing: this is not counted as "not a line".
+            reasons.append(f"Identical to row {seen_rows[rec.cells]}, so it is counted once. If both are real "
+                           "(e.g. two identical items), the total is low: add a line number where the data comes from.")
         else:
             seen_rows[rec.cells] = number
         if reasons:
-            result.rejected.append({"row": number, "cells": rec.cells, "values": values, "reasons": reasons})
+            result.rejected.append({"row": number, "cells": rec.cells, "values": values, "reasons": reasons,
+                                    "money_missing": len(reasons) > not_a_line})
             continue
         # Working values are trimmed (so "J-501 " matches "J-501"); the untouched
         # original cells are kept alongside for provenance.
