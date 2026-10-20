@@ -361,14 +361,19 @@ def _header_row(table: list[tuple[int, list[str]]]) -> int:
     return 0
 
 
-# Anything written like a number, valid money or not: 12.345, (45.00), 1.2E3, 15%, $ 1 250.
-NUMBER_LIKE = re.compile(r"(?i)^[\s$+\-(]*\d[\d\s.,]*(e[+-]?\d+)?\)?\s*%?$")
+# Anything written like a number, valid money or not: 12.345, .50, (45.00), 1.2E3, 15%, $ 1 250.
+NUMBER_LIKE = re.compile(r"(?i)^[\s$+\-(]*[\d.][\d\s.,]*(e[+-]?\d+)?\)?\s*%?$")
+# An amount inside text: "$500", "Paid 12.50".
+AMOUNT_IN_TEXT = re.compile(r"\$\s*\d|\d\.\d")
 
 
 def _looks_like_data(text: str) -> bool:
-    """True for a number (valid money or not) or a date: such a cell may be money, so it is never
-    taken for a title, a column name or a heading."""
-    return bool(NUMBER_LIKE.match(text.strip())) or any(_parse_date(text.strip(), fmt) for fmt in DATE_FORMATS.values())
+    """True unless the text is plainly words: no letters at all, a number (valid money or not), a
+    date, or an amount inside the text. Such a cell may be money, so it is never taken for a
+    title, a column name or a heading."""
+    text = text.strip()
+    return (not any(c.isalpha() for c in text) or bool(NUMBER_LIKE.match(text)) or bool(AMOUNT_IN_TEXT.search(text))
+            or any(_parse_date(text, fmt) for fmt in DATE_FORMATS.values()))
 
 
 def _xlsx_rows(data: bytes) -> list[tuple[int, list[str]]]:
@@ -473,6 +478,13 @@ def _exact_cell_parser():
                 cell["value"] = _Unavailable(f"an error ({cell['value']})")
             elif cell["data_type"] == "n" and cell["value"] is not None:
                 cell["value"] = Decimal(element.findtext(value_tag).strip())
+            elif cell["data_type"] == "d" and element.get("t", "n") == "n":
+                # A date stored as a day count: openpyxl converts it through a float, which could round
+                # a tiny time of day away. Only a whole day is a date; anything else keeps its stored
+                # number, which no date check accepts.
+                stored = Decimal(element.findtext(value_tag).strip())
+                if stored != stored.to_integral_value():
+                    cell["value"] = stored
             return cell
 
     return ExactCellParser
@@ -892,9 +904,10 @@ def _total_row(cells: tuple[str, ...], headers: list[str], mapping: dict[str, st
     """(label, group, amount) when the row is shaped like a report's total row, else None.
 
     The shape alone is never enough to skip it: its first filled cell says "Total" or "Total for
-    ...", its amount is filled, every other chosen column (date, customer, job, invoice, ...) is
-    blank, even with a number such as job 456, and any other filled cell is a number in a column
-    nobody chose. _layout_rows then checks that the amount equals the rows above it.
+    ...", in a column nobody chose (a report's unnamed first column, like a heading); its amount
+    is filled; every chosen column but the amount (date, customer, job, invoice, ...) is blank,
+    even with a number such as job 456; and any other filled cell is a number in a column nobody
+    chose. _layout_rows then checks that the amount equals the rows above it.
     """
     filled = [(i, c.strip()) for i, c in enumerate(cells) if c.strip()]
     label = TOTAL_ROW.match(filled[0][1]) if filled else None
@@ -902,6 +915,8 @@ def _total_row(cells: tuple[str, ...], headers: list[str], mapping: dict[str, st
         return None
     amount_at = headers.index(mapping["amount"])
     chosen = {headers.index(h) for h in mapping.values() if h in headers}
+    if filled[0][0] in chosen:
+        return None
     try:
         amount = money(cells[amount_at].strip())
         for i, other in filled[1:]:

@@ -9,6 +9,7 @@ and counts every real line once.
 from datetime import date, datetime
 from decimal import Decimal
 import io
+import re
 import struct
 import unittest
 import zipfile
@@ -33,10 +34,11 @@ def xlsx(*sheets) -> bytes:
     return out.getvalue()
 
 
-def raw_xlsx(rows_xml: str) -> bytes:
+def raw_xlsx(rows_xml: str, base: bytes | None = None) -> bytes:
     """An Excel file whose only sheet is exactly this raw sheet XML (the <row> elements), so the test
-    controls the text stored in the file instead of going through openpyxl's floats."""
-    package = io.BytesIO(xlsx([["placeholder"]]))
+    controls the text stored in the file instead of going through openpyxl's floats. Styles (such as
+    a date format) come from the base file."""
+    package = io.BytesIO(base or xlsx([["placeholder"]]))
     out = io.BytesIO()
     with zipfile.ZipFile(package) as source, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
         for info in source.infolist():
@@ -138,6 +140,21 @@ class ExcelReadingTests(unittest.TestCase):
         # A float can never reach the money check.
         with self.assertRaisesRegex(ji.IntakeError, "couldn't be read exactly"):
             ji._cell_text(0.1 + 0.2, "E2")
+
+    def test_a_date_with_any_time_of_day_is_refused_exactly(self):
+        # A date cell stores a day count. 46297.0000000001 is a moment after midnight; through a float it
+        # would round to midnight and pass as a date. Read exactly, it is rejected. A whole day is a date.
+        date_style = xlsx([["Date"], [date(2026, 10, 2)]])
+        with zipfile.ZipFile(io.BytesIO(date_style)) as z:
+            style = re.search(rb'<c r="A2"[^>]* s="(\d+)"', z.read("xl/worksheets/sheet1.xml")).group(1).decode()
+        for stored, accepted in (("46297.0000000001", False), ("46297.5", False), ("46297", True)):
+            line = text_cells(2, "INV-1", "", "Bakery (fictional)", "J-1", "10.00").replace(
+                '<c r="C2"', f'<c r="B2" s="{style}"><v>{stored}</v></c><c r="C2"')
+            result, _ = intake("sales.xlsx", raw_xlsx(RAW_HEADER + line, date_style), "invoices", "YYYY-MM-DD")
+            self.assertEqual(accepted, bool(result.accepted), stored)
+            if not accepted:
+                self.assertIn("doesn't match", " ".join(result.rejected[0]["reasons"]))
+        self.assertEqual("2026-10-02", result.accepted[0]["date"])
 
     def test_formulas_without_a_saved_result_and_error_cells_refuse_the_file(self):
         # A formula Excel never calculated has no value in the file. It is never read as blank.
@@ -270,10 +287,10 @@ class ReportLayoutTests(unittest.TestCase):
         sales, _ = intake("sales.xlsx", xlsx(REPORT), "invoices", "YYYY-MM-DD")
         costs, _ = intake("costs.xlsx", xlsx([
             ["Biscayne Signs (fictional)"], ["Expenses by job"], [],
-            ["Bill", "Date", "Vendor", "Job", "Type", "Amount"],
-            ["B-1", date(2026, 10, 1), "Supply (fictional)", "J-1", "Materials", 600],
-            ["B-2", date(2026, 10, 2), "Crew (fictional)", "J-1", "Labor", 480.25],
-            ["Total", None, None, None, None, 1080.25]]), "costs", "YYYY-MM-DD")
+            [None, "Bill", "Date", "Vendor", "Job", "Type", "Amount"],
+            [None, "B-1", date(2026, 10, 1), "Supply (fictional)", "J-1", "Materials", 600],
+            [None, "B-2", date(2026, 10, 2), "Crew (fictional)", "J-1", "Labor", 480.25],
+            ["Total", None, None, None, None, None, 1080.25]]), "costs", "YYYY-MM-DD")
         self.assertEqual([], costs.rejected)
         report = jp.job_profit(sales, costs)
         j1 = next(j for j in report.jobs if j.job_id == "J-1")
@@ -321,8 +338,17 @@ class ReportLayoutTests(unittest.TestCase):
                 continue
             self.assertEqual([3], [r["row"] for r in result.rejected], what)
             self.assertTrue(result.rejected[0]["money_missing"], what)
-        result = ji.intake(headers, [ji.Record(2, line), ji.Record(3, cases["a total that doesn't add up"])],
-                           ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        # "Total" in a chosen column (here the invoice number) is never taken for a total's label, even
+        # when the amount adds up; nor is "Total" typed in as the customer.
+        for row in (("Total", "", "", "", "100.00"), ("", "", "Total", "", "100.00")):
+            result = ji.intake(headers, [ji.Record(2, line), ji.Record(3, row)],
+                               ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+            self.assertEqual(([], [3]), (result.skipped, [r["row"] for r in result.rejected]), row)
+            self.assertTrue(result.rejected[0]["money_missing"])
+        # In a report's unnamed first column, a total that doesn't add up says so.
+        report = ["(no name, column A)", *headers]
+        result = ji.intake(report, [ji.Record(2, ("", *line)), ji.Record(3, ("Total", "", "", "", "", "99.00"))],
+                           ji.suggest_mapping(report, "invoices"), "invoices", "MM/DD/YYYY")
         self.assertIn("Looks like a total row ('Total'), but its amount doesn't equal the rows above it",
                       " ".join(result.rejected[0]["reasons"]))
 
@@ -361,9 +387,10 @@ class ReportLayoutTests(unittest.TestCase):
     def test_a_number_or_date_is_never_a_heading_even_when_a_total_closes_it(self):
         # "500.00" in the invoice column may be a misplaced amount; a zero "Total for 500.00" mustn't hide it.
         headers = ["Invoice", "Date", "Customer", "Job", "Amount"]
-        for lone in ("500.00", "12.345", "10/02/2026"):
-            records = [ji.Record(2, (lone, "", "", "", "")), ji.Record(3, (f"Total for {lone}", "", "", "", "0.00"))]
-            result = ji.intake(headers, records, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        report = ["(no name, column A)", *headers]  # even in a column nobody chose
+        for lone in ("500.00", "12.345", "10/02/2026", ".50", "-.50", "#7", "Paid $500"):
+            records = [ji.Record(2, (lone, "", "", "", "", "")), ji.Record(3, (f"Total for {lone}", "", "", "", "", "0.00"))]
+            result = ji.intake(report, records, ji.suggest_mapping(report, "invoices"), "invoices", "MM/DD/YYYY")
             self.assertEqual([], [r["row"] for r in result.skipped if r["row"] == 2], lone)
             self.assertIn(2, [r["row"] for r in result.rejected], lone)
             self.assertTrue(next(r for r in result.rejected if r["row"] == 2)["money_missing"], lone)
@@ -414,7 +441,8 @@ class ReportLayoutTests(unittest.TestCase):
     def test_an_amount_or_date_above_the_column_names_is_never_skipped_as_a_title(self):
         header = ",Date,Invoice,Customer,Job,Amount"
         # Valid money or not (12.345 has too many decimals), anything written like a number or a date is refused.
-        for above in ("100.00", "\"$1,250.00\"", "-45", "10/02/2026", "12.345", "(45.00)", "1.2E3", "15%"):
+        for above in ("100.00", "\"$1,250.00\"", "-45", "10/02/2026", "12.345", "(45.00)", "1.2E3", "15%",
+                      ".50", "-.50", "#12-345", "Paid $500", "Deposit 12.50"):
             data = "\n".join(["Sales report (fictional)", above, header,
                               ",10/02/2026,INV-1,Bakery (fictional),J-1,40.00"]).encode()
             with self.assertRaisesRegex(ji.IntakeError, "Row 2, above the column names, holds .* which looks like an "
@@ -450,10 +478,10 @@ class PageTests(unittest.TestCase):
 
         page = Path(__file__).resolve().parents[1] / "pages" / "1_MargenX_Import.py"
         costs = [["Biscayne Signs (fictional)"], ["Expenses by job"], [],
-                 ["Bill", "Date", "Vendor", "Job", "Type", "Amount"],
-                 ["B-1", date(2026, 10, 1), "Supply (fictional)", "J-1", "Materials", 600],
-                 ["B-2", date(2026, 10, 2), "Crew (fictional)", "J-1", "Labor", 480.25],
-                 ["Total", None, None, None, None, 1080.25]]
+                 [None, "Bill", "Date", "Vendor", "Job", "Type", "Amount"],
+                 [None, "B-1", date(2026, 10, 1), "Supply (fictional)", "J-1", "Materials", 600],
+                 [None, "B-2", date(2026, 10, 2), "Crew (fictional)", "J-1", "Labor", 480.25],
+                 ["Total", None, None, None, None, None, 1080.25]]
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "sales.xlsx").write_bytes(xlsx(REPORT))
             Path(tmp, "costs.xlsx").write_bytes(xlsx(costs))
