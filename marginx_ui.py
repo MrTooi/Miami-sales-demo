@@ -11,8 +11,10 @@ reasons) is HTML-escaped here before it reaches the page.
 """
 from __future__ import annotations
 
+import base64
 import re
 from html import escape
+from pathlib import Path
 
 import streamlit as st
 
@@ -38,7 +40,7 @@ h1,h2,h3,.mx-h{font-family:'Plus Jakarta Sans','Inter',system-ui,sans-serif!impo
 .mx-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
 .mx-brand{display:flex;align-items:center;gap:10px;font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-weight:800;font-size:1.25rem;color:var(--mx-ink)}
 .mx-brand b{color:var(--mx-green)}
-.mx-mark{width:34px;height:34px;border-radius:10px;background:var(--mx-green);display:flex;align-items:center;justify-content:center}
+.mx-logo{width:38px;height:42px;object-fit:contain;display:block}
 .mx-pill{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:600;padding:5px 11px;border-radius:999px;background:var(--mx-amber-bg);color:var(--mx-amber)}
 .mx-pill.pilot{background:var(--mx-blue-bg);color:var(--mx-blue)}
 .mx-steps{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0 22px}
@@ -104,9 +106,10 @@ div[data-testid="stAlertContentWarning"]{font-size:.88rem}
 </style>
 """
 
-_MARK = ('<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">'
-         '<path d="M3 8l9-4 9 4-9 4-9-4z" fill="#A7E3C8"/><path d="M3 12l9 4 9-4" stroke="#fff" stroke-width="1.8" '
-         'stroke-linejoin="round"/><path d="M3 16l9 4 9-4" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>')
+# The MargenX logo (assets/margenx-logo.png), embedded in the page as image data so the header
+# never loads anything from outside: the app works offline and the static demo page stays self-contained.
+LOGO_PATH = Path(__file__).resolve().parent / "assets" / "margenx-logo.png"
+_LOGO_SRC = "data:image/png;base64," + base64.b64encode(LOGO_PATH.read_bytes()).decode("ascii")
 
 
 def apply_brand() -> None:
@@ -136,7 +139,8 @@ def header(pilot: bool) -> None:
             else '<span class="mx-pill">Example data only</span>')
     name = escape(BRAND)
     brand = f"<span>{name[:-1]}<b>{name[-1]}</b></span>" if name.endswith("X") else f"<span>{name}</span>"
-    _html(f'<div class="mx-top"><div class="mx-brand"><div class="mx-mark">{_MARK}</div>{brand}</div>{pill}</div>'
+    _html(f'<div class="mx-top"><div class="mx-brand"><img class="mx-logo" src="{_LOGO_SRC}" alt="{name} logo">'
+          f'{brand}</div>{pill}</div>'
           f'<div class="mx-kicker">{escape(TAGLINE)}</div>')
 
 
