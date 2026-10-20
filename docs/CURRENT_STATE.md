@@ -59,7 +59,7 @@ Internal code names (`marginx_ui.py`, `marginx_insights.py`, `marginx_pilot.py`,
   - quoted vs. actual
   - apparel shops that sell products rather than jobs
   - Spanish
-- **Money amounts are capped (#118):** `finance_engine.money` refuses any amount over $999,999,999,999.99 either way, with its own reason, so sums stay exact under Python's 28-digit Decimal precision (a test adds a billion capped amounts with rounding trapped). Before this, an absurdly long amount (30+ digits) could have been rounded when added up. Found during #116. This is finance logic, so it needs the manual review (D-004).
+- **Money amounts are capped (#118):** `finance_engine.money` refuses any amount over $999,999,999,999.99 either way, with its own reason, so sums stay exact under Python's 28-digit Decimal precision (a test, with rounding trapped at 28 digits, adds 100,000 capped amounts one by one and checks a billion-row total by multiplication). Before this, an absurdly long amount (30+ digits) could have been rounded when added up. Found during #116. This is finance logic, so it needs the manual review (D-004).
 - **"Complete" means complete per the imported files** (sales, labor, and materials or outsourced work present, nothing rejected), not reconciled business profit. MargenX can't know about costs that were never recorded.
 - The website draft claims things MargenX doesn't do yet (labor hours, quoted vs. actual, card fees, the "change what happened" sliders). Fix them before it goes public. Excel reading now exists (#116), but only on made-up files.
 - **Real customer data is prohibited** until step 3b is done and the owner records the real-data decision (**D-007 or later**; real data approved for a named pilot shop).
