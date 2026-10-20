@@ -12,6 +12,9 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from job_profit import ZERO, CustomerResult, JobResult, ProfitReport, format_money
 
+# The "usual margin" (share kept across complete jobs) is only stated with at least this many.
+MIN_JOBS_FOR_USUAL = 3
+MAX_THIN_JOBS = 2
 # A customer counts as "thin" when its share left after job costs is at least this many
 # percentage points below the business-wide share.
 THIN_GAP_POINTS = Decimal("15")
@@ -27,6 +30,9 @@ class Summary:
     losing_jobs: int
     jobs_to_check: int           # provisional or unavailable
     figure_is_provisional: bool  # any job counted in the total isn't complete
+    unlinked_costs: Decimal      # costs in the file not tied to any job (rent, other overhead...)
+    after_unlinked_costs: Decimal  # left_after_job_costs minus unlinked_costs: what these files leave
+    usual_margin: Decimal | None   # share kept across complete jobs (0.30 = 30%), when there are enough
 
 
 @dataclass(frozen=True)
@@ -53,6 +59,51 @@ def job_name(job: JobResult) -> str:
     return f"{job.description} · {job.job_id}" if job.description else f"Job {job.job_id}"
 
 
+def usual_margin(report: ProfitReport) -> Decimal | None:
+    """The share of sales kept across complete jobs (exact), or None with too few of them."""
+    complete = [j for j in report.jobs if j.status == "complete" and j.sales > 0]
+    sales = sum((j.sales for j in complete), ZERO)
+    if len(complete) < MIN_JOBS_FOR_USUAL or sales <= 0:
+        return None
+    return sum((j.contribution for j in complete), ZERO) / sales
+
+
+def whole_dollars(amount: Decimal) -> Decimal:
+    return amount.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+
+
+def pricing(job: JobResult, usual: Decimal | None) -> dict | None:
+    """Break-even and "at your usual margin" prices for a complete job, from its own recorded costs.
+
+    None for a job that isn't complete (its costs may be understated, so any price would be too
+    low) or that has no costs. The target price is costs / (1 - usual margin), rounded to whole
+    dollars for display and stated as "about".
+    """
+    if job.status != "complete" or job.total_costs <= 0:
+        return None
+    result = {"break_even": job.total_costs, "usual": None, "at_usual": None}
+    if usual is not None and Decimal("0") < usual < Decimal("1"):
+        result["usual"] = percent(usual, Decimal("1"))
+        result["at_usual"] = whole_dollars(job.total_costs / (1 - usual))
+    return result
+
+
+def _price_sentence(job: JobResult, usual: Decimal | None) -> str:
+    """Break-even (for a losing job) and the price at the usual margin, when it's higher."""
+    price = pricing(job, usual)
+    if not price:
+        return ""
+    parts = []
+    if job.contribution < 0:
+        parts.append(f"To break even it needed {money(price['break_even'])}")
+    if price["at_usual"] is not None and price["at_usual"] > job.sales:
+        parts.append(f"at your usual {price['usual']}% margin, about {money(price['at_usual'])}")
+    if not parts:
+        return ""
+    text = "; ".join(parts)
+    return " " + text[0].upper() + text[1:] + "."
+
+
 def summarize(report: ProfitReport) -> Summary:
     counted = [j for j in report.jobs if j.contribution is not None]
     counted_sales = sum((j.sales for j in counted), ZERO)
@@ -65,6 +116,9 @@ def summarize(report: ProfitReport) -> Summary:
         losing_jobs=sum(1 for j in counted if j.contribution < 0),
         jobs_to_check=sum(1 for j in report.jobs if j.status != "complete"),
         figure_is_provisional=any(j.status != "complete" for j in counted),
+        unlinked_costs=report.unlinked_costs,
+        after_unlinked_costs=left - report.unlinked_costs,
+        usual_margin=usual_margin(report),
     )
 
 
@@ -93,12 +147,22 @@ def _thin_biggest_customer(customers: list[CustomerResult]) -> Insight | None:
 def attention(report: ProfitReport) -> list[Insight]:
     """What needs the owner's attention, most important first."""
     items: list[Insight] = []
+    usual = usual_margin(report)
     for job in sorted((j for j in report.jobs if j.contribution is not None and j.contribution < 0),
                       key=lambda j: (j.contribution, j.job_id)):
-        detail = f"Sold for {money(job.sales)}, cost {money(job.total_costs)}."
+        detail = f"Sold for {money(job.sales)}, cost {money(job.total_costs)}." + _price_sentence(job, usual)
         if job.status != "complete":
             detail += " Some of its costs still need a check."
         items.append(Insight("loss", f"{job_name(job)} lost {money(-job.contribution)}", detail))
+    # Complete jobs that made money but kept less than half the usual margin.
+    if usual is not None and usual > 0:
+        thin_jobs = sorted((j for j in report.jobs if j.status == "complete" and j.sales > 0
+                            and j.contribution >= 0 and j.contribution / j.sales < usual / 2),
+                           key=lambda j: (j.contribution / j.sales, j.job_id))
+        for job in thin_jobs[:MAX_THIN_JOBS]:
+            items.append(Insight("warn", f"{job_name(job)} kept only {percent(job.contribution, job.sales)}%",
+                                 f"Sold for {money(job.sales)}, cost {money(job.total_costs)}."
+                                 + _price_sentence(job, usual)))
     thin = _thin_biggest_customer(report.customers)
     if thin:
         items.append(thin)

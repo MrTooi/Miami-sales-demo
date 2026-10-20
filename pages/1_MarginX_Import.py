@@ -336,7 +336,9 @@ def show_profit(results: list[ji.IntakeResult], pending: list[str]) -> bool:
         return False
     ui.results(report, mi.summarize(report), mi.attention(report), _period(report))
     for note in report.notes:
-        st.caption(note)
+        # The overhead note is already shown as the "after overhead" line; the rest stay visible here.
+        if "overhead or fee line" not in note:
+            st.caption(note)
     with st.expander("All the details: every job, customer and how the figures are worked out"):
         _details(report)
     return True

@@ -10,8 +10,8 @@ from html import escape
 
 import streamlit as st
 
-from job_profit import ProfitReport
-from marginx_insights import Insight, Summary, money, percent
+from job_profit import CATEGORIES, CATEGORY_LABELS, ProfitReport
+from marginx_insights import Insight, Summary, money, percent, pricing
 
 BRAND = "MarginX"  # the product name, in one place
 TAGLINE = "Profit per job for print, sign and apparel shops"
@@ -63,11 +63,25 @@ h1,h2,h3,.mx-h{font-family:'Plus Jakarta Sans','Inter',sans-serif!important;colo
 .mx-row .r{text-align:right}.mx-row .r .a{font-weight:700;font-family:'Plus Jakarta Sans',sans-serif}.mx-row .r .p{font-size:.8rem;color:var(--mx-muted)}
 .mx-job{display:grid;grid-template-columns:12px minmax(0,1fr) auto 120px;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--mx-line);font-size:.95rem}
 .mx-job:first-of-type{border-top:0}
-.mx-dot{width:10px;height:10px;border-radius:50%}.mx-dot.complete{background:var(--mx-green)}.mx-dot.provisional{background:#E0A43A}.mx-dot.unavailable{background:#B7C4BE}
+.mx-dot{width:10px;height:10px;border-radius:50%}.mx-dot.complete{background:var(--mx-green)}.mx-dot.loss{background:var(--mx-red)}.mx-dot.provisional{background:#E0A43A}.mx-dot.unavailable{background:#B7C4BE}
 .mx-job .w small{color:var(--mx-muted);font-size:.82rem}
 .mx-tag{font-size:.75rem;padding:3px 9px;border-radius:999px;white-space:nowrap}
 .mx-tag.complete{background:var(--mx-mint);color:var(--mx-green-dark)}.mx-tag.provisional{background:var(--mx-amber-bg);color:var(--mx-amber)}.mx-tag.unavailable{background:#EEF2F0;color:var(--mx-muted)}
 .mx-job .a{text-align:right;font-weight:700;font-family:'Plus Jakarta Sans',sans-serif}.mx-job .a.neg{color:var(--mx-red)}
+.mx-after{display:flex;justify-content:space-between;gap:14px;align-items:center;background:#fff;border:1px dashed #BFE3D2;border-radius:14px;padding:12px 18px;margin:-4px 0 18px;font-size:.9rem;color:var(--mx-muted)}
+.mx-after b{font-family:'Plus Jakarta Sans',sans-serif;font-size:1.15rem;color:var(--mx-ink)}
+details.mx-d{border-top:1px solid var(--mx-line)}details.mx-d:first-of-type{border-top:0}
+details.mx-d>summary{list-style:none;cursor:pointer}details.mx-d>summary::-webkit-details-marker{display:none}
+details.mx-d>summary .mx-job,details.mx-d>summary .mx-row{border-top:0}
+details.mx-d>summary:hover{background:#F6FBF8;border-radius:10px}
+.mx-chev{color:var(--mx-muted);font-size:.8rem;margin-left:4px}
+details[open] .mx-chev{display:inline-block;transform:rotate(90deg)}
+.mx-break{margin:0 0 12px 24px;padding:12px 16px;background:#F6FBF8;border-radius:12px;font-size:.88rem}
+.mx-break table{width:100%;border-collapse:collapse;border:0!important;margin:0}
+.mx-break tr,.mx-break td{border:0!important;background:transparent!important}.mx-break td{padding:3px 0!important;font-size:.88rem}.mx-break td.r{text-align:right;font-variant-numeric:tabular-nums}
+.mx-break tr.tot td{border-top:1px solid var(--mx-line);font-weight:700;padding-top:6px}
+.mx-break .why{color:var(--mx-amber);margin-top:8px}.mx-break .price{color:var(--mx-green-dark);margin-top:8px}
+.mx-job .a .p{display:block;font-size:.75rem;font-weight:500;color:var(--mx-muted);font-family:'Inter',sans-serif}
 .mx-legend{font-size:.78rem;color:var(--mx-muted);margin-top:8px}
 .mx-legend span{display:inline-block;width:12px;height:7px;border-radius:3px;margin:0 5px 1px 0;vertical-align:middle}
 .mx-foot{font-size:.82rem;color:var(--mx-muted);margin:4px 2px 18px}
@@ -152,20 +166,29 @@ def results(report: ProfitReport, summary: Summary, items: list[Insight], period
         cards.append(f'<div class="mx-metric"><div class="l">{escape(label)}</div><div class="v {cls}">{value}</div>'
                      f'<div class="s">{sub}</div></div>')
     _html(f'<div class="mx-grid">{"".join(cards)}</div>')
+    if summary.unlinked_costs:
+        _html(f'<div class="mx-after"><div>After the {_money(summary.unlinked_costs)} of costs not tied to any job '
+              f'(rent and other overhead), these files leave <b>{_money(summary.after_unlinked_costs)}</b></div>'
+              f'<div style="font-size:.8rem;max-width:300px;text-align:right">Your real profit only if these files '
+              f'include all your costs for the period.</div></div>')
 
     if items:
         icons = {"loss": "↓", "warn": "!", "info": "i"}
         rows = "".join(f'<div class="mx-item"><div class="mx-ico {i.level}">{icons[i.level]}</div><div>'
                        f'<div class="t">{escape(i.title)}</div><div class="d">{escape(i.detail)}</div></div></div>'
                        for i in items)
-        _html(f'<div class="mx-card"><h3>What needs your attention</h3>{rows}</div>')
+        foot = ""
+        if summary.usual_margin is not None and any("usual" in i.detail for i in items):
+            foot = (f'<div class="mx-legend">Your usual margin ({percent(summary.usual_margin, 1)}%) is the average of '
+                    "your jobs with complete costs.</div>")
+        _html(f'<div class="mx-card"><h3>What needs your attention</h3>{rows}{foot}</div>')
     else:
         _html('<div class="mx-card"><h3>What needs your attention</h3><div class="mx-item"><div class="mx-ico info">✓</div>'
               '<div><div class="t">Nothing stands out</div><div class="d">No job lost money and every figure is complete.'
               '</div></div></div></div>')
 
     _customers(report)
-    _jobs(report)
+    _jobs(report, summary)
 
 
 def _customers(report: ProfitReport) -> None:
@@ -179,18 +202,25 @@ def _customers(report: ProfitReport) -> None:
         left_width = max(0, min(100, int(c.contribution * 100 / top)))
         bar = "neg" if c.contribution < 0 else "left"
         note = "" if c.status == "complete" else "<small>Needs a check</small>"
+        jobs = [j for j in report.jobs if j.job_id in c.jobs]
+        inner = "".join(f'<tr><td>{escape(j.description or "Job")} · {escape(j.job_id)}</td>'
+                        f'<td class="r">{"—" if j.contribution is None else _money(j.contribution)}</td></tr>'
+                        for j in jobs)
+        why = f'<div class="why">{escape(" ".join(c.reasons))}</div>' if c.reasons else ""
         rows.append(
-            f'<div class="mx-row"><div class="n">{escape(c.customer)}{note}</div>'
+            f'<details class="mx-d"><summary><div class="mx-row"><div class="n">{escape(c.customer)}'
+            f'<span class="mx-chev">›</span>{note}</div>'
             f'<div class="bars"><div class="mx-bar"><i class="sales" style="width:{int(c.sales * 100 / top)}%"></i></div>'
             f'<div class="mx-bar"><i class="{bar}" style="width:{left_width}%"></i></div></div>'
             f'<div class="r"><div class="a">{_money(c.contribution)}</div>'
-            f'<div class="p">{"" if share is None else f"{share}% of "}{_money(c.sales)}</div></div></div>')
+            f'<div class="p">{"" if share is None else f"{share}% of "}{_money(c.sales)}</div></div></div></summary>'
+            f'<div class="mx-break"><table>{inner}</table>{why}</div></details>')
     legend = ('<div class="mx-legend"><span style="background:#A7E3C8"></span>Sales'
               '<span style="background:#0F7A55;margin-left:14px"></span>Left after job costs</div>')
     _html(f'<div class="mx-card"><h3>Customers, by what they leave you</h3>{"".join(rows)}{legend}</div>')
 
 
-def _jobs(report: ProfitReport) -> None:
+def _jobs(report: ProfitReport, summary: Summary) -> None:
     tag = {"complete": "Complete", "provisional": "Needs a check", "unavailable": "No figure yet"}
     order = {"complete": 0, "provisional": 1, "unavailable": 2}
     jobs = sorted(report.jobs, key=lambda j: (j.contribution is None, -(j.contribution or 0), order[j.status], j.job_id))
@@ -200,8 +230,30 @@ def _jobs(report: ProfitReport) -> None:
         who = escape(", ".join(j.customers) or "No customer")
         amount = "—" if j.contribution is None else _money(j.contribution)
         neg = " neg" if j.contribution is not None and j.contribution < 0 else ""
-        rows.append(f'<div class="mx-job"><span class="mx-dot {j.status}"></span>'
-                    f'<div class="w">{what} <small>· {who} · {escape(j.job_id)}</small></div>'
+        share = percent(j.contribution, j.sales) if j.contribution is not None else None
+        # A job that needs a check may be missing costs: its margin is shown as "so far", not as fact.
+        share_html = (f'<span class="p">{share}% margin{" so far" if j.status != "complete" else ""}</span>'
+                      if share is not None else "")
+        dot = "loss" if j.contribution is not None and j.contribution < 0 else j.status
+        lines = [f'<tr><td>Sold for</td><td class="r">{_money(j.sales)}</td></tr>'] if j.invoice_lines else []
+        lines += [f'<tr><td>{escape(CATEGORY_LABELS[c])}</td><td class="r">−{_money(j.costs[c])}</td></tr>'
+                  for c in CATEGORIES if j.costs[c]]
+        if j.contribution is not None:
+            lines.append(f'<tr class="tot"><td>Left after job costs</td><td class="r">{amount}</td></tr>')
+        why = f'<div class="why">{escape(" ".join(j.reasons))}</div>' if j.reasons else ""
+        price = pricing(j, summary.usual_margin)
+        tip = ""
+        if price and (j.contribution < 0 or (price["at_usual"] is not None and price["at_usual"] > j.sales)):
+            parts = []
+            if j.contribution < 0:
+                parts.append(f"Break-even price: {_money(price['break_even'])}")
+            if price["at_usual"] is not None and price["at_usual"] > j.sales:
+                parts.append(f"At your usual {price['usual']}% margin: about {_money(price['at_usual'])}")
+            tip = f'<div class="price">{" · ".join(parts)}</div>'
+        rows.append(f'<details class="mx-d"><summary><div class="mx-job"><span class="mx-dot {dot}"></span>'
+                    f'<div class="w">{what}<span class="mx-chev">›</span> <small>· {who} · {escape(j.job_id)}</small></div>'
                     f'<div class="tagc"><span class="mx-tag {j.status}">{tag[j.status]}</span></div>'
-                    f'<div class="a{neg}">{amount}</div></div>')
-    _html(f'<div class="mx-card"><h3>Jobs</h3>{"".join(rows)}</div>')
+                    f'<div class="a{neg}">{amount}{share_html}</div></div></summary>'
+                    f'<div class="mx-break"><table>{"".join(lines)}</table>{why}{tip}</div></details>')
+    _html(f'<div class="mx-card"><h3>Jobs <span style="font-weight:400;font-size:.85rem;color:#5A6F66">'
+          f'· click a job to see why</span></h3>{"".join(rows)}</div>')
