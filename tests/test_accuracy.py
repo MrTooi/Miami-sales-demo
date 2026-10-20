@@ -1,0 +1,244 @@
+"""MargenX accuracy self-tests: random made-up shops with known answers, run through the whole app.
+
+Each shop comes from tests/accuracy_shops.py, which works out the right answers in whole cents
+without using any MargenX code. The shop is written as ordinary CSV files and read by MargenX
+exactly as an upload would be (intake, profit engine, summary). Every job, customer and headline
+figure, every status, and the prices at the usual margin must match. A second check renders the
+results screen and reads the numbers back off it.
+
+Run thousands of shops with: python scripts/accuracy_check.py 5000
+"""
+from __future__ import annotations
+
+from decimal import Decimal
+from fractions import Fraction
+import re
+import unittest
+from unittest import mock
+
+import job_intake as ji
+import job_profit as jp
+import marginx_insights as mi
+import marginx_ui as ui
+
+from tests import accuracy_shops as shops
+
+SHOPS_IN_CI = 400
+CATEGORY = {"labor": "labor", "materials": "materials", "outsourced": "outsourced", "other": "other",
+            "fees": "fees_overhead"}
+
+
+def cents(amount: Decimal) -> int:
+    value = amount * 100
+    assert value == value.to_integral_value(), amount
+    return int(value)
+
+
+def run_margenx(shop: shops.Shop):
+    """The shop's CSV files through MargenX, as an upload would go."""
+    invoices, costs = shops.to_csv(shop)
+    results = {}
+    for data, kind in ((invoices, "invoices"), (costs, "costs")):
+        headers, records = ji.read_csv(data)
+        results[kind] = ji.intake(headers, records, ji.suggest_mapping(headers, kind), kind, "MM/DD/YYYY")
+    return results, jp.job_profit(results["invoices"], results["costs"])
+
+
+def mismatches(seed: int) -> list[str]:
+    """Every difference between MargenX and the known answers for one shop (empty = all correct)."""
+    shop = shops.make_shop(seed)
+    want = shops.answer(shop)
+    results, report = run_margenx(shop)
+    found: list[str] = []
+
+    def check(what, got, expected):
+        if got != expected:
+            found.append(f"seed {seed}: {what}: MargenX {got!r}, expected {expected!r}")
+
+    for kind, result in results.items():
+        check(f"{kind} rows MargenX couldn't read", [r["reasons"] for r in result.rejected], [])
+        check(f"{kind} rows read", len(result.accepted), len(shop.sales if kind == "invoices" else shop.costs))
+    if found:
+        return found
+    jobs = {j.job_id: j for j in report.jobs}
+    check("jobs", sorted(jobs), sorted(want.jobs))
+    for job_id, expected in want.jobs.items():
+        got = jobs.get(job_id)
+        if got is None:
+            continue
+        check(f"{job_id} status", got.status, expected.status)
+        check(f"{job_id} customers", got.customers, expected.customers)
+        check(f"{job_id} sales", cents(got.sales), expected.sales)
+        for mine, theirs in CATEGORY.items():
+            check(f"{job_id} {theirs}", cents(got.costs[theirs]), expected.costs[mine])
+        check(f"{job_id} figure", None if got.contribution is None else cents(got.contribution), expected.contribution)
+
+    customers = {c.customer: c for c in report.customers}
+    check("customers", sorted(customers), sorted(want.customers))
+    for name, expected in want.customers.items():
+        got = customers.get(name)
+        if got is None:
+            continue
+        check(f"{name} status", got.status, expected.status)
+        if expected.status != "unavailable":
+            check(f"{name} sales", cents(got.sales), expected.sales)
+            check(f"{name} figure", cents(got.contribution), expected.contribution)
+
+    summary = mi.summarize(report)
+    check("total sales", cents(summary.sales), want.total_sales)
+    check("left after job costs", cents(summary.left_after_job_costs), want.left)
+    check("jobs with a figure", summary.jobs_with_figure, want.jobs_with_figure)
+    check("complete jobs", summary.complete_jobs, want.complete_jobs)
+    check("jobs losing money", summary.losing_jobs, want.losing)
+    check("possible losses", summary.possible_losses, want.possible_losses)
+    check("sales with no job number", cents(summary.unlinked_sales), want.unlinked_sales)
+    check("overhead", cents(summary.overhead_costs), want.overhead)
+    check("costs with no job number", cents(summary.unassigned_job_costs), want.unassigned_job_costs)
+    check("after overhead", None if summary.after_unlinked_costs is None else cents(summary.after_unlinked_costs),
+          want.after_unlinked)
+    check("usual margin given", summary.usual_margin is not None, want.usual_margin is not None)
+    if summary.usual_margin is not None and want.usual_margin is not None:
+        # MargenX divides with 28 significant digits; the shown percent and every price must agree exactly.
+        check("usual margin shown", mi.percent(summary.usual_margin, Decimal(1)),
+              shops.shown_percent(want.usual_margin.numerator, want.usual_margin.denominator))
+        for job_id, expected in want.jobs.items():
+            if expected.status == "complete" and expected.total_costs > 0 and Fraction(0) < want.usual_margin < 1:
+                price = mi.pricing(jobs[job_id], summary.usual_margin)
+                check(f"{job_id} price at usual margin", int(price["at_usual"]),
+                      shops.price_at(expected.total_costs, want.usual_margin))
+    return found
+
+
+def screen(report) -> str:
+    out: list[str] = []
+    with mock.patch.object(ui, "_html", out.append):
+        ui.results(report, mi.summarize(report), mi.attention(report), mi.period_text(report))
+    return "".join(out)
+
+
+def screen_mismatches(seed: int) -> list[str]:
+    """The numbers a shop owner reads on the results screen, against the known answers."""
+    shop = shops.make_shop(seed)
+    want = shops.answer(shop)
+    _, report = run_margenx(shop)
+    html = screen(report)
+    found: list[str] = []
+
+    def expect(what, text):
+        if text not in html:
+            found.append(f"seed {seed}: on screen, {what}: expected to find {text!r}")
+
+    expect("Sales card", f'<div class="l">Sales</div><div class="v ">{shops.shown_money(want.total_sales)}</div>')
+    if want.jobs_with_figure:
+        expect("Left after job costs card",
+               f'<div class="l">Left after job costs</div><div class="v ">{shops.shown_money(want.left)}</div>')
+    if want.complete_jobs:
+        expect("Jobs losing money card", f">{want.losing} of {want.complete_jobs}</div>")
+    blocks = re.findall(r'<details class="mx-d">(.*?)</details>', html)
+    for job_id, expected in want.jobs.items():
+        block = next((b for b in blocks if f"· {job_id}</small>" in b), None)
+        if block is None:
+            found.append(f"seed {seed}: on screen, job {job_id} is missing")
+            continue
+        amount = re.search(r'<div class="a[^"]*">([^<]*)', block).group(1)
+        figure = expected.contribution
+        if amount != ("—" if figure is None else shops.shown_money(figure)):
+            found.append(f"seed {seed}: on screen, job {job_id} shows {amount!r}, expected "
+                         f"{'—' if figure is None else shops.shown_money(figure)!r}")
+        if figure is not None and expected.sales > 0:
+            share = shops.shown_percent(figure, expected.sales)
+            margin = f"{share}% margin" + (" so far" if expected.status != "complete" else "")
+            if f'<span class="p">{margin}</span>' not in block:
+                found.append(f"seed {seed}: on screen, job {job_id} margin: expected {margin!r}")
+        if expected.sales and (f'<td>Sold for</td><td class="r">{shops.shown_money(expected.sales)}</td>' not in block):
+            found.append(f"seed {seed}: on screen, job {job_id} breakdown 'Sold for' doesn't match")
+    for name, expected in want.customers.items():
+        if expected.status == "unavailable":
+            continue
+        block = next((b for b in blocks if f'<div class="n">{name}<' in b), None)
+        if block is None:
+            found.append(f"seed {seed}: on screen, customer {name} is missing")
+            continue
+        share = shops.shown_percent(expected.contribution, expected.sales)
+        text = (f'<div class="a">{shops.shown_money(expected.contribution)}</div><div class="p">'
+                + ("" if share is None else f"{share}% of ") + f"{shops.shown_money(expected.sales)}</div>")
+        if text not in block:
+            found.append(f"seed {seed}: on screen, customer {name}: expected {text!r}")
+    return found
+
+
+class AccuracyTests(unittest.TestCase):
+    def test_random_shops_match_the_known_answers(self):
+        problems = [p for seed in range(SHOPS_IN_CI) for p in mismatches(seed)]
+        self.assertEqual([], problems[:20], f"{len(problems)} mismatches")
+
+    def test_numbers_on_screen_match_the_known_answers(self):
+        problems = [p for seed in range(0, SHOPS_IN_CI, 4) for p in screen_mismatches(seed)]
+        self.assertEqual([], problems[:20], f"{len(problems)} mismatches")
+
+    def test_the_generator_covers_the_cases_that_matter(self):
+        # The shops must exercise every status, losses, credits, overhead, unlinked costs and sales,
+        # shared jobs and the usual-margin prices, or a pass would prove little.
+        seen = set()
+        for seed in range(SHOPS_IN_CI):
+            shop = shops.make_shop(seed)
+            want = shops.answer(shop)
+            seen |= {j.status for j in want.jobs.values()}
+            seen |= {"loss" for j in want.jobs.values() if j.contribution is not None and j.contribution < 0}
+            seen |= {"credit" for s in shop.sales if s.cents < 0}
+            seen |= {"shared" for j in want.jobs.values() if len(j.customers) > 1}
+            seen |= {"overhead"} if want.overhead else set()
+            seen |= {"unlinked cost"} if want.unassigned_job_costs else set()
+            seen |= {"unlinked sale"} if want.unlinked_sales_lines else set()
+            seen |= {"after overhead shown"} if want.after_unlinked is not None else set()
+            seen |= {"usual margin"} if want.usual_margin is not None else set()
+            seen |= {"$0 labor"} if any(c.kind == "Labor" and c.cents == 0 for c in shop.costs) else set()
+            seen |= {"half percent"} if any(j.contribution is not None and j.sales > 0
+                                            and (j.contribution * 200) % j.sales == 0
+                                            and (j.contribution * 200 // j.sales) % 2 == 1
+                                            for j in want.jobs.values()) else set()
+        self.assertEqual({"complete", "provisional", "unavailable", "loss", "credit", "shared", "overhead",
+                          "unlinked cost", "unlinked sale", "after overhead shown", "usual margin", "$0 labor",
+                          "half percent"}, seen)
+
+    def test_demo_shop_matches_the_hand_worked_example(self):
+        # The numbers worked out by hand in docs/ACCURACY.md, from the demo shop's CSV files.
+        from pathlib import Path
+        samples = Path(__file__).resolve().parents[1] / "sample_data" / "marginx"
+        results = {}
+        for kind in ("invoices", "costs"):
+            headers, records = ji.read_csv((samples / f"demo_sign_shop_{kind}.csv").read_bytes())
+            results[kind] = ji.intake(headers, records, ji.suggest_mapping(headers, kind), kind, "MM/DD/YYYY")
+        report = jp.job_profit(results["invoices"], results["costs"])
+        summary = mi.summarize(report)
+        j105 = next(j for j in report.jobs if j.job_id == "J-105")
+        self.assertEqual((60000, 74000, -14000), (cents(j105.sales), cents(j105.total_costs), cents(j105.contribution)))
+        self.assertEqual(-23, mi.percent(j105.contribution, j105.sales))
+        self.assertEqual((1100000, 364000, 164000, 1, 7), (cents(summary.sales), cents(summary.left_after_job_costs),
+                                                           cents(summary.after_unlinked_costs), summary.losing_jobs,
+                                                           summary.complete_jobs))
+        self.assertEqual((30, 1062), (mi.percent(summary.usual_margin, Decimal(1)),
+                                      int(mi.pricing(j105, summary.usual_margin)["at_usual"])))
+        bayside = next(c for c in report.customers if c.customer.startswith("Bayside"))
+        self.assertEqual((585000, 75000, 13), (cents(bayside.sales), cents(bayside.contribution),
+                                               mi.percent(bayside.contribution, bayside.sales)))
+
+    def test_the_independent_calculator_agrees_with_a_hand_count(self):
+        # One tiny shop worked by hand, so the checker itself is checked.
+        shop = shops.Shop(0, sales=[shops.Line("I-1", 5, "A (fictional)", "J-1", "Banner", 60000),
+                                    shops.Line("I-2", 6, "A (fictional)", "J-1", "Banner", -5000)],
+                          costs=[shops.Line("B-1", 5, "x", "J-1", "Labor", 12000),
+                                 shops.Line("B-2", 5, "x", "J-1", "Materials", 34000),
+                                 shops.Line("B-3", 5, "x", "", "Rent", 100000)])
+        want = shops.answer(shop)
+        # $600 - $50 credit = $550 sold; $120 labor + $340 materials = $460 costs; $90 left.
+        self.assertEqual((55000, 46000, 9000, "complete"),
+                         (want.jobs["J-1"].sales, want.jobs["J-1"].total_costs, want.jobs["J-1"].contribution,
+                          want.jobs["J-1"].status))
+        self.assertEqual(9000 - 100000, want.after_unlinked)  # $90 left minus $1,000 rent
+        self.assertEqual(("$550", "-$910", "$12.50", 16), (shops.shown_money(55000), shops.shown_money(-91000),
+                                                           shops.shown_money(1250), shops.shown_percent(9000, 55000)))
+
+
+if __name__ == "__main__":
+    unittest.main()
