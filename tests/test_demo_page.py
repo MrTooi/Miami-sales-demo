@@ -55,6 +55,14 @@ class DemoPageTests(unittest.TestCase):
         self.assertIn(f'<img class="mx-logo" src="{LOGO_DATA}{logo}" alt="MargenX logo">', self.page)
         self.assertNotIn("<svg", self.page)  # the old placeholder mark is gone
 
+    def test_logo_file_is_a_valid_png_of_the_expected_size(self):
+        from PIL import Image
+        with Image.open(ROOT / "assets" / "margenx-logo.png") as image:
+            image.verify()  # raises if the file is corrupt or not really a PNG
+        with Image.open(ROOT / "assets" / "margenx-logo.png") as image:
+            self.assertEqual(("PNG", (108, 120)), (image.format, image.size))
+            self.assertIn(image.mode, {"P", "RGBA"})  # has transparency for the mint background
+
     def test_page_says_the_data_is_made_up(self):
         self.assertIn("Every name and number here is invented.", self.page)
         self.assertIn("Example data only", self.page)
