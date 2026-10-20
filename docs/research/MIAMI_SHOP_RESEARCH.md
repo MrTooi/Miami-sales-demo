@@ -67,9 +67,10 @@
 - [ ] Pilot safety minimums (D-003(e)), a written pilot agreement, a Florida attorney review of data handling, and an owner decision.
 
 ## 6. Questions the partner should ask 3–5 shops
+The full, current list is in `docs/SHOP_CONVERSATION_GUIDE.md`.
 1. What software do you use for quotes, jobs, invoices and expenses?
 2. Do you track costs or hours per job? How?
-3. Can you export to CSV or Excel? Will you share a **made-up or anonymized** sample?
+3. Can you export to CSV or Excel? Ask them to describe it or show the screen. **Don't take any file, not even an anonymized one**: until step 3 and the owner's approval of real data, only made-up data is allowed (D-003, `docs/MVP_SPEC.md`).
 4. English, Spanish, or both?
 5. Do you have a bookkeeper or accountant? Would they need to see this?
 6. What would make a weekly profit report worth paying for?
