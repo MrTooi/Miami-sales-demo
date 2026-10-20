@@ -368,8 +368,9 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
     overhead_lines = report.unlinked_cost_lines - len(unlinked_job_costs)
     if overhead_lines:
         report.notes.append(f"{overhead_lines} overhead or fee line(s) worth {format_money(unlinked_overhead)} (such as "
-                            "rent) aren't linked to a job. They're left out of every job's figure: direct job "
-                            "contribution comes before overhead.")
+                            "rent) aren't linked to a job, so they aren't allocated to any job. Overhead recorded "
+                            "against a job is included in that job. These figures are direct job contribution, not "
+                            "the business's final profit.")
     if unlinked_job_costs:
         report.notes.append(f"{len(unlinked_job_costs)} cost line(s) worth "
                             f"{format_money(sum(unlinked_job_costs, ZERO))} aren't linked to a job, so they aren't in "

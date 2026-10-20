@@ -507,6 +507,23 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertIn("(such as rent) aren't linked to a job", page_text(at))
         self.assertFalse(any("couldn't be imported" in t.value for t in at.text))
 
+    def test_switching_between_test_files_and_demo_keeps_results_apart(self):
+        at = self.run_page()  # messy test files
+        radio(at, SAMPLE_AMOUNT_QUESTION).set_value("line").run()
+        radio(at, INVOICE_DATE_QUESTION).set_value("MM/DD/YYYY").run()
+        self.assertIn("J-501", list(self.profit_table(at)["Job"]))
+        next(r for r in at.radio if r.label == "Which made-up files?").set_value("demo").run()
+        self.assertFalse(at.exception, at.exception)
+        jobs = list(self.profit_table(at)["Job"])
+        self.assertEqual([f"J-10{i}" for i in range(1, 9)], jobs)  # only the demo's jobs, nothing stale
+        self.assertEqual([], [r.label for r in at.radio if r.label in (SAMPLE_AMOUNT_QUESTION, INVOICE_DATE_QUESTION)])
+        next(r for r in at.radio if r.label == "Which made-up files?").set_value("test").run()
+        self.assertFalse(at.exception, at.exception)
+        # Back on the test files, the earlier answers aren't reused: the questions are asked again and
+        # no profit is shown until they're answered.
+        self.assertIsNone(radio(at, SAMPLE_AMOUNT_QUESTION).value)
+        self.assertFalse(any("Direct contribution" in d.value.columns for d in at.dataframe))
+
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertTrue(any("no rows" in i.value for i in at.info))
