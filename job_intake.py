@@ -137,11 +137,27 @@ CASH_MOVEMENT_TYPES = {
 }
 # Whole row types that are fees for moving money: ordinary costs.
 FEE_TYPES = {
-    "payment processing fee", "payment processing fees", "processing fee", "processing fees", "merchant fee",
+    "bank service charge", "bank service charges", "payment processing fee", "payment processing fees", "processing fee", "processing fees", "merchant fee",
     "merchant fees", "transfer fee", "transfer fees", "payout fee", "payout fees", "wire fee", "wire fees",
     "bank fee", "bank fees", "bank charges", "service charge", "service charges", "transaction fee",
     "transaction fees", "credit card fees", "card processing fees", "deposit fee", "deposit fees",
 }
+# Whole row types that are sales lines. In a sales file, a "Type" column value must be one of
+# these (or a known cash movement, which is left out): anything else, such as a fee, a bank
+# credit or an estimate, is never counted as a sale.
+INVOICE_LINE_TYPES = {
+    "invoice", "invoices", "sale", "sales", "sales receipt", "sales receipts", "credit memo", "credit memos",
+    "credit note", "credit notes",
+}
+# Whole cost types for card purchases: ordinary expenses, though they mention "credit"/"debit".
+CARD_CHARGE_TYPES = {
+    "credit card charge", "credit card charges", "credit card expense", "credit card purchase", "credit card",
+    "debit card charge", "debit card purchase", "debit card",
+}
+# Words that, in a cost file's type, mean money moving, a bank or a credit. Such a type must be
+# exactly a known cash movement, fee or card charge; otherwise it is never guessed at.
+SUSPECT_COST_TYPE_WORDS = ROW_CASH_WORDS | {"credit", "credits", "bank", "ach", "wire", "refund", "refunds",
+                                            "debit", "debits"}
 # Description/memo/type text marking a summary row rather than a line of its own.
 SUMMARY_LABELS = {"subtotal", "sub total", "total", "invoice total", "bill total", "grand total", "total due",
                   "amount due", "balance due", "total amount"}
@@ -508,12 +524,26 @@ def _cash_movement_type(cells: tuple[str, ...], type_columns: list[int]) -> str 
     return None
 
 
-def _mixed_cash_type(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
-    """The row's type text when it mentions money moving but is neither a known cash movement nor
-    a known fee ("Payout net of fees"): what it is can't be told, so it is never guessed."""
-    for i in type_columns:
+def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None],
+                       kind: str) -> str | None:
+    """The row's type text when it can't be trusted as a line, failing closed:
+
+    - sales file: a "Type"-style column holds something other than a recognized sale type or a
+      known cash movement (e.g. "Payment processing fees", "Bank Credit (ACH)", "Estimate");
+    - costs file: a type mentions money moving, a bank or a credit but isn't exactly a known
+      cash movement, fee or card charge (e.g. "Payout net of fees", "Vendor Credit").
+    """
+    if kind == "invoices":
+        for i, h in enumerate(headers):
+            text = _norm(cells[i]) if _norm(h) in TYPE_HEADERS else ""
+            if text and text not in INVOICE_LINE_TYPES and text not in CASH_MOVEMENT_TYPES:
+                return cells[i].strip()
+        return None
+    for i in _type_columns(headers, mapping):
         text = _norm(cells[i])
-        if set(text.split()) & ROW_CASH_WORDS and text not in CASH_MOVEMENT_TYPES and text not in FEE_TYPES:
+        if text in CASH_MOVEMENT_TYPES or text in FEE_TYPES or text in CARD_CHARGE_TYPES:
+            continue
+        if set(text.split()) & SUSPECT_COST_TYPE_WORDS:
             return cells[i].strip()
     return None
 
@@ -523,17 +553,6 @@ def _credit_memo(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
     for i in type_columns:
         words = set(_norm(cells[i]).split())
         if "credit" in words and words & {"memo", "note"}:
-            return cells[i].strip()
-    return None
-
-
-def _unclear_credit(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
-    """The row's type text when it is a credit of unclear kind ("Credit", "Vendor Credit"): it
-    could be a customer or supplier adjustment or money received, so it is never imported
-    and never treated as harmless. Credit memos/notes and credit card charges are clear."""
-    for i in type_columns:
-        words = set(_norm(cells[i]).split())
-        if "credit" in words and not words & {"memo", "note", "card", "bank"}:
             return cells[i].strip()
     return None
 
@@ -687,16 +706,15 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             what = "sale" if kind == "invoices" else "cost"
             reasons.append(f"Type '{movement}' is a payment, transfer or deposit (money moving), not a {what}; "
                            "not imported.")
-        mixed = None if movement else _mixed_cash_type(rec.cells, types)
-        if mixed:
+        unrecognized = None if movement else _unrecognized_type(rec.cells, headers, mapping, kind)
+        if unrecognized and kind == "invoices":
             # Real money may be missing here, so this is not counted as "not a line".
-            reasons.append(f"Type '{mixed}' mentions money moving (a payment, payout, transfer or deposit) but "
-                           "isn't a plain payment or fee, so what it is can't be told; not imported.")
-        unclear = None if movement or mixed else _unclear_credit(rec.cells, types)
-        if unclear:
-            # Real money may be missing here, so this is not counted as "not a line".
-            reasons.append(f"Type '{unclear}' could be a customer or supplier credit or money received; "
-                           "not imported. Use 'Credit Memo' for credits on invoices, and leave bank credits out.")
+            reasons.append(f"Type '{unrecognized}' isn't a sale type MarginX recognizes (Invoice, Sales Receipt, "
+                           "Credit Memo), so it isn't counted as a sale. If it is one, change its type where the "
+                           "data comes from.")
+        elif unrecognized:
+            reasons.append(f"Type '{unrecognized}' mentions money moving, a bank or a credit but isn't a known "
+                           "payment, fee or card charge, so what it is can't be told; not imported.")
         memo = _credit_memo(rec.cells, types)
         if memo and amount is not None and amount > 0:
             # A credit lowers what was billed; a positive one would raise it. Which sign is

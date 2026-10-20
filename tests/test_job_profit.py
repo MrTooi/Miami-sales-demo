@@ -327,6 +327,38 @@ class CompletenessTests(unittest.TestCase):
         job = report.jobs[0]
         self.assertEqual((Decimal("50.00"), "provisional"), (job.total_costs, job.status))
 
+    def test_unrecognized_sales_row_types_never_inflate_a_complete_figure(self):
+        costs = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                 b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n")
+        for row_type, amount in ((b"Payment processing fees", b"2.90"), (b"Bank Credit (ACH)", b"40.00"),
+                                 (b"Estimate", b"500.00")):
+            with self.subTest(row_type=row_type):
+                report = self.report(costs, b"Invoice,Date,Customer,Job,Type,Amount\n"
+                                            b"I-1,10/01/2026,Bakery,J-1,Invoice,100.00\n"
+                                            b"I-2,10/01/2026,Bakery,J-1," + row_type + b"," + amount + b"\n")
+                job = report.jobs[0]
+                self.assertEqual((Decimal("100.00"), Decimal("50.00"), "provisional"),
+                                 (job.sales, job.contribution, job.status))
+                self.assertEqual("provisional", report.customers[0].status)
+        # Recognized sale types still count.
+        report = self.report(costs, b"Invoice,Date,Customer,Job,Type,Amount\nI-1,10/01/2026,Bakery,J-1,Invoice,100.00\n"
+                                    b"I-2,10/01/2026,Bakery,J-1,Sales Receipt,25.00\n")
+        self.assertEqual((Decimal("125.00"), "complete"), (report.jobs[0].sales, report.jobs[0].status))
+
+    def test_bank_credit_variants_in_a_cost_file_are_never_costs(self):
+        base = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n")
+        invoices = b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n"
+        for row_type in (b"Bank Credit (ACH)", b"ACH credit", b"Vendor refund"):
+            with self.subTest(row_type=row_type):
+                report = self.report(base + b"B-3,10/01/2026,Bank,J-1," + row_type + b",40.00\n", invoices)
+                self.assertEqual((Decimal("50.00"), "provisional"),
+                                 (report.jobs[0].total_costs, report.jobs[0].status))
+        # Card charges and bank fees stay ordinary costs.
+        report = self.report(base + b"B-3,10/01/2026,Sign Co,J-1,Credit Card Charge,5.00\n"
+                                    b"B-4,10/01/2026,Bank,J-1,Bank service charges,1.00\n", invoices)
+        self.assertEqual((Decimal("56.00"), "complete"), (report.jobs[0].total_costs, report.jobs[0].status))
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))
