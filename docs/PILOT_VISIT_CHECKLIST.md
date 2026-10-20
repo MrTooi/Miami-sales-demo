@@ -40,12 +40,19 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
 6. **No screenshots or photos of the screen.**
 
 ## Before you leave (don't skip this)
-- [ ] Click **End session and clear everything** in MarginX. It should say the uploaded files "were deleted from MarginX's memory". If it says it **couldn't confirm** that, go straight to the next step.
+- [ ] Click **End session and clear everything** in MarginX. It should say the uploaded files "were removed from MarginX's upload storage". If it says it **couldn't confirm** that, go straight to the next step. End session only clears what MarginX holds: it does **not** delete the original CSV files on the laptop.
 - [ ] Close the browser tab, then stop MarginX: press Ctrl+C in the terminal and close the terminal. Error details can appear there.
 - [ ] **Delete the shop's files from the laptop.** Check Downloads, the Desktop and wherever AirDrop saved them. **Then empty the Trash/Recycle Bin.**
 - [ ] **Delete the files from the USB drive**, or give the drive to the owner.
 - [ ] Ask the owner whether they want the exported files deleted from **their** computer too.
 - [ ] Note the date, the shop (by type, e.g. "sign shop A") and that the deletion was done, without any of their figures.
+
+## Before the first real visit, and after any Streamlit upgrade
+Repeat the real upload-and-delete test with a **made-up** CSV. MarginX's cleanup relies on Streamlit 1.65.0 internals (`pilot_safety.release_uploads`).
+1. Start pilot mode and tick the agreement.
+2. Upload the made-up CSV and check that its line is read.
+3. Click **End session**. It must show the "removed from MarginX's upload storage" message, and the file name and results must be gone.
+4. Run the test suite (`python -m unittest discover -s tests`). It must pass.
 
 ## If something goes wrong
 - **The page shows an error:** click End session and start again. Don't screenshot it. Write down what you were doing, not the data.
@@ -55,7 +62,7 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
 ## What this setup does and doesn't protect
 - **It does:**
   - Files stay on one laptop and in memory only.
-  - Nothing is saved by MarginX. **End session** deletes the uploaded files from MarginX's memory and checks that they're gone, and says so only if the check passes. A closed tab's files are dropped within about 10 seconds; stopping MarginX drops everything.
+  - Nothing is saved by MarginX. **End session** removes the uploaded files from MarginX's upload storage, clears the answers and results, and checks the files are gone before saying so. It can't prove that no copy remains anywhere in the computer's memory, which is why the tab is closed and MarginX stopped at the end of every visit (stopping MarginX drops everything). A closed tab's files are dropped within about 10 seconds.
   - No usage data is sent anywhere.
   - Error pages show no file contents.
   - Real files are refused unless pilot mode is on, the app listens on this computer only, and the browser visit itself looks local (no proxy or tunnel signs).

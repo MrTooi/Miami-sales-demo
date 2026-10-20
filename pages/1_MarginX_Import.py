@@ -90,8 +90,9 @@ if st.button("End session and clear everything"):
     st.rerun()
 ended = st.session_state.pop("just_ended", None)
 if ended == "released":
-    st.success("Session ended. The uploaded files, answers and results were deleted from MarginX's memory. "
-               "Close this browser tab and stop MarginX when the visit is over.")
+    st.success("Session ended. The uploaded files were removed from MarginX's upload storage, and the answers and "
+               "results were cleared from this session. Close this browser tab and stop MarginX to finish the visit. "
+               "The original files on this laptop (Downloads, AirDrop, USB) must still be deleted by hand.")
 elif ended:
     # Never claim a deletion that couldn't be checked.
     st.warning("Answers and results were cleared, but MarginX couldn't confirm the uploaded files were deleted "

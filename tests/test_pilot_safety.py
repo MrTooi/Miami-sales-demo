@@ -218,7 +218,7 @@ class PilotPageTests(unittest.TestCase):
         # AppTest has no real upload storage, so the deletion can't be confirmed here: the page must
         # then say so instead of claiming it (the confirmed path is tested in UploadReleaseTests).
         self.assertTrue(any("couldn't confirm the uploaded files were deleted" in w.value for w in at.warning))
-        self.assertFalse(any("deleted from MarginX's memory" in s.value for s in at.success))
+        self.assertFalse(any("removed from MarginX's upload storage" in s.value for s in at.success))
         self.assertTrue(at.toggle[0].value)  # back to the samples: the previous answers are gone
         self.assertEqual(1, at.session_state["session_number"])
 
