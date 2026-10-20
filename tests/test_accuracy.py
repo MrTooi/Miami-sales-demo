@@ -104,8 +104,10 @@ def mismatches(seed: int) -> list[str]:
         for job_id, expected in want.jobs.items():
             if expected.status == "complete" and expected.total_costs > 0 and Fraction(0) < want.usual_margin < 1:
                 price = mi.pricing(jobs[job_id], summary.usual_margin)
-                got = None if not price or price["at_usual"] is None else int(price["at_usual"])
-                check(f"{job_id} price at usual margin", got, shops.price_at(expected.total_costs, want.usual_margin))
+                # Exact: a whole-dollar Decimal, so "1062.99" can never pass for 1062.
+                got = None if not price else price["at_usual"]
+                check(f"{job_id} price at usual margin", got,
+                      Decimal(shops.price_at(expected.total_costs, want.usual_margin)))
     return found
 
 
@@ -133,8 +135,18 @@ def screen_mismatches(seed: int) -> list[str]:
     if want.jobs_with_figure:
         expect("Left after job costs card",
                f'<div class="l">Left after job costs</div><div class="v ">{shops.shown_money(want.left)}</div>')
+    else:  # no figure at all: a dash, never $0
+        expect("Left after job costs card", '<div class="l">Left after job costs</div><div class="v ">—</div>'
+                                            '<div class="s">No job has a figure yet</div>')
     if want.complete_jobs:
         expect("Jobs losing money card", f">{want.losing} of {want.complete_jobs}</div>")
+    else:
+        expect("Jobs losing money card", '<div class="l">Jobs losing money</div><div class="v ')
+        expect("Jobs losing money card (none complete)", ">—</div>")
+    if want.after_unlinked is None and (want.overhead or want.unassigned_job_costs):
+        expect("after-overhead line withheld", "A total after them isn't shown yet")
+    elif want.after_unlinked is not None and (want.overhead or want.unassigned_job_costs):
+        expect("after-overhead line", f"these files leave <b>{shops.shown_money(want.after_unlinked)}</b>")
     blocks = re.findall(r'<details class="mx-d">(.*?)</details>', html)
     for job_id, expected in want.jobs.items():
         block = next((b for b in blocks if f"· {job_id}</small>" in b), None)
@@ -151,6 +163,8 @@ def screen_mismatches(seed: int) -> list[str]:
             margin = f"{share}% margin" + (" so far" if expected.status != "complete" else "")
             if f'<span class="p">{margin}</span>' not in block:
                 found.append(f"seed {seed}: on screen, job {job_id} margin: expected {margin!r}")
+        elif re.search(r'<span class="p">[^<]*% margin', block):  # no figure, or no positive sales: no margin shown
+            found.append(f"seed {seed}: on screen, job {job_id} shows a margin it shouldn't")
         if expected.sales and (f'<td>Sold for</td><td class="r">{shops.shown_money(expected.sales)}</td>' not in block):
             found.append(f"seed {seed}: on screen, job {job_id} breakdown 'Sold for' doesn't match")
         label = {"complete": "Complete", "provisional": "Needs a check", "unavailable": "No figure yet"}[expected.status]
@@ -237,13 +251,22 @@ class AccuracyTests(unittest.TestCase):
         report = jp.job_profit(results["invoices"], results["costs"])
         summary = mi.summarize(report)
         j105 = next(j for j in report.jobs if j.job_id == "J-105")
-        self.assertEqual((60000, 74000, -14000), (cents(j105.sales), cents(j105.total_costs), cents(j105.contribution)))
+        self.assertEqual((60000, 34000, 28000, 12000, 0, 0, 0),
+                         (cents(j105.sales), cents(j105.costs["materials"]), cents(j105.costs["outsourced"]),
+                          cents(j105.costs["labor"]), cents(j105.costs["fees_overhead"]), cents(j105.costs["other"]),
+                          cents(j105.costs["unknown"])))
+        self.assertEqual((74000, -14000), (cents(j105.total_costs), cents(j105.contribution)))
+        complete = [j for j in report.jobs if j.status == "complete"]
+        self.assertEqual((7, 1030000, 312000), (len(complete), cents(sum(j.sales for j in complete)),
+                                                cents(sum(j.contribution for j in complete))))
         self.assertEqual(-23, mi.percent(j105.contribution, j105.sales))
         self.assertEqual((1100000, 364000, 164000, 1, 7), (cents(summary.sales), cents(summary.left_after_job_costs),
                                                            cents(summary.after_unlinked_costs), summary.losing_jobs,
                                                            summary.complete_jobs))
-        self.assertEqual((30, 1062), (mi.percent(summary.usual_margin, Decimal(1)),
-                                      int(mi.pricing(j105, summary.usual_margin)["at_usual"])))
+        self.assertEqual(Decimal(312000) / Decimal(1030000), summary.usual_margin)
+        self.assertEqual((30, Decimal("1062"), Decimal("740.00")),
+                         (mi.percent(summary.usual_margin, Decimal(1)), mi.pricing(j105, summary.usual_margin)["at_usual"],
+                          mi.pricing(j105, summary.usual_margin)["break_even"]))
         bayside = next(c for c in report.customers if c.customer.startswith("Bayside"))
         self.assertEqual((585000, 75000, 13), (cents(bayside.sales), cents(bayside.contribution),
                                                mi.percent(bayside.contribution, bayside.sales)))

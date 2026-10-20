@@ -57,12 +57,15 @@ The same file makes random shops from a seed. They include:
 - margins that land exactly on a half percent
 
 Each shop is written out as ordinary CSV files and read by MargenX like an upload. Then every job,
-customer, headline number, status ("Complete", "Needs a check", "No figure yet") and suggested
-price is compared with the known answer.
+customer and headline number, every status ("Complete", "Needs a check", "No figure yet") and, for
+complete jobs, the suggested price at the usual margin (as an exact whole-dollar amount) is
+compared with the known answer.
 
 - Every change: 400 shops are checked automatically (`tests/test_accuracy.py`).
 - On demand: `python scripts/accuracy_check.py 5000`.
-  - Result on 2026-10-20: **5,000 shops, 53,311 jobs and 20,202 customers, all matching**, including the screen check.
+  - Result on 2026-10-20, at the commit that last changed this file: **5,000 shops, 53,311 jobs and
+    20,202 customers, all matching**, including the screen check. The shops come from fixed seeds,
+    so re-running gives the same shops and counts.
 
 ## 4. The numbers on the screen
 
@@ -73,14 +76,16 @@ browser and compared with the known answers:
   "Sold for" line
 - every customer's amount, share and "Needs a check" note
 - the note naming customers with no figure, who must not be listed
+- the empty states: a dash, never $0, when no job has a figure or none has complete costs
+- the "after overhead" line: shown with the right amount, or withheld when something is left out
 
 This checks what MargenX sends, not how a particular browser draws it. The browser checks are done
 by hand (for example, before each pilot visit).
 
 ## Proving the checks catch mistakes
 
-Bugs were planted in MargenX on purpose, one at a time, to see whether the checks notice. Each one
-was caught across many of the 400 shops:
+`python scripts/accuracy_mutations.py` plants bugs in MargenX on purpose, one at a time and only
+in memory, to see whether the checks notice. Each one was caught across many of the first 400 shops:
 
 | Planted mistake | Shops that caught it |
 |---|---|
@@ -88,7 +93,7 @@ was caught across many of the 400 shops:
 | Fees recorded on a job left out of its costs | 340 |
 | Credits left out of total sales | 109 |
 | Overhead wrongly taken out of "left after job costs" | 325 |
-| Percentages rounded the wrong way at exact halves | 56 |
+| Percentages rounded the wrong way at exact halves | 204 |
 | Sales with no job number ignored when deciding "Complete" | 43 |
 
 ## What this doesn't prove
