@@ -50,6 +50,24 @@ def demo_only(main_script_path: str | None) -> bool:
     return bool(main_script_path) and Path(main_script_path).name == DEMO_ENTRY
 
 
+def _script_ctx():
+    from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
+
+    return get_script_run_ctx()
+
+
+def running_main_script() -> str | None:
+    """The file the running app was started with, or None when Streamlit can't say.
+
+    The demo entry point refuses to render when this is None (fail closed), and the page uses the
+    same function, so both always agree."""
+    try:
+        ctx = _script_ctx()
+        return ctx.main_script_path if ctx else None
+    except Exception:
+        return None
+
+
 # Headers that proxies, load balancers and tunnels add; a direct local browser sends none.
 FORWARDING_HEADERS = {"x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "forwarded", "x-real-ip",
                       "cf-connecting-ip", "true-client-ip", "x-original-forwarded-for", "via"}

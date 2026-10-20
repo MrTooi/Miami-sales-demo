@@ -39,8 +39,30 @@ class DemoLinkTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         page = " ".join(m.value for m in at.markdown)
         self.assertNotIn("Pilot session", page)
+        self.assertFalse(any("Pilot session" in w.value for w in at.warning))  # the pilot banner is a warning
         self.assertEqual(0, len(at.get("file_uploader")))
         self.assertEqual([], [c for c in at.checkbox])
+
+    def test_demo_fails_closed_when_the_entry_file_cant_be_confirmed(self):
+        # Streamlit gives no context, or looking it up fails: the demo shows nothing at all, so the
+        # normal app's upload box and pilot mode can never appear on the link.
+        for patch in (mock.patch("pilot_safety._script_ctx", return_value=None),
+                      mock.patch("pilot_safety._script_ctx", side_effect=RuntimeError("no context"))):
+            with self.subTest(patch=patch), patch:
+                at = run("margenx_demo.py", {ps.PILOT_ENV: "1"})
+            self.assertFalse(at.exception, at.exception)
+            self.assertTrue(any("This demo can't start right now" in e.value for e in at.error))
+            self.assertEqual(0, len(at.get("file_uploader")))
+            self.assertEqual([], [c for c in at.checkbox])
+            self.assertEqual([], [t for t in at.toggle])
+            self.assertFalse(any("Pilot session" in w.value for w in at.warning))
+            self.assertEqual([], [m.value for m in at.markdown if "Margen" in m.value])  # the page never ran
+
+    def test_running_main_script_never_raises(self):
+        with mock.patch("pilot_safety._script_ctx", side_effect=RuntimeError("boom")):
+            self.assertIsNone(ps.running_main_script())
+        with mock.patch("pilot_safety._script_ctx", return_value=None):
+            self.assertIsNone(ps.running_main_script())
 
     def test_the_demo_changes_nothing_process_wide(self):
         # No cleanup between runs: the demo must not leave any switch behind for other entry points.
@@ -65,6 +87,8 @@ class DemoLinkTests(unittest.TestCase):
         self.assertEqual(1, source.count("st.Page("))
         self.assertIn('"pages/1_MargenX_Import.py"', source)
         self.assertNotIn("os.environ", source)
+        # The fail-closed check comes before the page is opened.
+        self.assertLess(source.index("st.stop()"), source.index("st.navigation("))
 
 
 if __name__ == "__main__":

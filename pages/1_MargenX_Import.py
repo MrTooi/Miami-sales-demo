@@ -58,20 +58,10 @@ def _request_headers():
         return None
 
 
-def _main_script() -> str | None:
-    """The file this app was started with (app.py, marginx_pilot.py or margenx_demo.py)."""
-    try:
-        from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
-
-        ctx = get_script_run_ctx()
-        return ctx.main_script_path if ctx else None
-    except Exception:  # unknown: treated as the normal app, never as the demo or as pilot
-        return None
-
-
 # The public demo link (margenx_demo.py, D-006): the made-up demo shop only, and no upload box at all.
-# Pilot mode never applies there, whatever the environment says.
-DEMO_ONLY = ps.demo_only(_main_script())
+# Pilot mode never applies there, whatever the environment says. margenx_demo.py checks the same
+# function before this page runs and refuses to render if it can't confirm demo mode (fail closed).
+DEMO_ONLY = ps.demo_only(ps.running_main_script())
 PILOT = not DEMO_ONLY and ps.pilot_mode(os.environ, st.get_option("server.address"), _request_headers())
 
 ui.header(PILOT)
