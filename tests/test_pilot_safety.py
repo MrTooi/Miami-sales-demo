@@ -227,12 +227,17 @@ class PilotPageTests(unittest.TestCase):
         # End session: nothing is left in the session but its counter.
         at = AppTest.from_file(PAGE, default_timeout=30)
         at.run()
+        next(r for r in at.radio if r.label == "Which made-up files?").set_value("test").run()
         next(r for r in at.radio if "on each line?" in r.label).set_value("line").run()
         self.assertTrue(len(at.radio) > 0 and len(at.text) > 0)
         next(b for b in at.button if b.label == "End session and clear everything").click().run()
         self.assertFalse(at.exception, at.exception)
-        self.assertIsNone(next(r for r in at.radio if "on each line?" in r.label).value)  # answer forgotten
-        self.assertFalse(any("Direct contribution" in d.value.columns for d in at.dataframe))  # no results kept
+        # Every choice and answer is forgotten: back to the default demo set, with no question answered.
+        self.assertEqual("demo", next(r for r in at.radio if r.label == "Which made-up files?").value)
+        self.assertFalse(any("on each line?" in r.label and r.value for r in at.radio))
+        # The earlier session's results (test-file job J-501) are gone; only the fresh default demo remains.
+        tables = [d.value for d in at.dataframe if "Job" in d.value.columns]
+        self.assertFalse(any("J-501" in list(table["Job"]) for table in tables))
         self.assertEqual(1, at.session_state["session_number"])
 
 

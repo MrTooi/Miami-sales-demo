@@ -1,0 +1,9 @@
+Invoice,Date,Customer,Job,Description,Amount
+INV-2001,10/02/2026,Coastal Bakery (fictional),J-101,Storefront signs,2400.00
+INV-2002,10/05/2026,Bayside Realty (fictional),J-102,Yard signs,850.00
+INV-2003,10/07/2026,Bayside Realty (fictional),J-103,Open-house event banners,1200.00
+INV-2004,10/09/2026,Palm Gym (fictional),J-104,Window graphics,950.00
+INV-2005,10/13/2026,Bayside Realty (fictional),J-105,Rush banner (next-day),600.00
+INV-2006,10/15/2026,Little Havana Cafe (fictional),J-106,Menu boards,1100.00
+INV-2007,10/20/2026,Bayside Realty (fictional),J-107,Vehicle wrap,3200.00
+INV-2008,10/23/2026,Palm Gym (fictional),J-108,Class schedule banners,700.00

@@ -14,6 +14,7 @@ def apply_theme():
         html,body,[data-testid="stAppViewContainer"]{background:var(--bg)!important;color:var(--text)!important}
         [data-testid="stHeader"]{background:rgba(11,15,13,.96)!important;border-bottom:1px solid rgba(41,50,45,.75)}
         [data-testid="stAppViewContainer"] *{font-family:'DM Sans',sans-serif}
+        [data-testid="stIconMaterial"]{font-family:'Material Symbols Rounded'!important}
         .block-container{max-width:1180px;padding-top:5.2rem;padding-bottom:4rem}
         h1,h2,h3{font-family:'Manrope',sans-serif!important;color:var(--text)!important;letter-spacing:-.035em!important}
         .ledger-topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:28px}
