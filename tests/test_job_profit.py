@@ -44,7 +44,10 @@ class JobProfitTests(unittest.TestCase):
 
     def test_loss_making_job_is_shown_as_a_negative_contribution(self):
         j2 = self.jobs["J-2"]
-        self.assertEqual("complete", j2.status)  # outsourced work counts as the job's direct cost
+        # Outsourced work counts as the job's direct cost; the job is provisional only because Gym's
+        # $40.00 rush fee has no job number and may belong to it.
+        self.assertEqual(("provisional", ["Gym has 1 sales line(s) worth $40.00 with no job number that may belong "
+                                          "to this job."]), (j2.status, j2.reasons))
         self.assertEqual(Decimal("-75.00"), j2.contribution)
 
     def test_jobs_missing_sales_or_costs_get_no_figure(self):
@@ -568,6 +571,30 @@ class CompletenessTests(unittest.TestCase):
                 self.assertEqual(Decimal("100.00") - Decimal(labor.decode()) - Decimal(materials.decode()),
                                  job.contribution)  # zero rows are kept, nothing invented
         self.assert_job(self.report(self.LINKED, self.SALES), Decimal("100.00"), Decimal("50.00"), "complete")
+
+    def test_a_customers_sales_without_a_job_keep_their_jobs_provisional(self):
+        costs = self.LINKED + (b"B-3,10/01/2026,Crew,J-2,Labor,20.00\nB-4,10/01/2026,Paper Co,J-2,Materials,30.00\n")
+        for amount in (b"40.00", b"-15.00"):  # a rush charge, or a credit
+            with self.subTest(amount=amount):
+                report = self.report(costs, b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n"
+                                            b"I-2,10/01/2026,Gym,J-2,100.00\nI-3,10/01/2026,Bakery,," + amount + b"\n")
+                jobs = {j.job_id: j for j in report.jobs}
+                self.assertEqual((Decimal("50.00"), "provisional"), (jobs["J-1"].contribution, jobs["J-1"].status))
+                self.assertIn("Bakery has 1 sales line(s) worth", " ".join(jobs["J-1"].reasons))
+                self.assertEqual("complete", jobs["J-2"].status)  # another customer's job is unaffected
+                customers = {c.customer: c.status for c in report.customers}
+                self.assertEqual({"Bakery": "provisional", "Gym": "complete"}, customers)
+                self.assertEqual(Decimal(amount.decode()), report.unlinked_sales)  # disclosed in full, never spread
+
+    def test_credit_only_jobs_are_never_complete(self):
+        report = self.report(self.LINKED, b"Invoice,Date,Customer,Job,Type,Amount\n"
+                                          b"I-1,10/01/2026,Bakery,J-1,Credit Memo,-20.00\n")
+        self.assert_job(report, Decimal("-20.00"), Decimal("-70.00"), "provisional")  # exact figure kept
+        self.assertIn("Only credits were found", " ".join(report.jobs[0].reasons))
+        report = self.report(self.LINKED, b"Invoice,Date,Customer,Job,Type,Amount\n"
+                                          b"I-1,10/01/2026,Bakery,J-1,Invoice,100.00\n"
+                                          b"I-2,10/01/2026,Bakery,J-1,Credit Memo,-20.00\n")
+        self.assert_job(report, Decimal("80.00"), Decimal("30.00"), "complete")
 
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
