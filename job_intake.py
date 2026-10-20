@@ -145,10 +145,11 @@ FEE_TYPES = {
 # Whole row types that are sales lines. In a sales file, a "Type" column value must be one of
 # these (or a known cash movement, which is left out): anything else, such as a fee, a bank
 # credit or an estimate, is never counted as a sale.
-INVOICE_LINE_TYPES = {
-    "invoice", "invoices", "sale", "sales", "sales receipt", "sales receipts", "credit memo", "credit memos",
-    "credit note", "credit notes",
-}
+# Whole credit-memo types: allowed sales lines, but only with a negative amount (see intake).
+CREDIT_MEMO_TYPES = {"credit memo", "credit memos", "credit note", "credit notes"}
+INVOICE_LINE_TYPES = {"invoice", "invoices", "sale", "sales", "sales receipt", "sales receipts"} | CREDIT_MEMO_TYPES
+# Sales-document names that don't establish an incurred cost when used as a cost category.
+SALES_DOCUMENT_TYPES = INVOICE_LINE_TYPES | {"income", "revenue", "sales income", "estimate", "estimates"}
 # Whole cost types for card purchases: ordinary expenses, though they mention "credit"/"debit".
 CARD_CHARGE_TYPES = {
     "credit card charge", "credit card charges", "credit card expense", "credit card purchase", "credit card",
@@ -525,15 +526,17 @@ def _type_columns(headers: list[str], mapping: dict[str, str | None]) -> list[in
     return found
 
 
-def _cash_movement_type(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
-    """The row's type text when it is plainly money moving, not a line: at least one type column is
-    exactly a known cash movement ("Payment", "Transfer", "Bill Payment (Check)", "Bank Credit")
-    and every other non-blank type column agrees. A row whose columns disagree ("Invoice" and
-    "Payment") is not a cash movement here; _unrecognized_type rejects it as unresolved."""
-    values = [_norm(cells[i]) for i in type_columns]
-    filled = [v for v in values if v]
-    if filled and all(v in CASH_MOVEMENT_TYPES for v in filled):
-        return next(cells[i].strip() for i in type_columns if _norm(cells[i]))
+def _cash_movement_type(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]) -> str | None:
+    """The row's type text when it is plainly money moving, not a line: at least one type value
+    is exactly a known cash movement ("Payment", "Transfer", "Bill Payment (Check)", "Bank
+    Credit"), every transaction-type column is filled in and agrees, and the cost category, if
+    any, is blank or agrees. Otherwise _unrecognized_type decides ("Invoice" + "Payment", or
+    "Payment" with a blank transaction type, is unresolved)."""
+    category = headers.index(mapping["cost_type"]) if mapping.get("cost_type") in headers else None
+    transaction = [_norm(cells[i]) for i, h in enumerate(headers) if _norm(h) in TYPE_HEADERS and i != category]
+    values = transaction + ([_norm(cells[category])] if category is not None and _norm(cells[category]) else [])
+    if values and all(v in CASH_MOVEMENT_TYPES for v in values):
+        return next(cells[i].strip() for i in _type_columns(headers, mapping) if _norm(cells[i]))
     return None
 
 
@@ -547,8 +550,8 @@ def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict
     - costs file, transaction-type column (a "Type"-style column that isn't the cost category):
       must be a posted cost (Bill, Expense, Check...), fee or card charge; blank is unresolved;
     - costs file, cost category: any real category or a blank is fine, unless it names an
-      estimate, quote or order, is a cash movement, or mentions money moving, a bank or a credit
-      without being exactly a known fee or card charge.
+      estimate, quote or order, is a cash movement or a sales document ("Invoice", "Sale"), or
+      mentions money moving, a bank or a credit without being exactly a known fee or card charge.
     """
     category = headers.index(mapping["cost_type"]) if kind == "costs" and mapping.get("cost_type") in headers else None
     allowed = INVOICE_LINE_TYPES if kind == "invoices" else COST_LINE_TYPES | FEE_TYPES | CARD_CHARGE_TYPES
@@ -557,7 +560,8 @@ def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict
         if i == category:
             if text in FEE_TYPES or text in CARD_CHARGE_TYPES:
                 continue
-            if text in CASH_MOVEMENT_TYPES or set(text.split()) & (SUSPECT_COST_TYPE_WORDS | NON_POSTING_WORDS):
+            if (text in CASH_MOVEMENT_TYPES or text in SALES_DOCUMENT_TYPES
+                    or set(text.split()) & (SUSPECT_COST_TYPE_WORDS | NON_POSTING_WORDS)):
                 return cells[i].strip()
         elif _norm(h) in TYPE_HEADERS and text not in allowed:
             return cells[i].strip() or "(blank)"
@@ -565,10 +569,9 @@ def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict
 
 
 def _credit_memo(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
-    """The row's type text when it is a credit memo or credit note."""
+    """The row's type text when it is a credit memo or note (singular or plural)."""
     for i in type_columns:
-        words = set(_norm(cells[i]).split())
-        if "credit" in words and words & {"memo", "note"}:
+        if _norm(cells[i]) in CREDIT_MEMO_TYPES:
             return cells[i].strip()
     return None
 
@@ -585,7 +588,7 @@ def _summary_label(cells: tuple[str, ...], headers: list[str], mapping: dict[str
 def _is_line(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]) -> bool:
     """False for rows rejected on their own (payments/transfers, labeled subtotals), which
     therefore don't make a document multi-line."""
-    return not (_cash_movement_type(cells, _type_columns(headers, mapping)) or _summary_label(cells, headers, mapping))
+    return not (_cash_movement_type(cells, headers, mapping) or _summary_label(cells, headers, mapping))
 
 
 def _per_document_amounts(mapping: dict[str, str | None], question: dict | None, amount_scope: str | None) -> bool:
@@ -620,7 +623,7 @@ def _subtotal_rows(headers: list[str], records: list[Record], mapping: dict[str,
         seen.add(r.cells)
         # Labeled summary rows and cash movements are rejected on their own, so they are
         # neither asked about nor counted among a document's lines.
-        if _summary_label(r.cells, headers, mapping) or _cash_movement_type(r.cells, types):
+        if _summary_label(r.cells, headers, mapping) or _cash_movement_type(r.cells, headers, mapping):
             continue
         values = {f: r.cells[i].strip() for f, i in index.items()}
         key = _possible_document_key(values, kind)
@@ -716,7 +719,7 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
         # Reasons that mean the row isn't a line at all (a payment, a summary, a duplicate):
         # nothing is missing when it is left out. Any other reason means real money is.
         not_a_line = 0
-        movement = _cash_movement_type(rec.cells, types)
+        movement = _cash_movement_type(rec.cells, headers, mapping)
         if movement:
             not_a_line += 1
             what = "sale" if kind == "invoices" else "cost"

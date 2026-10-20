@@ -34,6 +34,12 @@ UNKNOWN_TYPES = {"unknown", "uncategorized", "uncategorised", "n a", "na", "none
 # Cost types that clearly aren't tied to one job, matched as the WHOLE type, never as a word
 # inside it: "Rent" is overhead, but "Equipment rent", "Job processing" or "Installation
 # insurance" may be a job's own cost and stay "other". Unlinked, only these are left out.
+# Account parents ("Parent:Rent") under which an overhead name still means general overhead.
+# Any other parent ("Job Costs:Rent", "Cost of Goods Sold:Insurance") may tie it to jobs, so
+# the cost is "other": subtracted, and when unlinked it keeps jobs provisional.
+OVERHEAD_PARENTS = {"overhead", "general overhead", "operating expenses", "operating expense",
+                    "general and administrative", "general administrative", "g a", "administrative",
+                    "office expenses", "facilities", "occupancy", "utilities", "insurance"}
 FEE_OVERHEAD_TYPES = {
     "overhead", "general overhead", "shop overhead", "rent", "office rent", "shop rent", "building rent",
     "utilities", "utility", "electric", "electricity", "insurance", "business insurance", "general liability insurance",
@@ -74,11 +80,14 @@ def cost_category(cost_type: str | None) -> str:
     unlinked it may belong to a job. Blank or "not known" markers are "unknown".
     """
     name = cost_type_name(cost_type)
+    parents = [re.sub(r"[^a-z0-9]+", " ", p.lower()).strip() for p in (cost_type or "").split(":")[:-1]]
     if not name or name in UNKNOWN_TYPES:
         return "unknown"
     for category, names in (("labor", LABOR_TYPES), ("materials", MATERIAL_TYPES),
                             ("outsourced", OUTSOURCED_TYPES), ("fees_overhead", FEE_OVERHEAD_TYPES)):
         if name in names:
+            if category == "fees_overhead" and any(p and p not in OVERHEAD_PARENTS for p in parents):
+                return "other"
             return category
     return "other"
 

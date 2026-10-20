@@ -428,6 +428,59 @@ class CompletenessTests(unittest.TestCase):
                              b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n")
         self.assertEqual((Decimal("50.00"), "provisional"), (report.jobs[0].contribution, report.jobs[0].status))
 
+    LINKED = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+              b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n")
+    SALES = b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n"
+
+    def assert_job(self, report, sales, contribution, status):
+        job = report.jobs[0]
+        self.assertEqual((sales, contribution, status), (job.sales, job.contribution, job.status))
+        self.assertEqual(status, report.customers[0].status)
+
+    def test_credit_memo_signs_singular_and_plural(self):
+        for label in (b"Credit Memo", b"Credit Memos", b"Credit Note", b"Credit Notes"):
+            with self.subTest(label=label):
+                invoices = (b"Invoice,Date,Customer,Job,Type,Amount\nI-1,10/01/2026,Bakery,J-1,Invoice,100.00\n"
+                            b"I-2,10/01/2026,Bakery,J-1," + label + b",")
+                self.assert_job(self.report(self.LINKED, invoices + b"20.00\n"),
+                                Decimal("100.00"), Decimal("50.00"), "provisional")  # never $70 Complete
+                self.assert_job(self.report(self.LINKED, invoices + b"-20.00\n"),
+                                Decimal("80.00"), Decimal("30.00"), "complete")
+
+    def test_payment_with_a_blank_transaction_type_is_unresolved(self):
+        invoices = (b"Invoice,Date,Customer,Job,Type,Transaction Type,Amount\n"
+                    b"I-1,10/01/2026,Bakery,J-1,Invoice,Invoice,100.00\nI-2,10/01/2026,Bakery,J-1,Payment,,40.00\n")
+        self.assert_job(self.report(self.LINKED, invoices), Decimal("100.00"), Decimal("50.00"), "provisional")
+        costs = (b"Bill,Date,Vendor,Job,Txn Type,Transaction Type,Category,Amount\n"
+                 b"B-1,10/01/2026,Crew,J-1,Bill,Bill,Labor,20.00\nB-2,10/01/2026,Paper Co,J-1,Bill,Bill,Materials,30.00\n"
+                 b"B-3,10/01/2026,Bank,J-1,Payment,,,40.00\n")
+        self.assert_job(self.report(costs, self.SALES), Decimal("100.00"), Decimal("50.00"), "provisional")
+        # Every column saying payment: plainly a payment, left out, nothing missing.
+        self.assert_job(self.report(costs.replace(b"Payment,,,40.00", b"Payment,Payment,,40.00"), self.SALES),
+                        Decimal("100.00"), Decimal("50.00"), "complete")
+
+    def test_sales_labels_are_not_cost_categories(self):
+        for label in (b"Invoice", b"Sale", b"Sales Receipt", b"Revenue"):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/01/2026,Paper Co,J-1," + label + b",40.00\n", self.SALES)
+                self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")  # never $10 Complete
+        for label in (b"Delivery", b"Permits", b"Equipment rental"):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/01/2026,Sign Co,J-1," + label + b",5.00\n", self.SALES)
+                self.assert_job(report, Decimal("100.00"), Decimal("45.00"), "complete")
+
+    def test_overhead_names_under_a_job_account_are_not_exempt(self):
+        for label, status in ((b"Job Costs:Rent", "provisional"), (b"Cost of Goods Sold:Insurance", "provisional"),
+                              (b"Office rent", "complete"), (b"Overhead:Rent", "complete"),
+                              (b"Operating Expenses:Utilities", "complete")):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/31/2026,Landlord,," + label + b",40.00\n", self.SALES)
+                self.assert_job(report, Decimal("100.00"), Decimal("50.00"), status)
+                self.assertEqual(Decimal("40.00"), report.unlinked_costs)  # disclosed whole, never allocated
+        self.assertEqual("other", jp.cost_category("Job Costs:Rent"))
+        self.assertEqual("fees_overhead", jp.cost_category("Overhead:Rent"))
+        self.assertEqual("materials", jp.cost_category("Cost of Goods Sold:Materials"))
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))
