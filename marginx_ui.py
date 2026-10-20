@@ -344,7 +344,7 @@ def _jobs(report: ProfitReport, summary: Summary) -> None:
         if price and (j.contribution < 0 or (price["at_usual"] is not None and price["at_usual"] > j.sales)):
             parts = []
             if j.contribution < 0:
-                parts.append(f"Price to cover its job costs (before overhead): {_money(price['break_even'])}")
+                parts.append(f"Price to cover its job costs (before overhead not assigned to this job): {_money(price['break_even'])}")
             if price["at_usual"] is not None and price["at_usual"] > j.sales:
                 parts.append(f"At your usual {price['usual']}% margin: about {_money(price['at_usual'])}")
             tip = f'<div class="price">{" · ".join(parts)}</div>'

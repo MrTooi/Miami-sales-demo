@@ -255,7 +255,7 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
             report.jobs.append(JobResult(job, tuple(sorted(customers[job])), ZERO, {c: ZERO for c in CATEGORIES},
                                          0, 0, "unavailable",
                                          [f"Its only lines couldn't be imported ({missing[job]['sales']} sales, "
-                                          f"{missing[job]['cost']} cost; listed above)."]))
+                                          f"{missing[job]['cost']} cost; see 'Rows that couldn't be used' under Your files)."]))
             continue
         counts = cost_lines[job] if job in cost_lines else {c: 0 for c in CATEGORIES}
         amounts = job_costs[job] if job in job_costs else {c: ZERO for c in CATEGORIES}
@@ -298,7 +298,7 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
                                "belong to this job.")
             for what in ("sales", "cost"):
                 if missing[job][what]:
-                    reasons.append(f"{missing[job][what]} of its {what} lines couldn't be imported (listed above).")
+                    reasons.append(f"{missing[job][what]} of its {what} lines couldn't be imported (see 'Rows that couldn't be used' under Your files).")
                 if untied[what]:
                     reasons.append(f"{untied[what]} {what} line(s) couldn't be imported and have no readable job "
                                    "number, so they may belong to this job.")
