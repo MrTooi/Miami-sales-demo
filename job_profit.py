@@ -255,10 +255,14 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
                 reasons.append("The costs file has no cost type column, so labor and materials can't be checked.")
             elif counts["unknown"]:
                 reasons.append(f"{counts['unknown']} of its cost lines have no cost type.")
-            if typed and not counts["labor"]:
-                reasons.append("No labor recorded.")
-            if typed and not (counts["materials"] or counts["outsourced"]):
-                reasons.append("No materials or outsourced work recorded.")
+            # A category counts as recorded only with an amount above $0.00 (costs are never
+            # negative): a $0.00 placeholder line is kept, but proves nothing was spent.
+            if typed and not amounts["labor"] > 0:
+                reasons.append("Labor recorded only as $0.00." if counts["labor"] else "No labor recorded.")
+            if typed and not (amounts["materials"] > 0 or amounts["outsourced"] > 0):
+                reasons.append("Materials or outsourced work recorded only as $0.00."
+                               if counts["materials"] or counts["outsourced"]
+                               else "No materials or outsourced work recorded.")
             if len(customers[job]) > 1:
                 reasons.append("Billed to more than one customer: " + ", ".join(sorted(customers[job])) + ".")
             if unlinked_job_costs:

@@ -538,6 +538,37 @@ class CompletenessTests(unittest.TestCase):
                                     b"I-2,10/01/2026,Gym,J-2,150.00\n")
         self.assertEqual(["complete", "complete"], [c.status for c in report.customers])
 
+    def test_income_account_names_are_never_costs(self):
+        for label in (b"Sales of Product Income", b"Sales of Product Income:Printing", b"Services Income",
+                      b"Income:Revenue"):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/01/2026,Paper Co,J-1," + label + b",40.00\n", self.SALES)
+                self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")
+                self.assertEqual(Decimal("50.00"), report.jobs[0].total_costs)  # the $40 is never subtracted
+        for label, contribution in ((b"Cost of Goods Sold:Materials", Decimal("10.00")),
+                                    (b"Sales commissions", Decimal("10.00")), (b"Income tax", Decimal("10.00"))):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/01/2026,Paper Co,J-1," + label + b",40.00\n", self.SALES)
+                self.assertEqual(contribution, report.jobs[0].contribution)
+        self.assert_job(self.report(self.LINKED + b"B-3,10/01/2026,Paper Co,J-1,Cost of Goods Sold:Materials,40.00\n",
+                                    self.SALES), Decimal("100.00"), Decimal("10.00"), "complete")
+
+    def test_zero_dollar_cost_lines_never_make_a_job_complete(self):
+        cases = ((b"0.00", b"30.00", ["Labor recorded only as $0.00."]),
+                 (b"20.00", b"0.00", ["Materials or outsourced work recorded only as $0.00."]),
+                 (b"0.00", b"0.00", ["Labor recorded only as $0.00.",
+                                     "Materials or outsourced work recorded only as $0.00."]))
+        for labor, materials, reasons in cases:
+            with self.subTest(labor=labor, materials=materials):
+                report = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor," + labor + b"\n"
+                                     b"B-2,10/01/2026,Paper Co,J-1,Materials," + materials + b"\n", self.SALES)
+                job = report.jobs[0]
+                self.assertEqual(("provisional", reasons), (job.status, job.reasons))
+                self.assertEqual("provisional", report.customers[0].status)
+                self.assertEqual(Decimal("100.00") - Decimal(labor.decode()) - Decimal(materials.decode()),
+                                 job.contribution)  # zero rows are kept, nothing invented
+        self.assert_job(self.report(self.LINKED, self.SALES), Decimal("100.00"), Decimal("50.00"), "complete")
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))

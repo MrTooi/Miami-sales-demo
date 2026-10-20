@@ -150,6 +150,14 @@ CREDIT_MEMO_TYPES = {"credit memo", "credit memos", "credit note", "credit notes
 INVOICE_LINE_TYPES = {"invoice", "invoices", "sale", "sales", "sales receipt", "sales receipts"} | CREDIT_MEMO_TYPES
 # Account parents that hold sales or income, never costs ("Income:Revenue").
 SALES_ACCOUNT_PARENTS = {"income", "revenue", "sales", "other income", "sales income", "operating income"}
+def _is_income_account(name: str) -> bool:
+    """An income account name ("Sales of Product Income", "Services Income", "Revenue", "Sales"),
+    never a cost. "Income tax" is an expense, and words like "sales" inside an expense name
+    ("Sales commissions") don't count."""
+    words = set(name.split())
+    return name in SALES_ACCOUNT_PARENTS or ("income" in words and not words & {"tax", "taxes", "expense", "expenses"})
+
+
 # Sales-document names that don't establish an incurred cost when used as a cost category.
 SALES_DOCUMENT_TYPES = INVOICE_LINE_TYPES | {"income", "revenue", "sales income", "estimate", "estimates"}
 # Whole cost types for card purchases: ordinary expenses, though they mention "credit"/"debit".
@@ -563,8 +571,7 @@ def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict
             # Read as an account path ("Parent:Category"): the category's own name decides, and
             # a sales/income parent ("Income:Revenue") is never a cost.
             name = cost_type_name(cells[i])
-            parents = {_norm(p) for p in cells[i].split(":")[:-1]}
-            if parents & SALES_ACCOUNT_PARENTS:
+            if any(_is_income_account(_norm(part)) for part in cells[i].split(":")):
                 return cells[i].strip()
             if name in FEE_TYPES or name in CARD_CHARGE_TYPES:
                 continue
