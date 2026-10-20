@@ -103,13 +103,17 @@ def pricing(job: JobResult, usual: Decimal | None) -> dict | None:
 
 
 def _price_sentence(job: JobResult, usual: Decimal | None) -> str:
-    """Break-even (for a losing job) and the price at the usual margin, when it's higher."""
+    """Break-even (for a losing job) and the price at the usual margin, when it's higher.
+
+    Both come from the job's own recorded costs, before overhead (rent, fees) not tied to the job,
+    so the break-even is worded as "cover its job costs", not as the business's break-even.
+    """
     price = pricing(job, usual)
     if not price:
         return ""
     parts = []
     if job.contribution < 0:
-        parts.append(f"To break even it needed {money(price['break_even'])}")
+        parts.append(f"To cover its job costs it needed {money(price['break_even'])}")
     if price["at_usual"] is not None and price["at_usual"] > job.sales:
         parts.append(f"at your usual {price['usual']}% margin, about {money(price['at_usual'])}")
     if not parts:
@@ -145,8 +149,14 @@ def summarize(report: ProfitReport) -> Summary:
     )
 
 
-def _thin_biggest_customer(customers: list[CustomerResult]) -> Insight | None:
-    """The biggest customer by sales, when it keeps a much smaller share than the business."""
+def _thin_biggest_customer(report: ProfitReport) -> Insight | None:
+    """The biggest customer by sales, when it keeps a much smaller share than the business.
+
+    Customer figures leave out jobs without a figure, jobs billed to more than one customer and sales
+    with no job number. When any of those exist, a bigger customer may be hidden, so the claim is
+    worded as "of customers with a figure" rather than "your biggest customer".
+    """
+    customers = report.customers
     counted = [c for c in customers if c.contribution is not None and c.sales > 0]
     if len(counted) < 2:
         return None
@@ -156,6 +166,8 @@ def _thin_biggest_customer(customers: list[CustomerResult]) -> Insight | None:
     share = percent(biggest.contribution, biggest.sales)
     if overall is None or share is None or Decimal(overall - share) < THIN_GAP_POINTS:
         return None
+    all_sales_counted = (not report.unlinked_sales_lines
+                         and all(j.contribution is not None and len(j.customers) == 1 for j in report.jobs))
     # The comparison uses a customer whose figures are complete, so it is never flattered by missing costs.
     others = [c for c in counted if c is not biggest and c.status == "complete"]
     detail = f"{money(biggest.sales)} in sales, {money(biggest.contribution)} left after job costs."
@@ -164,7 +176,12 @@ def _thin_biggest_customer(customers: list[CustomerResult]) -> Insight | None:
         detail += f" {best.customer} keeps {percent(best.contribution, best.sales)}%."
     if biggest.status != "complete":
         detail += " Some of its jobs still need a check."
-    return Insight("warn", f"{biggest.customer} is your biggest customer, but keeps only {share}%", detail)
+    if all_sales_counted:
+        title = f"{biggest.customer} is your biggest customer, but keeps only {share}%"
+    else:
+        title = f"Of customers with a figure, {biggest.customer} is the biggest, but keeps only {share}%"
+        detail += " Some sales aren't in any customer's figure yet, so another customer may be bigger."
+    return Insight("warn", title, detail)
 
 
 def attention(report: ProfitReport) -> list[Insight]:
@@ -186,7 +203,7 @@ def attention(report: ProfitReport) -> list[Insight]:
             items.append(Insight("warn", f"{job_name(job)} kept only {percent(job.contribution, job.sales)}%",
                                  f"Sold for {money(job.sales)}, cost {money(job.total_costs)}."
                                  + _price_sentence(job, usual)))
-    thin = _thin_biggest_customer(report.customers)
+    thin = _thin_biggest_customer(report)
     if thin:
         items.append(thin)
     to_check = [j for j in report.jobs if j.status == "provisional"]

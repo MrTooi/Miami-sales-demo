@@ -130,13 +130,24 @@ class AttentionTests(unittest.TestCase):
             ("warn", "Bayside Realty (fictional) is your biggest customer, but keeps only 13%"),
             ("warn", "Class schedule banners · J-108 needs a check"),
         ], [(i.level, i.title) for i in items])
-        self.assertEqual("Sold for $600, cost $740. To break even it needed $740; at your usual 30% margin, "
+        self.assertEqual("Sold for $600, cost $740. To cover its job costs it needed $740; at your usual 30% margin, "
                          "about $1,062.", items[0].detail)
         # A profitable but thin job gets the usual-margin price, not a pointless break-even.
         self.assertEqual("Sold for $3,200, cost $3,070. At your usual 30% margin, about $4,404.", items[1].detail)
         # Compared with a customer whose figures are complete (not Palm Gym, whose J-108 lacks labor).
         self.assertIn("Little Havana Cafe (fictional) keeps 55%", items[2].detail)  # $600 of $1,100
         self.assertIn("No labor recorded.", items[3].detail)
+
+    def test_biggest_customer_is_qualified_when_a_bigger_one_may_be_hidden(self):
+        # C has the most sales ($1,000) but no costs, so no figure. A ($300, 10%) and B ($100, 90%) have figures.
+        report = report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,300.00\n"
+                             b"I-2,10/01/2026,B,J-2,100.00\nI-3,10/01/2026,C,J-3,1000.00\n",
+                             b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,150.00\n"
+                             b"B-2,10/01/2026,Paper,J-1,Materials,120.00\nB-3,10/01/2026,Crew,J-2,Labor,5.00\n"
+                             b"B-4,10/01/2026,Paper,J-2,Materials,5.00\n")
+        titles = [i.title for i in mi.attention(report)]
+        self.assertIn("Of customers with a figure, A is the biggest, but keeps only 10%", titles)
+        self.assertFalse(any("your biggest customer" in t for t in titles))
 
     def test_no_thin_customer_finding_when_margins_are_close(self):
         report = report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,1000.00\nI-2,10/01/2026,B,J-2,500.00\n",
