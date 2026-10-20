@@ -309,8 +309,13 @@ def read_file(name: str, data: bytes) -> tuple[list[str], list[Record], list[str
     start = _header_row(table)
     notes = []
     if start:
-        titles = " / ".join(next(c.strip() for c in cells if c.strip()) for _, cells in table[:start])
-        notes.append(f"Skipped {start} title line{'s' if start != 1 else ''} above the column names: {titles}.")
+        # A line of only separators (",,,,") above the column names holds nothing, so it is skipped
+        # like an empty line; the note counts it.
+        titles = [next(c.strip() for c in cells if c.strip()) for _, cells in table[:start] if any(c.strip() for c in cells)]
+        empty = start - len(titles)
+        skipped = [f"{n} {what} line{'s' if n != 1 else ''}" for n, what in ((len(titles), "title"), (empty, "empty")) if n]
+        notes.append(f"Skipped {' and '.join(skipped)} above the column names"
+                     + (f": {' / '.join(titles)}." if titles else "."))
     headers = list(table[start][1])  # kept exactly as written, as read_csv does
     while headers and not headers[-1].strip():  # empty trailing columns (common in Excel)
         headers.pop()
@@ -352,8 +357,8 @@ def _header_row(table: list[tuple[int, list[str]]]) -> int:
         if len(filled) >= 2:
             if position and all(not _looks_like_data(c) for c in filled):
                 for number, above in table[:position]:
-                    title = next(c.strip() for c in above if c.strip())
-                    if _looks_like_data(title):
+                    title = next((c.strip() for c in above if c.strip()), None)
+                    if title is not None and _looks_like_data(title):
                         raise IntakeError(f"Row {number}, above the column names, holds '{title}', which looks like "
                                           "an amount or a date, not a title. Remove it or export the file again.")
                 return position
@@ -379,8 +384,8 @@ def _looks_like_data(text: str) -> bool:
 def _xlsx_rows(data: bytes) -> list[tuple[int, list[str]]]:
     """Every non-empty row of an Excel file's only sheet, as text, with its Excel row number.
 
-    Numbers never pass through floating-point arithmetic: a number cell is read as the exact
-    text stored in the file, then checked by the same strict money and date rules as a CSV. A
+    Every number MargenX uses is rebuilt from the exact text stored in the file (openpyxl's own
+    intermediate float is discarded), then checked by the same strict money and date rules as a CSV. A
     value with more than two decimals is refused, never rounded. A formula with no saved result,
     or a cell showing an error (#REF!, #N/A ...), refuses the whole file: its value isn't known,
     so it is never read as blank.
@@ -467,9 +472,11 @@ def _exact_cell_parser():
     formula_tag, value_tag = f"{{{SHEET_MAIN_NS}}}f", f"{{{SHEET_MAIN_NS}}}v"
 
     class ExactCellParser(WorkSheetParser):
-        """openpyxl's sheet reader, except that a number keeps the exact text stored in the file
-        (openpyxl turns it into a binary float) and a missing formula result or an error is kept
-        visible instead of reading as blank."""
+        """openpyxl's sheet reader, except that a number is rebuilt from the exact text stored in
+        the file: openpyxl still makes its own float inside super().parse_cell, but that result is
+        discarded, so MargenX never uses it. A missing formula result or an error is kept visible
+        instead of reading as blank. Relies on openpyxl's private reader: recheck on any upgrade
+        (openpyxl is pinned in requirements.txt) and rerun tests/test_file_reading.py."""
 
         def parse_cell(self, element):
             cell = super().parse_cell(element)

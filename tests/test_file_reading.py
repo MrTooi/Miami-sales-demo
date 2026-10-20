@@ -492,6 +492,25 @@ class ReportLayoutTests(unittest.TestCase):
         data = b"Sales report (fictional)\nOctober 2026\n" + header.encode() + b"\n,10/02/2026,INV-1,A,J-1,40.00\n"
         self.assertIn("Skipped 2 title lines", ji.read_file("sales.csv", data)[2][0])
 
+    def test_a_line_of_only_separators_above_the_column_names_is_skipped_as_empty(self):
+        # Manual review warning 3: this used to crash with StopIteration instead of reading the file.
+        data = b"Sales by Customer Detail\n,,,,,\n,Date,Invoice,Customer,Job,Amount\n" \
+               b",10/02/2026,INV-1,Bakery (fictional),J-1,40.00\n"
+        headers, records, notes = ji.read_file("sales.csv", data)
+        self.assertEqual(["Date", "Invoice"], headers[1:3])
+        self.assertEqual(["Skipped 1 title line and 1 empty line above the column names: Sales by Customer Detail."], notes[:1])
+        result = ji.intake(headers, records, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        self.assertEqual(([Decimal("40.00")], []), ([r["amount"] for r in result.accepted], result.rejected))
+        # Only separators above the column names, with no title at all, reads the same way.
+        headers, _, notes = ji.read_file("sales.csv", b",,,,,\n,Date,Invoice,Customer,Job,Amount\n,10/02/2026,INV-1,A,J-1,1.00\n")
+        self.assertEqual("Date", headers[1])
+        self.assertEqual("Skipped 1 empty line above the column names.", notes[0])
+        # Below the column names a line of separators is still a row: rejected as possibly missing money.
+        headers, records, _ = ji.read_file("sales.csv", b"Invoice,Date,Customer,Job,Amount\n,,,,\nINV-1,10/02/2026,A,J-1,1.00\n")
+        result = ji.intake(headers, records, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        self.assertEqual([2], [r["row"] for r in result.rejected])
+        self.assertTrue(result.rejected[0]["money_missing"])
+
     def test_plain_csv_files_read_exactly_as_before(self):
         data = b"Invoice,Date,Customer,Job,Amount\nINV-1,10/02/2026,Bakery (fictional),J-1,100.00\n"
         self.assertEqual(ji.read_csv(data), ji.read_file("sales.csv", data)[:2])
