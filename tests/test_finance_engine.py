@@ -1,6 +1,6 @@
 import unittest
 from decimal import Decimal
-from finance_engine import money, summarize
+from finance_engine import MAX_MONEY, AmountTooLarge, money, summarize
 
 class FinanceTests(unittest.TestCase):
     def test_money_precision(self):
@@ -72,5 +72,60 @@ class FinanceTests(unittest.TestCase):
         self.assertTrue(summarize([],[],expenses_complete=True)["profit_available"])
         self.assertFalse(summarize([])["profit_available"])
 
-if __name__=="__main__":
+
+
+class MoneySizeTests(unittest.TestCase):
+    """Amounts are capped just under one trillion dollars so every sum stays exact (no rounding)."""
+
+    def test_amounts_up_to_the_cap_are_read_exactly(self):
+        for text, value in (("999,999,999,999.99", "999999999999.99"), ("-$999,999,999,999.99", "-999999999999.99"),
+                            ("999999999999", "999999999999"), ("12.50", "12.50")):
+            self.assertEqual(Decimal(value), money(text), text)
+        self.assertEqual(MAX_MONEY, money(MAX_MONEY))
+        self.assertEqual(Decimal(-999999999999), money(-999999999999))
+
+    def test_larger_amounts_are_refused_never_rounded(self):
+        too_large = ["1,000,000,000,000.00", "-1000000000000", "$1000000000000.01", "1" * 30, "9" * 30 + ".99",
+                     "1" * 5000, 10 ** 30, -(10 ** 12), Decimal("1E+12"), Decimal("1000000000000.00")]
+        # Checked by the too_large flag, as callers do: data_pipeline.analyze reloads finance_engine,
+        # which replaces the AmountTooLarge class, but the flag survives.
+        for value in too_large:
+            with self.assertRaises(ValueError, msg=repr(value)[:40]) as caught:
+                money(value)
+            self.assertTrue(getattr(caught.exception, "too_large", False), repr(value)[:40])
+        # AmountTooLarge is a ValueError, so every existing caller already refuses it.
+        self.assertTrue(issubclass(AmountTooLarge, ValueError))
+        # Long text that isn't an amount at all is still "not an amount", not "too large".
+        with self.assertRaises(ValueError) as caught:
+            money("this is not an amount, it is just a long line of text")
+        self.assertFalse(getattr(caught.exception, "too_large", False))
+
+    def test_the_too_large_reason_survives_the_engine_being_reloaded(self):
+        import importlib
+        import finance_engine
+        import job_intake as ji
+        importlib.reload(finance_engine)  # what data_pipeline.analyze does on every analysis
+        headers = ["Invoice", "Date", "Customer", "Job", "Amount"]
+        records = [ji.Record(2, ("INV-1", "10/02/2026", "A (fictional)", "J-1", "1" * 30))]
+        result = ji.intake(headers, records, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        self.assertIn("more than MargenX can add up exactly", result.rejected[0]["reasons"][0])
+
+    def test_sums_of_capped_amounts_stay_exact(self):
+        # With Python's default 28 digits, adding a billion amounts at the cap (far more rows than any
+        # file can hold) is still exact: the Inexact trap would raise if anything were rounded.
+        from decimal import Inexact, localcontext
+        with localcontext() as ctx:
+            ctx.traps[Inexact] = True
+            for amount in (MAX_MONEY, -MAX_MONEY, Decimal("0.01")):
+                self.assertEqual(amount * 10 ** 9, sum([amount] * 1000, Decimal(0)) * 10 ** 6)
+            total = Decimal(0)
+            for _ in range(100_000):
+                total += MAX_MONEY
+            self.assertEqual(MAX_MONEY * 100_000, total)
+            # The same trap does fire past 28 digits, so the test above would catch rounding.
+            with self.assertRaises(Inexact):
+                Decimal("9" * 30) + Decimal("0.01")
+
+
+if __name__ == "__main__":
     unittest.main()

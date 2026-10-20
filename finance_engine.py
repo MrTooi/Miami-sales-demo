@@ -8,22 +8,49 @@ from decimal import Decimal, InvalidOperation
 # rather than read as 1250 or 15 (issue #36).
 _US_AMOUNT = re.compile(r"^[+-]?\$?[+-]?(\d+|\d{1,3}(,\d{3})+)(\.\d+)?$")
 
+# The largest amount accepted, positive or negative: just under one trillion dollars. Python's
+# Decimal keeps 28 significant digits by default, so a sum of amounts this size stays exact for
+# far more rows than any file can hold (a billion of them still fits). A bigger amount is refused
+# with its own reason, never rounded or cut short.
+MAX_MONEY = Decimal("999999999999.99")
+
+
+class AmountTooLarge(ValueError):
+    """An amount over MAX_MONEY: refused so every sum stays exact.
+
+    Callers check the too_large flag rather than this class: data_pipeline.analyze reloads this
+    module, which makes a new class each time, but the flag survives.
+    """
+
+    too_large = True
+
 
 def money(value):
+    """An exact Decimal amount: at most two decimals, no larger than MAX_MONEY either way.
+
+    Raises AmountTooLarge (a ValueError) for an amount over MAX_MONEY and ValueError for anything
+    that isn't a valid amount. Nothing is ever rounded or cut short.
+    """
+    text = "" if value is None or isinstance(value, (bool, float)) else str(value).strip()
+    if isinstance(value, str) and len(text) > 40 and _US_AMOUNT.match(text):
+        # Longer than any amount up to MAX_MONEY can be written ("-$999,999,999,999.99" is 20
+        # characters), so it is refused before it is turned into a number.
+        raise AmountTooLarge(f"Amount is larger than {MAX_MONEY:,}: {text[:20]}...")
     try:
         if value is None or isinstance(value, (bool, float)):
             # A float is already a binary approximation (0.1 + 0.2 != 0.3), so it is never
             # turned into money; amounts must arrive as text, int or Decimal.
             raise ValueError("Missing/invalid money value")
-        text = str(value).strip()
         if isinstance(value, str) and not _US_AMOUNT.match(text):
             raise ValueError("Not a U.S. dollar amount")
         amount = Decimal(text.replace("$", "").replace(",", ""))
         if not amount.is_finite() or amount.as_tuple().exponent < -2:
             raise ValueError("Money must have at most two decimal places")
-        return amount
     except (InvalidOperation, ValueError, TypeError) as exc:
         raise ValueError(f"Invalid monetary value: {value!r}") from exc
+    if abs(amount) > MAX_MONEY:
+        raise AmountTooLarge(f"Amount is larger than {MAX_MONEY:,}: {value!r}")
+    return amount
 
 
 def summarize(sales, expenses=None, *, expenses_complete=False):

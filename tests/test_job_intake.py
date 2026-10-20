@@ -698,5 +698,25 @@ class FormulaSafetyTests(unittest.TestCase):
         self.assertIn("No cost lines were imported", report)
 
 
+
+
+class AmountTooLargeIntakeTests(unittest.TestCase):
+    def test_an_amount_over_the_cap_is_rejected_with_its_own_reason_and_counts_as_missing_money(self):
+        import job_intake as ji
+        headers = ["Invoice", "Date", "Customer", "Job", "Amount"]
+        rows = [("INV-1", "10/02/2026", "Bakery (fictional)", "J-1", "100.00"),
+                ("INV-2", "10/03/2026", "Bakery (fictional)", "J-1", "1" * 30),
+                ("INV-3", "10/04/2026", "Bakery (fictional)", "J-1", "999,999,999,999.99")]
+        records = [ji.Record(n, r) for n, r in enumerate(rows, start=2)]
+        result = ji.intake(headers, records, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        self.assertEqual(["INV-1", "INV-3"], [r["invoice_id"] for r in result.accepted])
+        self.assertEqual([3], [r["row"] for r in result.rejected])
+        self.assertTrue(result.rejected[0]["money_missing"])
+        self.assertIn("is larger than $999,999,999,999.99, more than MargenX can add up exactly",
+                      result.rejected[0]["reasons"][0])
+        # The original cell is kept in full for provenance, even though the reason shortens it.
+        self.assertEqual("1" * 30, result.rejected[0]["cells"][4])
+
+
 if __name__ == "__main__":
     unittest.main()

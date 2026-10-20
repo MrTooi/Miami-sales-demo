@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 
-from finance_engine import money
+from finance_engine import MAX_MONEY, money
 
 KINDS = ("invoices", "costs")
 
@@ -1151,9 +1151,13 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
         if values.get("amount"):
             try:
                 amount = money(values["amount"])
-            except ValueError:
-                reasons.append(f"Amount '{values['amount']}' isn't a valid dollar amount (written like 1,234.56: "
-                               "commas only between thousands, max 2 decimals). '12,50' isn't read as 12.50 or 1,250.")
+            except ValueError as exc:
+                if getattr(exc, "too_large", False):  # finance_engine.AmountTooLarge (see its note on reloading)
+                    reasons.append(f"Amount '{values['amount'][:40]}' is larger than ${MAX_MONEY:,}, more than MargenX "
+                                   "can add up exactly, so it isn't imported. Check it where the data comes from.")
+                else:
+                    reasons.append(f"Amount '{values['amount']}' isn't a valid dollar amount (written like 1,234.56: "
+                                   "commas only between thousands, max 2 decimals). '12,50' isn't read as 12.50 or 1,250.")
         total = _total_row(rec.cells, headers, mapping)
         if total:
             reasons.append(f"Looks like a total row ('{total[0]}'), but its amount doesn't equal the rows above "
