@@ -310,14 +310,6 @@ def money_cell(amount) -> str:
     return "—" if amount is None else jp.format_money(amount)
 
 
-def _period(report: jp.ProfitReport) -> str:
-    """"Sales dated Oct 2 to Oct 23, 2026", from the imported sales lines' dates."""
-    from datetime import date
-    first, last = (date.fromisoformat(d) for d in report.invoice_dates)
-    start = f"{first:%b} {first.day}" + ("" if first.year == last.year else f", {first.year}")
-    return f"Sales dated {start} to {last:%b} {last.day}, {last.year}"
-
-
 def show_profit(results: list[ji.IntakeResult], pending: list[str]) -> bool:
     """Profit by job and customer, once every file is dealt with and there is exactly one sales
     file and one costs file. Returns True when results were shown."""
@@ -337,7 +329,7 @@ def show_profit(results: list[ji.IntakeResult], pending: list[str]) -> bool:
         for reason in report.reasons:
             st.info(ui.md_text(reason))
         return False
-    ui.results(report, mi.summarize(report), mi.attention(report), _period(report))
+    ui.results(report, mi.summarize(report), mi.attention(report), mi.period_text(report))
     for note in report.notes:
         # The overhead note is already shown as the "after overhead" line; the rest stay visible here.
         if "overhead or fee line" not in note:

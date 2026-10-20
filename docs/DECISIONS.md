@@ -113,3 +113,21 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
   - Some label variants stay unhandled until real exports are tested. This is acceptable only because uncertain rows fail closed and no real data is used.
   - The follow-up list must be carried into real-export testing, not forgotten.
 - Evidence / links: PR #102 manual review comments; PR #100.
+
+### D-006 — Public demo link: a static page of the made-up demo shop
+- Date: 2026-10-20
+- Status: Accepted (in force once the PR adding `scripts/build_demo_page.py` is merged with the owner's approval)
+- Decided by: Human owner (MrTooi), in a Claude Code session on 2026-10-20. The owner first chose "b just a link we can send to abrey and he can open" (a demo-only website link). After the ChatGPT manual review of PR #112 showed that a hosted Streamlit app always exposes a file-upload endpoint, the owner chose "a", a static demo page with no server.
+- Context: Abrey talks to Miami shop owners and needs something real to show. MargenX ran only on the owner's laptop.
+- Decision:
+  1. The public demo is one static HTML page of the made-up demo sign shop, built by `scripts/build_demo_page.py` from the real MargenX code. It has no server, script, form or upload path, and says plainly that every name and number is invented.
+  2. It is published as a claude.ai artifact. The owner shares it from the Share menu. Claude Code never changes sharing or deploys.
+  3. No real shop data, sign-up forms, analytics, scripts or visitor-data collection on it without a new owner decision.
+- Not changed:
+  - Real customer data still needs step 3b and a separate owner decision for a named pilot shop (D-007 or later), and is used only in the sit-down pilot on the team laptop.
+  - No hosted Streamlit app is published (PR #112 was closed).
+  - Merging still needs the owner's explicit approval for each PR.
+- Consequences / risks:
+  - Anyone the owner shares the link with sees the made-up demo. Acceptable: it holds no real data and has no input of any kind.
+  - The page doesn't update itself: after screen or sample changes, rebuild and republish (`docs/DEMO_LINK.md`).
+- Evidence / links: PR #112 (closed) and its ChatGPT manual review; `tests/test_demo_page.py`; `docs/DEMO_LINK.md`.

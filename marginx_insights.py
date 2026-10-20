@@ -61,6 +61,14 @@ class Insight:
     detail: str
 
 
+def period_text(report: ProfitReport) -> str:
+    """"Sales dated Oct 2 to Oct 23, 2026", from the imported sales lines' dates."""
+    from datetime import date
+    first, last = (date.fromisoformat(d) for d in report.invoice_dates)
+    start = f"{first:%b} {first.day}" + ("" if first.year == last.year else f", {first.year}")
+    return f"Sales dated {start} to {last:%b} {last.day}, {last.year}"
+
+
 def money(amount: Decimal) -> str:
     """Exact dollars, without ".00" when there are no cents ("$1,300", "$12.50", "-$140")."""
     text = format_money(amount)
