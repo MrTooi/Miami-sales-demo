@@ -206,7 +206,7 @@ class CompletenessTests(unittest.TestCase):
         self.assertEqual(Decimal("473.50"), job.contribution)  # 500 - 10 - 10 - 1.50 - 5
         notes = " ".join(report.notes)
         self.assertIn("$6.50 of fees or overhead were recorded against jobs", notes)
-        self.assertIn("1 cost line(s) worth $9.00 aren't linked to a job", notes)
+        self.assertIn("1 overhead or fee line(s) worth $9.00 (such as rent) aren't linked to a job", notes)
         self.assertIn("count only when they are recorded against a job", report.basis)
         self.assertEqual("fees_overhead", jp.cost_category("Merchant fees"))
 
@@ -248,7 +248,7 @@ class CompletenessTests(unittest.TestCase):
                              b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\nB-3,10/31/2026,Electric Co,,Overhead,90.00\n",
                              invoices)
         self.assertEqual(("complete", Decimal("50.00")), (report.jobs[0].status, report.jobs[0].contribution))
-        self.assertIn("$90.00 aren't linked to a job", " ".join(report.notes))
+        self.assertIn("$90.00 (such as rent) aren't linked to a job", " ".join(report.notes))
 
     def test_mixed_labels_are_other_and_never_exempt(self):
         for text, category in (("Materials processing", "other"), ("Labor fees", "other"),
@@ -678,6 +678,18 @@ class CompletenessTests(unittest.TestCase):
             with self.subTest(label=label):
                 report = self.report(self.LINKED + b"B-3,10/01/2026,Sign Co,J-1," + label + b",40.00\n", self.SALES)
                 self.assert_job(report, Decimal("100.00"), Decimal("10.00"), "complete")
+
+    def test_unlinked_overhead_and_unlinked_job_costs_get_separate_notes(self):
+        report = self.report(self.LINKED + b"B-3,10/31/2026,Landlord,,Rent,2000.00\n"
+                             b"B-4,10/02/2026,Paper Co,,Materials,40.00\nB-5,10/03/2026,Ink Co,,Delivery,15.00\n",
+                             self.SALES)
+        notes = " ".join(report.notes)
+        self.assertIn("1 overhead or fee line(s) worth $2,000.00 (such as rent) aren't linked to a job", notes)
+        self.assertIn("2 cost line(s) worth $55.00 aren't linked to a job", notes)
+        self.assertEqual((Decimal("2055.00"), 3), (report.unlinked_costs, report.unlinked_cost_lines))
+        # The non-overhead ones may belong to the job, so it stays provisional; the figure is unchanged.
+        self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")
+        self.assertIn("2 cost line(s) worth $55.00 have no job number", " ".join(report.jobs[0].reasons))
 
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))

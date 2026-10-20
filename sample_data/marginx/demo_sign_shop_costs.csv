@@ -1,0 +1,20 @@
+Bill,Date,Vendor,Job,Type,Memo,Amount
+B-501,10/01/2026,Paper & Sign Supply (fictional),J-101,Materials,Aluminum panels and vinyl,620.00
+B-502,10/02/2026,Shop crew (fictional),J-101,Labor,Fabrication and install,480.00
+B-503,10/04/2026,Paper & Sign Supply (fictional),J-102,Materials,Coroplast and stakes,210.00
+B-504,10/05/2026,Shop crew (fictional),J-102,Labor,Print and assembly,160.00
+B-505,10/06/2026,Banner Print Co (fictional),J-103,Materials,Banner material,380.00
+B-506,10/07/2026,Install Partners (fictional),J-103,Outsourced,Event-site install,300.00
+B-507,10/07/2026,Shop crew (fictional),J-103,Labor,Print and finishing,240.00
+B-508,10/08/2026,Paper & Sign Supply (fictional),J-104,Materials,Window vinyl,260.00
+B-509,10/09/2026,Shop crew (fictional),J-104,Labor,Install,220.00
+B-510,10/12/2026,Banner Print Co (fictional),J-105,Materials,Rush banner material,340.00
+B-511,10/13/2026,Install Partners (fictional),J-105,Outsourced,After-hours install,280.00
+B-512,10/13/2026,Shop crew (fictional),J-105,Labor,Overtime print,120.00
+B-513,10/14/2026,Paper & Sign Supply (fictional),J-106,Materials,Menu board blanks,290.00
+B-514,10/15/2026,Shop crew (fictional),J-106,Labor,Design and print,210.00
+B-515,10/16/2026,Wrap Film Direct (fictional),J-107,Materials,Wrap film and laminate,1450.00
+B-516,10/18/2026,Install Partners (fictional),J-107,Outsourced,Wrap installation,1100.00
+B-517,10/20/2026,Shop crew (fictional),J-107,Labor,Design and prep,520.00
+B-518,10/22/2026,Banner Print Co (fictional),J-108,Materials,Banner material,180.00
+B-519,10/31/2026,Landlord (fictional),,Rent,Shop rent October,2000.00
