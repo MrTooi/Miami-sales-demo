@@ -100,6 +100,27 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         return at
 
+    def test_markdown_from_a_file_never_reaches_the_page_unescaped(self):
+        # A cell that tries to load an image from the internet, on several lines, and look-alike
+        # customer names, so the names also reach a caption (the "look alike" note).
+        trap = "![t](https://e.example/p.png)"
+        invoices = ("Invoice,Date,Customer,Job,Description,Amount\n"
+                    f'I-1,10/31/2026,"{trap} Bakery",J-1,"Banner\n\n{trap}\n\nend",100.00\n'
+                    f'I-2,10/31/2026,"{trap} BAKERY",J-2,Sign,50.00\n')
+        costs = ("Bill,Date,Vendor,Job,Type,Amount\nB-1,10/31/2026,Crew (fictional),J-1,Labor,20.00\n"
+                 "B-2,10/31/2026,Paper Co (fictional),J-1,Materials,20.00\n")
+        at = self.with_files(invoices, costs)
+        html = [m.value for m in at.markdown if "e.example" in m.value]
+        self.assertTrue(html)  # the trap reached the results screen...
+        for value in html:
+            self.assertNotIn("\n", value)  # ...on one line, so it stays inside the HTML block
+        markdown_text = ([e.value for e in [*at.caption, *at.info, *at.warning, *at.error]]
+                         + [r.label for r in at.radio] + [o for r in at.radio for o in r.options])
+        trapped = [v for v in markdown_text if "e.example" in v]
+        self.assertTrue(any("look alike" in v for v in trapped))
+        for value in trapped:
+            self.assertNotRegex(value, r"(?<!\\)!\\?\[|(?<!\\)\[")  # every [ and ! is escaped
+
     def test_unrecognised_file_asks_what_it_is_and_which_column(self):
         at = self.with_files("Num,Date,(not in this file),Amount\nX-1,10/31/2026,Example Co (fictional),1.00\n",
                              "Date,Vendor,Amount\n10/31/2026,A,1.00\n")

@@ -167,6 +167,23 @@ class SafetyTests(unittest.TestCase):
             b"B-4,10/01/2026,Paper,J-2,Materials,50.00\n"))
         self.assertIn('<i class="neg" style="width:3%">', html)  # B lost $1: under 1% of $1,000, still shown
 
+    def test_html_blocks_stay_on_one_line_so_markdown_never_runs(self):
+        out = []
+        report = report_from(b'Invoice,Date,Customer,Job,Description,Amount\n'
+                             b'I-1,10/01/2026,A,J-1,"Banner\n\n![t](https://e.example/p.png)\n\nend",100.00\n',
+                             b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1)
+        with mock.patch.object(ui.st, "markdown", lambda text, **kw: out.append(text)):
+            ui.results(report, mi.summarize(report), mi.attention(report), "Sales dated Oct 1, 2026")
+        self.assertTrue(any("e.example" in m for m in out))
+        for markup in out:
+            self.assertNotIn("\n", markup)
+
+    def test_md_text_neutralises_images_links_and_html_but_keeps_ordinary_text(self):
+        self.assertEqual("a \\!\\[t\\](https://e.example/p.png) b \\<img\\>",
+                         ui.md_text("a\n\n![t](https://e.example/p.png)\n\nb <img>"))
+        self.assertEqual("fictional_invoices.csv", ui.md_text("fictional_invoices.csv"))
+        self.assertEqual("Bayside Realty (fictional) keeps 13%.", ui.md_text("Bayside Realty (fictional) keeps 13%."))
+
     def test_styles_make_no_outside_requests(self):
         self.assertNotIn("http", ui._CSS)
         self.assertNotIn("@import", ui._CSS)

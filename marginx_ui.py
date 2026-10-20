@@ -1,11 +1,17 @@
 """MarginX look and feel: brand styles and the HTML for the results screen.
 
 Light, calm and plain-spoken, matching the website: mint background, white cards, dark-green
-accents. No web fonts or other outside requests: the page works offline, as the pilot promises. Every value that can come from a shop's file (customer names, job descriptions,
+accents. No web fonts or other outside requests: the page works offline, as the pilot promises.
+
+Streamlit reads Markdown in st.markdown, messages, captions, widget labels and radio choices, and
+Markdown can load an image from the internet (![x](https://...)). So text from a file never reaches
+Markdown as-is: HTML blocks are kept on one line (a blank line would end the HTML block and start
+Markdown), and plain-text calls go through md_text(). Every value that can come from a shop's file (customer names, job descriptions,
 reasons) is HTML-escaped here before it reaches the page.
 """
 from __future__ import annotations
 
+import re
 from html import escape
 
 import streamlit as st
@@ -107,8 +113,22 @@ def apply_brand() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
 
 
+_MD_LINK_CHARS = re.compile(r"([\\\[\]!<>])")
+
+
+def md_text(value) -> str:
+    """File text made safe for any Streamlit call that reads Markdown.
+
+    Line breaks become spaces, and the characters that build images, links and HTML ([ ] ! < > and
+    backslash) are backslash-escaped, so a cell like ![x](https://...) shows as text and never loads
+    anything. Ordinary text, such as file names and sentences, looks the same.
+    """
+    return _MD_LINK_CHARS.sub(r"\\\1", re.sub(r"\s+", " ", str(value)).strip())
+
+
 def _html(markup: str) -> None:
-    st.markdown(markup, unsafe_allow_html=True)
+    # One line: a blank line inside a file value would end the HTML block and let Markdown run.
+    st.markdown(re.sub(r"[\r\n]+", " ", markup), unsafe_allow_html=True)
 
 
 def header(pilot: bool) -> None:
