@@ -591,7 +591,10 @@ def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict
             parts = [_norm(part) for part in cells[i].split(":")]
             # Every part of the path is checked: an income or balance-sheet account, or an
             # estimate/order, anywhere in it ("Purchase Order:Materials") is never a cost.
-            if any(_is_income_account(part) or set(part.split()) & (BALANCE_SHEET_WORDS | NON_POSTING_WORDS)
+            # A part that is exactly a posted-cost type ("Cash Expense", "Cash Purchase") is a cost,
+            # though it mentions cash; bare "Cash" or "Checking" is still a bank account.
+            if any(_is_income_account(part) or (set(part.split()) & (BALANCE_SHEET_WORDS | NON_POSTING_WORDS)
+                                                and part not in COST_LINE_TYPES)
                    for part in parts):
                 return cells[i].strip()
             # Money-moving, bank or credit words are checked in every part too ("Transfer:Materials"),
