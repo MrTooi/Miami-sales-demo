@@ -258,7 +258,7 @@ def _customers(report: ProfitReport) -> None:
     rows = []
     for c in sorted(counted, key=lambda c: (-c.contribution, c.customer)):
         share = percent(c.contribution, c.sales)  # the same rounding as the attention list
-        left_width = max(0, min(100, int(c.contribution * 100 / top)))
+        left_width = min(100, int(abs(c.contribution) * 100 / top))  # a loss is drawn as a red bar, not hidden
         bar = "neg" if c.contribution < 0 else "left"
         note = "" if c.status == "complete" else "<small>Needs a check</small>"
         jobs = [j for j in report.jobs if j.job_id in c.jobs]
@@ -276,6 +276,11 @@ def _customers(report: ProfitReport) -> None:
             f'<div class="mx-break"><table>{inner}</table>{why}</div></details>')
     legend = ('<div class="mx-legend"><span style="background:#A7E3C8"></span>Sales'
               '<span style="background:#0F7A55;margin-left:14px"></span>Left after job costs</div>')
+    left_out = [c.customer for c in report.customers if c.contribution is None]
+    if left_out:
+        # The list must never read as every customer when some have no figure yet.
+        legend += (f'<div class="mx-legend">Not listed, no figure yet: {escape(", ".join(left_out))}. '
+                   "See the job list below.</div>")
     _html(f'<div class="mx-card"><h3>Customers, by what they leave you</h3>{"".join(rows)}{legend}</div>')
 
 

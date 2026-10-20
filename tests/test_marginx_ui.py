@@ -66,6 +66,15 @@ class HeadlineTests(unittest.TestCase):
         self.assertIn("$40 of sales have no job number", html)
         self.assertNotIn("Nothing stands out", html)
 
+    def test_customer_list_shows_losses_and_names_customers_left_out(self):
+        html = render(report_from(
+            b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/01/2026,B,J-2,60.00\n"
+            b"I-3,10/01/2026,C,J-3,40.00\n",
+            b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1
+            + b"B-3,10/01/2026,Crew,J-3,Labor,50.00\nB-4,10/01/2026,Paper,J-3,Materials,10.00\n"))
+        self.assertIn('<i class="neg" style="width:20%">', html)  # C lost $20: a visible red bar
+        self.assertIn("Not listed, no figure yet: B.", html)  # B has sales but no costs
+
     def test_demo_shop(self):
         html = render(report_from((SAMPLES / "demo_sign_shop_invoices.csv").read_bytes(),
                                   (SAMPLES / "demo_sign_shop_costs.csv").read_bytes()))
