@@ -455,14 +455,22 @@ class ReportLayoutTests(unittest.TestCase):
             self.assertTrue(next(r for r in result.rejected if r["row"] == 2)["money_missing"], text)
 
     def test_a_row_whose_amount_cant_be_read_stops_totals_from_spanning_it(self):
-        headers = ["Invoice", "Date", "Customer", "Job", "Amount"]
-        rows = [("INV-1", "10/02/2026", "Bakery (fictional)", "J-1", "40.00"),
-                ("INV-2", "10/02/2026", "Bakery (fictional)", "J-1", "sixty"),
-                ("Total", "", "", "", "40.00")]
-        records = [ji.Record(n, r) for n, r in enumerate(rows, start=2)]
-        result = ji.intake(headers, records, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        report = ["(no name, column A)", "Invoice", "Date", "Customer", "Job", "Amount"]
+        mapping = ji.suggest_mapping(report, "invoices")
+        first = ("", "INV-1", "10/02/2026", "Bakery (fictional)", "J-1", "40.00")
+        unreadable = ("", "INV-2", "10/02/2026", "Bakery (fictional)", "J-1", "sixty")
+        readable = ("", "INV-2", "10/02/2026", "Bakery (fictional)", "J-1", "0.00")
+        total = ("Total", "", "", "", "", "40.00")
+        # Control: with every amount readable, the same total adds up and is skipped.
+        control = ji.intake(report, [ji.Record(n, r) for n, r in enumerate([first, readable, total], start=2)],
+                            mapping, "invoices", "MM/DD/YYYY")
+        self.assertEqual(([4], []), ([r["row"] for r in control.skipped], control.rejected))
+        # With an unreadable amount between them, the total can't be checked: rejected, not skipped.
+        result = ji.intake(report, [ji.Record(n, r) for n, r in enumerate([first, unreadable, total], start=2)],
+                           mapping, "invoices", "MM/DD/YYYY")
         self.assertEqual([], result.skipped)
         self.assertEqual([3, 4], [r["row"] for r in result.rejected])
+        self.assertIn("Looks like a total row", " ".join(result.rejected[1]["reasons"]))
 
     def test_an_amount_or_date_above_the_column_names_is_never_skipped_as_a_title(self):
         header = ",Date,Invoice,Customer,Job,Amount"
