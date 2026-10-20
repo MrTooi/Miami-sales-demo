@@ -25,9 +25,12 @@ def run_source(source):
 
 
 class MarginXImportPageTests(unittest.TestCase):
-    def run_page(self):
+    def run_page(self, sample_set="test"):
+        """The page on the made-up files; most tests use the messy test set, which asks questions."""
         at = AppTest.from_file(PAGE, default_timeout=30)
         at.run()
+        if sample_set != "demo":
+            next(r for r in at.radio if r.label == "Which made-up files?").set_value(sample_set).run()
         self.assertFalse(at.exception, at.exception)
         return at
 
@@ -85,7 +88,8 @@ class MarginXImportPageTests(unittest.TestCase):
         Path(tmp.name, "fictional_invoices.csv").write_text(invoices_csv, encoding="utf-8")
         Path(tmp.name, "fictional_costs.csv").write_text(costs_csv, encoding="utf-8")
         source = Path(PAGE).read_text(encoding="utf-8").replace(
-            'SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"', f"SAMPLES = Path({tmp.name!r})")
+            'SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"', f"SAMPLES = Path({tmp.name!r})").replace(
+            'DEFAULT_SAMPLE_SET = "demo"', 'DEFAULT_SAMPLE_SET = "test"')
         self.assertIn(repr(tmp.name), source)
         at = run_source(source)
         self.assertFalse(at.exception, at.exception)
@@ -453,6 +457,7 @@ class MarginXImportPageTests(unittest.TestCase):
             Path(tmp.name, name).write_text(text, encoding="utf-8")
         source = Path(PAGE).read_text(encoding="utf-8").replace(
             'SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"', f"SAMPLES = Path({tmp.name!r})").replace(
+            'DEFAULT_SAMPLE_SET = "demo"', 'DEFAULT_SAMPLE_SET = "test"').replace(
             'SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")', f"SAMPLE_FILES = {tuple(files)!r}")
         at = run_source(source)
         self.assertFalse(at.exception, at.exception)
@@ -488,6 +493,19 @@ class MarginXImportPageTests(unittest.TestCase):
         job = self.profit_table(at).set_index("Job").loc["J-1"]
         self.assertEqual(("$2.90", "$47.10", "Complete"),
                          (job["Fees & overhead on this job"], job["Direct contribution"], job["Status"]))
+
+    def test_demo_shop_tells_a_clear_story_with_no_questions(self):
+        at = self.run_page(sample_set="demo")
+        self.assertEqual("demo", next(r for r in at.radio if r.label == "Which made-up files?").value)
+        self.assertEqual(["Which made-up files?"], [r.label for r in at.radio if r.label != "File type"])  # nothing to answer
+        jobs = self.profit_table(at).set_index("Job")
+        self.assertEqual(("-$140.00", "Complete"), tuple(jobs.loc["J-105", ["Direct contribution", "Status"]]))
+        self.assertEqual(("Provisional", "No labor recorded."), tuple(jobs.loc["J-108", ["Status", "Why"]]))
+        customers = next(d.value for d in at.dataframe if "Jobs" in d.value.columns).set_index("Customer")
+        self.assertEqual(("$5,850.00", "$750.00"), tuple(customers.loc["Bayside Realty (fictional)", ["Sales", "Direct contribution"]]))
+        self.assertEqual(("$2,400.00", "$1,300.00"), tuple(customers.loc["Coastal Bakery (fictional)", ["Sales", "Direct contribution"]]))
+        self.assertIn("(such as rent) aren't linked to a job", page_text(at))
+        self.assertFalse(any("couldn't be imported" in t.value for t in at.text))
 
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")

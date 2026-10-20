@@ -206,7 +206,7 @@ class CompletenessTests(unittest.TestCase):
         self.assertEqual(Decimal("473.50"), job.contribution)  # 500 - 10 - 10 - 1.50 - 5
         notes = " ".join(report.notes)
         self.assertIn("$6.50 of fees or overhead were recorded against jobs", notes)
-        self.assertIn("1 cost line(s) worth $9.00 aren't linked to a job", notes)
+        self.assertIn("1 overhead or fee line(s) worth $9.00 (such as rent) aren't linked to a job", notes)
         self.assertIn("count only when they are recorded against a job", report.basis)
         self.assertEqual("fees_overhead", jp.cost_category("Merchant fees"))
 
@@ -248,7 +248,7 @@ class CompletenessTests(unittest.TestCase):
                              b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\nB-3,10/31/2026,Electric Co,,Overhead,90.00\n",
                              invoices)
         self.assertEqual(("complete", Decimal("50.00")), (report.jobs[0].status, report.jobs[0].contribution))
-        self.assertIn("$90.00 aren't linked to a job", " ".join(report.notes))
+        self.assertIn("$90.00 (such as rent) aren't linked to a job", " ".join(report.notes))
 
     def test_mixed_labels_are_other_and_never_exempt(self):
         for text, category in (("Materials processing", "other"), ("Labor fees", "other"),

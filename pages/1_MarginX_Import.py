@@ -32,6 +32,12 @@ from ui_theme import apply_theme  # noqa: E402
 
 SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"
 SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")
+# A clean made-up shop for showing MarginX to owners: no questions to answer, one losing job, a big
+# customer who barely makes money, one job missing labor, and rent as unlinked overhead.
+DEMO_FILES = ("demo_sign_shop_invoices.csv", "demo_sign_shop_costs.csv")
+DEFAULT_SAMPLE_SET = "demo"
+SAMPLE_SET_LABELS = {"demo": "Demo sign shop (clean example to show owners)",
+                     "test": "Messy test files (errors, gaps and questions)"}
 KIND_LABELS = {"invoices": "sales / invoices", "costs": "costs / bills"}
 NOT_MAPPED = "(not in this file)"
 # A file that is fully dealt with but adds nothing to profit (a bank statement, headers only).
@@ -102,7 +108,10 @@ st.session_state["session_number"] = session
 use_samples = st.toggle("Try it with the made-up sample files", value=not PILOT, key=f"samples-{session}")
 files: list[tuple[str, bytes]] = []
 if use_samples:
-    files = [(name, (SAMPLES / name).read_bytes()) for name in SAMPLE_FILES]
+    sample_set = st.radio("Which made-up files?", list(SAMPLE_SET_LABELS), index=list(SAMPLE_SET_LABELS).index(DEFAULT_SAMPLE_SET),
+                          format_func=SAMPLE_SET_LABELS.get, horizontal=True, key=f"sampleset-{session}")
+    chosen = DEMO_FILES if sample_set == "demo" else SAMPLE_FILES
+    files = [(name, (SAMPLES / name).read_bytes()) for name in chosen]
 else:
     # The box comes first: the upload area isn't shown, so no file can be received, until it is ticked.
     confirmed = st.checkbox(ps.CONSENT_TEXT if PILOT else ps.MADE_UP_TEXT, key=f"confirm-{session}")

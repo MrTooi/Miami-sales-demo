@@ -362,10 +362,18 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
     if linked_fees:
         report.notes.append(f"{format_money(linked_fees)} of fees or overhead were recorded against jobs and are "
                             "subtracted from those jobs (column 'Fees & overhead on this job').")
-    if report.unlinked_cost_lines:
-        report.notes.append(f"{report.unlinked_cost_lines} cost line(s) worth {format_money(report.unlinked_costs)} aren't "
-                            "linked to a job, so they aren't in any job's figure. If some of them belong to "
-                            "jobs, those jobs' figures are too high.")
+    # Unlinked costs are disclosed in two parts: clear overhead and fees (outside the basis), and
+    # anything else, which may belong to a job (and keeps every job provisional, above).
+    unlinked_overhead = report.unlinked_costs - sum(unlinked_job_costs, ZERO)
+    overhead_lines = report.unlinked_cost_lines - len(unlinked_job_costs)
+    if overhead_lines:
+        report.notes.append(f"{overhead_lines} overhead or fee line(s) worth {format_money(unlinked_overhead)} (such as "
+                            "rent) aren't linked to a job. They're left out of every job's figure: direct job "
+                            "contribution comes before overhead.")
+    if unlinked_job_costs:
+        report.notes.append(f"{len(unlinked_job_costs)} cost line(s) worth "
+                            f"{format_money(sum(unlinked_job_costs, ZERO))} aren't linked to a job, so they aren't in "
+                            "any job's figure. If some of them belong to jobs, those jobs' figures are too high.")
     # Customer names that differ only in capitals, spaces or punctuation are likewise kept apart
     # and held back from complete until the owner says whether they are one customer.
     folded_customers: dict[str, list[CustomerResult]] = defaultdict(list)
