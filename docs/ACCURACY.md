@@ -23,8 +23,8 @@ Realty (fictional):
   except J-108, which has no labor recorded.
   - Those 7 jobs sold $10,300 and kept $3,120: $1,300 + $480 + $280 + $470 − $140 + $600 + $130.
   - $3,120 ÷ $10,300 = 30.29%, shown as **30%**.
-- At that margin, J-105 should have been priced at $740 ÷ (1 − 0.3029) = $1,061.57, shown as
-  **about $1,062**.
+- At that margin, J-105 should have been priced at $740 ÷ (1 − $3,120/$10,300) = $740 × $10,300 ÷ $7,180
+  = $1,061.56, shown as **about $1,062**.
 
 **The headline numbers, by hand:**
 
@@ -52,6 +52,7 @@ The same file makes random shops from a seed. They include:
 - $0 placeholder lines
 - jobs missing sales or costs
 - jobs billed to two customers
+- rent recorded directly on a job (it counts as that job's cost)
 - sales and costs with no job number
 - margins that land exactly on a half percent
 
@@ -61,13 +62,20 @@ price is compared with the known answer.
 
 - Every change: 400 shops are checked automatically (`tests/test_accuracy.py`).
 - On demand: `python scripts/accuracy_check.py 5000`.
-  - Result on 2026-10-20: **5,000 shops, 53,311 jobs and 20,234 customers, all matching.**
+  - Result on 2026-10-20: **5,000 shops, 53,311 jobs and 20,202 customers, all matching**, including the screen check.
 
 ## 4. The numbers on the screen
 
-The results screen is also read back for those shops: the cards, every job's amount and margin,
-every customer's amount and share, and each job's "Sold for" line. All are compared with the
-known answers.
+For every one of those shops, the results screen is read back as the HTML MargenX sends to the
+browser and compared with the known answers:
+- the Sales, Left after job costs and Jobs losing money cards
+- every job's amount, margin, status label ("Complete", "Needs a check", "No figure yet") and
+  "Sold for" line
+- every customer's amount, share and "Needs a check" note
+- the note naming customers with no figure, who must not be listed
+
+This checks what MargenX sends, not how a particular browser draws it. The browser checks are done
+by hand (for example, before each pilot visit).
 
 ## Proving the checks catch mistakes
 
@@ -76,12 +84,12 @@ was caught across many of the 400 shops:
 
 | Planted mistake | Shops that caught it |
 |---|---|
-| Shipping counted as materials (wrong "Complete" status) | 306 |
-| Fees recorded on a job left out of its costs | 288 |
-| Credits left out of total sales | 106 |
-| Overhead wrongly taken out of "left after job costs" | 324 |
-| Percentages rounded the wrong way at exact halves | 49 |
-| Sales with no job number ignored when deciding "Complete" | 50 |
+| Shipping counted as materials (wrong "Complete" status) | 276 |
+| Fees recorded on a job left out of its costs | 340 |
+| Credits left out of total sales | 109 |
+| Overhead wrongly taken out of "left after job costs" | 325 |
+| Percentages rounded the wrong way at exact halves | 56 |
+| Sales with no job number ignored when deciding "Complete" | 43 |
 
 ## What this doesn't prove
 
@@ -91,5 +99,7 @@ was caught across many of the 400 shops:
 - **Shared understanding.** The independent calculator follows MargenX's written rules as Claude
   Code understood them. If a rule itself were wrong (for example, what should count as "Complete"),
   both would agree and still be wrong. Shop conversations and the pilot are how we check the rules.
+- **Negative costs.** Cost refunds or credits aren't generated: MargenX refuses negative cost lines
+  when reading a file (tested in `tests/test_job_intake.py`).
 - **Only what MargenX claims.** These checks cover direct job contribution as defined in
   `docs/MVP_SPEC.md`. They don't check business profit, taxes or cash.

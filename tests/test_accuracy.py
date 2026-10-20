@@ -104,12 +104,13 @@ def mismatches(seed: int) -> list[str]:
         for job_id, expected in want.jobs.items():
             if expected.status == "complete" and expected.total_costs > 0 and Fraction(0) < want.usual_margin < 1:
                 price = mi.pricing(jobs[job_id], summary.usual_margin)
-                check(f"{job_id} price at usual margin", int(price["at_usual"]),
-                      shops.price_at(expected.total_costs, want.usual_margin))
+                got = None if not price or price["at_usual"] is None else int(price["at_usual"])
+                check(f"{job_id} price at usual margin", got, shops.price_at(expected.total_costs, want.usual_margin))
     return found
 
 
 def screen(report) -> str:
+    """The results screen's HTML, as MargenX sends it to the browser (not a browser rendering)."""
     out: list[str] = []
     with mock.patch.object(ui, "_html", out.append):
         ui.results(report, mi.summarize(report), mi.attention(report), mi.period_text(report))
@@ -152,8 +153,16 @@ def screen_mismatches(seed: int) -> list[str]:
                 found.append(f"seed {seed}: on screen, job {job_id} margin: expected {margin!r}")
         if expected.sales and (f'<td>Sold for</td><td class="r">{shops.shown_money(expected.sales)}</td>' not in block):
             found.append(f"seed {seed}: on screen, job {job_id} breakdown 'Sold for' doesn't match")
+        label = {"complete": "Complete", "provisional": "Needs a check", "unavailable": "No figure yet"}[expected.status]
+        if f'<span class="mx-tag {expected.status}">{label}</span>' not in block:
+            found.append(f"seed {seed}: on screen, job {job_id} status: expected {label!r}")
+    left_out = sorted(n for n, c in want.customers.items() if c.status == "unavailable")
+    if left_out and f"Not listed, no figure yet: {', '.join(left_out)}." not in html:
+        found.append(f"seed {seed}: on screen, customers with no figure should be named: {left_out}")
     for name, expected in want.customers.items():
         if expected.status == "unavailable":
+            if any(f'<div class="n">{name}<' in b for b in blocks):
+                found.append(f"seed {seed}: on screen, customer {name} has no figure but is listed")
             continue
         block = next((b for b in blocks if f'<div class="n">{name}<' in b), None)
         if block is None:
@@ -164,7 +173,22 @@ def screen_mismatches(seed: int) -> list[str]:
                 + ("" if share is None else f"{share}% of ") + f"{shops.shown_money(expected.sales)}</div>")
         if text not in block:
             found.append(f"seed {seed}: on screen, customer {name}: expected {text!r}")
+        if ("<small>Needs a check</small>" in block) != (expected.status == "provisional"):
+            found.append(f"seed {seed}: on screen, customer {name} 'Needs a check' note doesn't match {expected.status}")
     return found
+
+
+class AccuracyCheckScriptTests(unittest.TestCase):
+    def test_script_refuses_to_check_no_shops(self):
+        import importlib.util
+        from pathlib import Path
+        path = Path(__file__).resolve().parents[1] / "scripts" / "accuracy_check.py"
+        spec = importlib.util.spec_from_file_location("accuracy_check", path)
+        script = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(script)
+        for bad in ("0", "-1", "lots"):
+            self.assertEqual(2, script.main(["accuracy_check.py", bad]), bad)
+        self.assertEqual(0, script.main(["accuracy_check.py", "3"]))
 
 
 class AccuracyTests(unittest.TestCase):
@@ -173,7 +197,7 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual([], problems[:20], f"{len(problems)} mismatches")
 
     def test_numbers_on_screen_match_the_known_answers(self):
-        problems = [p for seed in range(0, SHOPS_IN_CI, 4) for p in screen_mismatches(seed)]
+        problems = [p for seed in range(SHOPS_IN_CI) for p in screen_mismatches(seed)]
         self.assertEqual([], problems[:20], f"{len(problems)} mismatches")
 
     def test_the_generator_covers_the_cases_that_matter(self):
@@ -193,13 +217,14 @@ class AccuracyTests(unittest.TestCase):
             seen |= {"after overhead shown"} if want.after_unlinked is not None else set()
             seen |= {"usual margin"} if want.usual_margin is not None else set()
             seen |= {"$0 labor"} if any(c.kind == "Labor" and c.cents == 0 for c in shop.costs) else set()
+            seen |= {"rent on a job"} if any(c.kind == "Rent" and c.job for c in shop.costs) else set()
             seen |= {"half percent"} if any(j.contribution is not None and j.sales > 0
                                             and (j.contribution * 200) % j.sales == 0
                                             and (j.contribution * 200 // j.sales) % 2 == 1
                                             for j in want.jobs.values()) else set()
         self.assertEqual({"complete", "provisional", "unavailable", "loss", "credit", "shared", "overhead",
                           "unlinked cost", "unlinked sale", "after overhead shown", "usual margin", "$0 labor",
-                          "half percent"}, seen)
+                          "half percent", "rent on a job"}, seen)
 
     def test_demo_shop_matches_the_hand_worked_example(self):
         # The numbers worked out by hand in docs/ACCURACY.md, from the demo shop's CSV files.

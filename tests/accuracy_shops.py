@@ -101,7 +101,7 @@ def make_shop(seed: int) -> Shop:
                 cost(job, rng.choice(["Materials", "Vinyl", "Outsourced work", "Subcontractor"]),
                      rng.randint(1000, 400000))
         for _ in range(rng.choice([0, 0, 0, 1, 2])):
-            cost(job, rng.choice(["Shipping", "Equipment rent", "Merchant fees"]), rng.randint(100, 50000))
+            cost(job, rng.choice(["Shipping", "Equipment rent", "Merchant fees", "Rent"]), rng.randint(100, 50000))
         if shape < 0.06 and not any(c.job == job for c in shop.costs):
             cost(job, "Materials", rng.randint(1000, 50000))
     for _ in range(rng.choice([0, 1, 1, 2, 3])):  # rent and utilities: overhead, never a job's cost
@@ -197,7 +197,9 @@ def answer(shop: Shop) -> Answer:
         cost_lines = [c for c in shop.costs if c.job == job]
         costs = {k: 0 for k in ("labor", "materials", "outsourced", "other", "fees")}
         for c in cost_lines:
-            costs[COST_TYPES[c.kind]] += c.cents
+            # Rent or utilities recorded against a job are that job's cost (fees and overhead on the job).
+            kind = COST_TYPES[c.kind]
+            costs["fees" if kind == "overhead" else kind] += c.cents
         customers = tuple(sorted({s.party for s in sales_lines}))
         if not sales_lines or not cost_lines:
             status = "unavailable"

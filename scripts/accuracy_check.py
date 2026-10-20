@@ -21,7 +21,13 @@ from tests.test_accuracy import mismatches, screen_mismatches  # noqa: E402
 
 
 def main(argv: list[str]) -> int:
-    count = int(argv[1]) if len(argv) > 1 else 5000
+    try:
+        count = int(argv[1]) if len(argv) > 1 else 5000
+    except ValueError:
+        count = 0
+    if count < 1:
+        print("Give a number of shops of 1 or more, for example: python scripts/accuracy_check.py 5000")
+        return 2
     started = time.time()
     problems: list[str] = []
     jobs = customers = 0
@@ -36,7 +42,8 @@ def main(argv: list[str]) -> int:
         print(f"{len(problems)} differences. First ones:")
         print("\n".join(problems[:20]))
         return 1
-    print("Every figure, status and on-screen number matched the known answers.")
+    print("Every job, customer and headline figure, status and price matched the known answers, and so did the "
+          "numbers and labels in the results screen's HTML.")
     return 0
 
 
