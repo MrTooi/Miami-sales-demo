@@ -76,7 +76,8 @@ browser and compared with the known answers:
   "Sold for" line
 - every customer's amount, share and "Needs a check" note
 - the note naming customers with no figure, who must not be listed
-- the empty states: a dash, never $0, when no job has a figure or none has complete costs
+- the empty states: a dash, never $0, when no job has a figure or none has complete costs (also
+  checked on two fixed shops, plus a test that a wrongly shown $0 card or after-overhead total fails)
 - the "after overhead" line: shown with the right amount, or withheld when something is left out
 
 This checks what MargenX sends, not how a particular browser draws it. The browser checks are done
@@ -94,7 +95,7 @@ in memory, to see whether the checks notice. Each one was caught across many of 
 | Credits left out of total sales | 109 |
 | Overhead wrongly taken out of "left after job costs" | 325 |
 | Percentages rounded the wrong way at exact halves | 204 |
-| Sales with no job number ignored when deciding "Complete" | 43 |
+| Customer names never matched to sales with no job number (so those sales can't stop "Complete") | 43 |
 
 ## What this doesn't prove
 

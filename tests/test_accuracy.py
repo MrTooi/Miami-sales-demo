@@ -122,31 +122,39 @@ def screen(report) -> str:
 def screen_mismatches(seed: int) -> list[str]:
     """The numbers a shop owner reads on the results screen, against the known answers."""
     shop = shops.make_shop(seed)
-    want = shops.answer(shop)
     _, report = run_margenx(shop)
-    html = screen(report)
+    return screen_problems(screen(report), shops.answer(shop), seed)
+
+
+def card(html: str, label: str) -> str | None:
+    """The value shown on one headline card, read from that card only."""
+    found = re.search(rf'<div class="mx-metric"><div class="l">{re.escape(label)}</div><div class="v [^"]*">([^<]*)</div>',
+                      html)
+    return found.group(1) if found else None
+
+
+def screen_problems(html: str, want: shops.Answer, seed) -> list[str]:
     found: list[str] = []
 
     def expect(what, text):
         if text not in html:
             found.append(f"seed {seed}: on screen, {what}: expected to find {text!r}")
 
-    expect("Sales card", f'<div class="l">Sales</div><div class="v ">{shops.shown_money(want.total_sales)}</div>')
-    if want.jobs_with_figure:
-        expect("Left after job costs card",
-               f'<div class="l">Left after job costs</div><div class="v ">{shops.shown_money(want.left)}</div>')
-    else:  # no figure at all: a dash, never $0
-        expect("Left after job costs card", '<div class="l">Left after job costs</div><div class="v ">—</div>'
-                                            '<div class="s">No job has a figure yet</div>')
-    if want.complete_jobs:
-        expect("Jobs losing money card", f">{want.losing} of {want.complete_jobs}</div>")
-    else:
-        expect("Jobs losing money card", '<div class="l">Jobs losing money</div><div class="v ')
-        expect("Jobs losing money card (none complete)", ">—</div>")
-    if want.after_unlinked is None and (want.overhead or want.unassigned_job_costs):
-        expect("after-overhead line withheld", "A total after them isn't shown yet")
-    elif want.after_unlinked is not None and (want.overhead or want.unassigned_job_costs):
-        expect("after-overhead line", f"these files leave <b>{shops.shown_money(want.after_unlinked)}</b>")
+    def expect_card(label, value):
+        if card(html, label) != value:
+            found.append(f"seed {seed}: on screen, {label} card shows {card(html, label)!r}, expected {value!r}")
+
+    expect_card("Sales", shops.shown_money(want.total_sales))
+    # No figure at all, or no complete job: a dash on that card, never $0.
+    expect_card("Left after job costs", shops.shown_money(want.left) if want.jobs_with_figure else "—")
+    expect_card("Jobs losing money", f"{want.losing} of {want.complete_jobs}" if want.complete_jobs else "—")
+    if want.overhead or want.unassigned_job_costs:
+        if want.after_unlinked is None:
+            expect("after-overhead total withheld", "A total after them isn't shown yet")
+            if "these files leave" in html:
+                found.append(f"seed {seed}: on screen, an after-overhead total is shown though it must be withheld")
+        else:
+            expect("after-overhead line", f"these files leave <b>{shops.shown_money(want.after_unlinked)}</b>")
     blocks = re.findall(r'<details class="mx-d">(.*?)</details>', html)
     for job_id, expected in want.jobs.items():
         block = next((b for b in blocks if f"· {job_id}</small>" in b), None)
@@ -171,7 +179,11 @@ def screen_mismatches(seed: int) -> list[str]:
         if f'<span class="mx-tag {expected.status}">{label}</span>' not in block:
             found.append(f"seed {seed}: on screen, job {job_id} status: expected {label!r}")
     left_out = sorted(n for n, c in want.customers.items() if c.status == "unavailable")
-    if left_out and f"Not listed, no figure yet: {', '.join(left_out)}." not in html:
+    shown = any(c.status != "unavailable" for c in want.customers.values())
+    if not shown and "Customers, by what they leave you" in html:
+        found.append(f"seed {seed}: on screen, the customer list is shown though no customer has a figure")
+    # The customer list (and its note) appears only when at least one customer has a figure.
+    if shown and left_out and f"Not listed, no figure yet: {', '.join(left_out)}." not in html:
         found.append(f"seed {seed}: on screen, customers with no figure should be named: {left_out}")
     for name, expected in want.customers.items():
         if expected.status == "unavailable":
@@ -239,6 +251,42 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual({"complete", "provisional", "unavailable", "loss", "credit", "shared", "overhead",
                           "unlinked cost", "unlinked sale", "after overhead shown", "usual margin", "$0 labor",
                           "half percent", "rent on a job"}, seen)
+
+    def test_empty_states_on_fixed_shops(self):
+        L = shops.Line
+        # No job has a figure: J-1 has sales but no costs. Rent has no job number.
+        none = shops.Shop(1, sales=[L("I-1", 5, "A (fictional)", "J-1", "Banner", 50000)],
+                          costs=[L("B-1", 5, "Landlord (fictional)", "", "Rent", 100000)])
+        # No job is complete: J-2 has no labor, J-1 has no costs, so the total after rent is withheld too.
+        incomplete = shops.Shop(2, sales=[L("I-1", 5, "A (fictional)", "J-1", "Banner", 50000),
+                                          L("I-2", 6, "B (fictional)", "J-2", "Signs", 80000)],
+                                costs=[L("B-1", 6, "Supply (fictional)", "J-2", "Materials", 30000),
+                                       L("B-2", 7, "Landlord (fictional)", "", "Rent", 100000)])
+        for shop in (none, incomplete):
+            want = shops.answer(shop)
+            html = screen(run_margenx(shop)[1])
+            self.assertEqual([], screen_problems(html, want, shop.seed))
+            self.assertEqual("—", card(html, "Jobs losing money"))
+            self.assertNotIn("these files leave", html)
+        self.assertEqual("—", card(screen(run_margenx(none)[1]), "Left after job costs"))
+        self.assertEqual(("$500", 1, 0), (card(screen(run_margenx(incomplete)[1]), "Left after job costs"),
+                                          shops.answer(incomplete).jobs_with_figure,
+                                          shops.answer(incomplete).complete_jobs))
+
+    def test_screen_check_catches_a_wrong_card_or_an_exposed_total(self):
+        L = shops.Line
+        shop = shops.Shop(3, sales=[L("I-1", 5, "A (fictional)", "J-1", "Banner", 50000),
+                                    L("I-2", 6, "B (fictional)", "J-2", "Signs", 80000)],
+                          costs=[L("B-1", 6, "Supply (fictional)", "J-2", "Materials", 30000),
+                                 L("B-2", 7, "Landlord (fictional)", "", "Rent", 100000)])
+        want = shops.answer(shop)
+        html = screen(run_margenx(shop)[1])
+        self.assertEqual([], screen_problems(html, want, 3))
+        zero_card = re.sub(r'(<div class="l">Jobs losing money</div><div class="v [^"]*">)—(</div>)', r"\g<1>$0\2", html)
+        self.assertNotEqual(html, zero_card)
+        self.assertTrue(any("Jobs losing money card" in p for p in screen_problems(zero_card, want, 3)))
+        exposed = html + '<div class="mx-after"><div>After the costs, these files leave <b>-$500</b></div></div>'
+        self.assertTrue(any("must be withheld" in p for p in screen_problems(exposed, want, 3)))
 
     def test_demo_shop_matches_the_hand_worked_example(self):
         # The numbers worked out by hand in docs/ACCURACY.md, from the demo shop's CSV files.

@@ -63,7 +63,8 @@ MUTATIONS = {
     "Overhead wrongly taken out of \"left after job costs\"": [mock.patch.object(mi, "summarize", _overhead_out_of_left)],
     "Percentages rounded the wrong way at exact halves":
         [mock.patch.object(mi, "percent", _half_even), mock.patch.object(ui, "percent", _half_even)],
-    "Sales with no job number ignored when deciding \"Complete\"":
+    # Breaks name matching as a whole, which the "sales with no job number" rule depends on.
+    "Customer names never matched to sales with no job number":
         [mock.patch.object(jp, "_fold", lambda name: f"{_fold(name)}#{next(_unique)}")],
 }
 
