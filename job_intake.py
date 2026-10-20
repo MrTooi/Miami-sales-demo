@@ -155,10 +155,14 @@ SALES_ACCOUNT_PARENTS = {"income", "revenue", "sales", "other income", "sales in
 EXPENSE_ACCOUNT_WORDS = {"tax", "taxes", "expense", "expenses", "cost", "costs", "commission", "commissions",
                          "marketing", "promotion", "promotions", "travel", "salaries", "wages"}
 # Words of balance-sheet accounts: buying stock, owing money or holding cash is not spending it
-# on a job ("Inventory Asset", "Sales Tax Payable", "Accounts Payable", "Undeposited Funds").
+# on a job ("Inventory Asset", "Sales Tax Payable", "Accounts Payable", "Undeposited Funds",
+# "Cash", "Checking", "Savings", "Petty Cash").
 BALANCE_SHEET_WORDS = {"asset", "assets", "payable", "payables", "receivable", "receivables", "undeposited",
                        "liability", "liabilities", "equity", "loan", "loans", "prepaid", "accrued", "deferred",
-                       "accumulated"}
+                       "accumulated", "cash", "checking", "savings", "petty"}
+# Inventory names, and the parent-account words that make them a cost ("Cost of Goods Sold:Inventory").
+INVENTORY_TYPES = {"inventory", "inventory purchases", "stock", "stock purchases"}
+COST_PARENT_WORDS = {"cost", "costs", "cogs", "expense", "expenses"}
 
 
 def _is_income_account(name: str) -> bool:
@@ -590,10 +594,17 @@ def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict
             if any(_is_income_account(part) or set(part.split()) & (BALANCE_SHEET_WORDS | NON_POSTING_WORDS)
                    for part in parts):
                 return cells[i].strip()
-            if name in FEE_TYPES or name in CARD_CHARGE_TYPES:
-                continue
-            if (name in CASH_MOVEMENT_TYPES or name in SALES_DOCUMENT_TYPES
-                    or set(name.split()) & (SUSPECT_COST_TYPE_WORDS | NON_POSTING_WORDS)):
+            # Money-moving, bank or credit words are checked in every part too ("Transfer:Materials"),
+            # except a part that is itself a known fee or card charge ("Operating Expenses:Bank fees").
+            if any(part in CASH_MOVEMENT_TYPES or (set(part.split()) & SUSPECT_COST_TYPE_WORDS
+                                                   and part not in FEE_TYPES and part not in CARD_CHARGE_TYPES)
+                   for part in parts):
+                return cells[i].strip()
+            if name in SALES_DOCUMENT_TYPES:
+                return cells[i].strip()
+            # Bare "Inventory" may be stock still on the shelf (an asset), not used on a job: it
+            # counts only under a cost account ("Cost of Goods Sold:Inventory").
+            if name in INVENTORY_TYPES and not any(set(part.split()) & COST_PARENT_WORDS for part in parts[:-1]):
                 return cells[i].strip()
         elif _norm(h) in TYPE_HEADERS and text not in allowed:
             return cells[i].strip() or "(blank)"

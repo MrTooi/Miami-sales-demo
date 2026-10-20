@@ -53,7 +53,7 @@ FEE_OVERHEAD_TYPES = {
 # processing" never confirm materials: they are subtracted as "other" and can't make a job complete.
 MATERIAL_TYPES = {
     "materials", "material", "supplies", "job supplies", "job materials", "materials and supplies",
-    "supplies and materials", "inventory", "printing supplies", "production materials", "raw materials",
+    "supplies and materials", "printing supplies", "production materials", "raw materials",
     "substrates", "blanks", "ink", "vinyl", "paper", "media", "cost of materials", "materials cost",
 }
 OUTSOURCED_TYPES = {

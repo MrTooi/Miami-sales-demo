@@ -605,7 +605,7 @@ class CompletenessTests(unittest.TestCase):
                 self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")  # never $10 Complete
                 self.assertEqual(Decimal("50.00"), report.jobs[0].total_costs)
         for label in (b"Cost of Goods Sold:Materials", b"Equipment rental", b"Sales commissions",
-                      b"Sales tax expense", b"Cost of sales", b"Inventory"):
+                      b"Sales tax expense", b"Cost of sales", b"Cost of Goods Sold:Inventory"):
             with self.subTest(label=label):
                 report = self.report(self.LINKED + b"B-3,10/01/2026,Paper Co,J-1," + label + b",40.00\n", self.SALES)
                 self.assertEqual(Decimal("90.00"), report.jobs[0].total_costs)  # a real cost, subtracted
@@ -624,6 +624,24 @@ class CompletenessTests(unittest.TestCase):
                 self.assertEqual(("provisional", Decimal("50.00")), (job.status, job.contribution))  # never Complete
                 self.assertIn("with no job number that may belong to this job", " ".join(job.reasons))
                 self.assertEqual(Decimal("-20.00"), report.unlinked_sales)  # disclosed, never merged or allocated
+
+    def test_inventory_cash_and_bank_accounts_are_never_job_costs(self):
+        for label in (b"Inventory", b"Stock", b"Cash", b"Checking", b"Savings", b"Petty Cash",
+                      b"Transfer:Materials", b"Bank:Materials"):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/01/2026,Paper Co,J-1," + label + b",40.00\n", self.SALES)
+                self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")  # never $10 Complete
+                self.assertEqual(Decimal("50.00"), report.jobs[0].total_costs)
+        # Real costs still count: inventory under a cost account, a fee under an expense parent, and a
+        # cash-paid expense whose category is set separately.
+        for label in (b"Cost of Goods Sold:Inventory", b"Operating Expenses:Bank fees", b"Merchant fees"):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/01/2026,Paper Co,J-1," + label + b",40.00\n", self.SALES)
+                self.assertEqual(Decimal("90.00"), report.jobs[0].total_costs)
+        report = self.report(b"Bill,Date,Vendor,Job,Transaction Type,Category,Amount\n"
+                             b"B-1,10/01/2026,Crew,J-1,Expense,Labor,20.00\nB-2,10/01/2026,Paper Co,J-1,Cash expense,Materials,30.00\n",
+                             self.SALES)
+        self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "complete")
 
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
