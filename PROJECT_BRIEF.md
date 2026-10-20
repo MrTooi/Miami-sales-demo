@@ -59,7 +59,7 @@ Existing modules include:
 - `transaction_integrity.py` — transaction kinds, identity, deduplication, and movement-vs-revenue semantics.
 - `ledger_store.py` — SQLite prototype persistence, import batches, conflicts, reconciliation links.
 - `app_ledger.py` — app-to-integrity helper layer.
-- `app.py` — Streamlit prototype dashboard.
+- `app.py` — app entry point: opens only the MargenX page (the older Ledger dashboard screen was retired on 2026-10-20).
 
 The public demo is a prototype and is not suitable for confidential customer data.
 

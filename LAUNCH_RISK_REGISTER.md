@@ -56,8 +56,8 @@
 6. If no trustworthy records exist, **do not offer verified profitability or job-margin features**.
 
 ## Specific code changes to prioritize
-- `app.py`: prohibit confidential uploads in demo; add coverage/completeness confirmation and unavailable profit states; use exact Decimal monthly grouping.
-- `app.py` import reader: read money fields as text to avoid binary floating-point round trips.
+- ~~`app.py`: prohibit confidential uploads in demo; add coverage/completeness confirmation and unavailable profit states; use exact Decimal monthly grouping.~~ Closed 2026-10-20: the older Ledger screen in `app.py` was retired; `app.py` now opens only the MargenX page.
+- ~~`app.py` import reader: read money fields as text to avoid binary floating-point round trips.~~ Closed with the same change (MargenX's intake reads money as text).
 - `data_pipeline.py`: add source namespace, currency, timezone, external ID and validation reporting.
 - `finance_engine.py`: require a completeness flag for verified profit; distinguish provisional vs verified calculations.
 - New storage layer: tenant ID, canonical records, immutable source references, import batches and idempotency keys.

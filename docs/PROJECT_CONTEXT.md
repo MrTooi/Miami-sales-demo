@@ -63,7 +63,7 @@ Verify against the code before relying on this.
 | `transaction_integrity.py` | Transaction kinds, identity, dedup, movement-vs-revenue semantics |
 | `ledger_store.py` | SQLite prototype persistence, import batches, conflicts, reconciliation links |
 | `app_ledger.py` | App-to-integrity helper layer |
-| `app.py` | Streamlit prototype (demo tabs: Overview, Costs, Transactions, Data health) |
+| `app.py` | App entry point: opens only the MargenX page. The older Ledger dashboard (Overview, Costs, Transactions, Data health tabs) was retired on 2026-10-20. |
 | `opportunity_radar/` | Models and deterministic scoring |
 | `agent_operator/` | Agent OS: claim, scope guard, lifecycle, review gate, recovery |
 | `agent_evals/` | Agent capability benchmark |

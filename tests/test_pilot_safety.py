@@ -93,8 +93,8 @@ class UploadReleaseTests(unittest.TestCase):
         self.assertIn("streamlit==1.65.0", (ROOT / "requirements.txt").read_text(encoding="utf-8"))
 
 
-class LegacyAppTests(unittest.TestCase):
-    """The older Ledger demo (app.py) can't take real files around the pilot gate."""
+class MainEntryPointTests(unittest.TestCase):
+    """app.py opens only the MargenX page; the older Ledger screen (uploads kept in SQLite) is retired."""
 
     def run_app(self, environ):
         with mock.patch.dict("os.environ", environ):
@@ -105,20 +105,24 @@ class LegacyAppTests(unittest.TestCase):
     def ledger_dbs(self):
         return {p.name for p in Path(tempfile.gettempdir()).glob("ledger-*.db")}
 
-    def test_pilot_mode_turns_the_legacy_app_off_and_creates_no_database(self):
-        before = self.ledger_dbs()
-        at = self.run_app({"MARGINX_PILOT": "1"})
-        self.assertFalse(at.exception, at.exception)
-        self.assertTrue(any("turned off during pilot sessions" in e.value for e in at.error))
-        self.assertEqual(0, len(at.get("file_uploader")))
-        self.assertEqual(before, self.ledger_dbs())
+    def test_app_opens_only_margenx_and_creates_no_database(self):
+        source = (ROOT / "app.py").read_text(encoding="utf-8")
+        self.assertEqual(1, source.count("st.Page("))
+        self.assertIn('"pages/1_MargenX_Import.py"', source)
+        for pilot in ("0", "1"):
+            before = self.ledger_dbs()
+            at = self.run_app({"MARGINX_PILOT": pilot})
+            self.assertFalse(at.exception, at.exception)
+            page = " ".join(m.value for m in at.markdown)
+            self.assertIn("Margen<b>X</b>", page)
+            self.assertNotIn("ledger", page.lower())
+            self.assertEqual(before, self.ledger_dbs())
 
-    def test_outside_pilot_mode_legacy_uploads_need_the_made_up_box(self):
-        at = self.run_app({"MARGINX_PILOT": "0"})
-        self.assertFalse(at.exception, at.exception)
-        self.assertEqual(0, len(at.get("file_uploader")))
-        next(c for c in at.checkbox if c.label == ps.MADE_UP_TEXT).check().run()
-        self.assertGreaterEqual(len(at.get("file_uploader")), 2)
+    def test_the_old_ledger_screen_is_gone(self):
+        self.assertFalse((ROOT / "ui_theme.py").exists())
+        source = (ROOT / "app.py").read_text(encoding="utf-8")
+        for old in ("LedgerStore", "file_uploader", "sqlite", "ui_theme"):
+            self.assertNotIn(old, source)
 
 
 class PilotEntryPointTests(unittest.TestCase):
@@ -176,9 +180,10 @@ class SafeSettingsTests(unittest.TestCase):
 
     def test_marginx_code_never_writes_files_or_logs_contents(self):
         root = Path(__file__).resolve().parents[1]
-        for name in ("job_intake.py", "job_profit.py", "pilot_safety.py", "pages/1_MargenX_Import.py", "marginx_pilot.py"):
+        for name in ("job_intake.py", "job_profit.py", "pilot_safety.py", "pages/1_MargenX_Import.py", "marginx_pilot.py",
+                     "app.py"):
             source = (root / name).read_text(encoding="utf-8")
-            # A guard against obvious regressions, not proof: app.py's demo storage is covered by LegacyAppTests.
+            # A guard against obvious regressions, not proof.
             for forbidden in ("open(", "write_text", "write_bytes", "to_csv", "sqlite", "logging", "print("):
                 self.assertNotIn(forbidden, source, f"{name} uses {forbidden}")
 

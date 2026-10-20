@@ -8,15 +8,12 @@ APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 
 
 class AppSmokeTests(unittest.TestCase):
-    def test_demo_app_runs_without_uncaught_exception(self):
-        app = AppTest.from_file(str(APP_PATH), default_timeout=15).run()
+    def test_app_opens_the_margenx_page_without_errors(self):
+        app = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
         self.assertEqual(list(app.exception), [])
-        self.assertGreaterEqual(len(app.metric), 4)
-        labels = [metric.label for metric in app.metric]
-        self.assertIn("NET REVENUE", labels)
-        self.assertIn("GROSS PROFIT", labels)
-        self.assertIn("OPERATING PROFIT", labels)
-        self.assertIn("REFUNDS", labels)
+        page = " ".join(m.value for m in app.markdown)
+        self.assertIn("Margen<b>X</b>", page)
+        self.assertIn("Here's where your money was made", page)  # the demo shop's results
 
 
 if __name__ == "__main__":
