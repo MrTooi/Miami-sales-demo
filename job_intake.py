@@ -10,12 +10,14 @@ only; it does not calculate profit (build step 3, docs/MVP_SPEC.md).
 from __future__ import annotations
 
 import csv
+import functools
 import io
 import re
 import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from decimal import Decimal
 
 from finance_engine import money
 
@@ -226,9 +228,10 @@ class IntakeResult:
     rejected: list[dict] = field(default_factory=list)
     mapped_fields: tuple[str, ...] = ()
     headers: tuple[str, ...] = ()
-    # Report layout lines that are clearly not a sale or cost: a total row ("Total for Bakery",
-    # "TOTAL") or a lone heading or note. Listed with their reason, never counted, and never
-    # treated as missing money. {"row": n, "cells": original cells, "reason": ...}
+    # Report layout lines proven not to be a sale or cost (_layout_rows): a total row that equals
+    # the rows above it, a heading closed by its own total, and the report's footer. Listed with
+    # their reason, never counted, and never treated as missing money.
+    # {"row": n, "cells": original cells, "reason": ...}
     skipped: list[dict] = field(default_factory=list)
 
 
@@ -360,15 +363,18 @@ def _looks_like_data(text: str) -> bool:
 def _xlsx_rows(data: bytes) -> list[tuple[int, list[str]]]:
     """Every non-empty row of an Excel file's only sheet, as text, with its Excel row number.
 
-    Numbers never pass through floating-point arithmetic: a number cell is written as the
-    shortest text that reads back as the same stored value (what Excel shows unformatted), and
-    then checked by the same strict money and date rules as a CSV. A value with more than two
-    decimals is refused, never rounded. A formula with no saved result reads as blank.
+    Numbers never pass through floating-point arithmetic: a number cell is read as the exact
+    text stored in the file, then checked by the same strict money and date rules as a CSV. A
+    value with more than two decimals is refused, never rounded. A formula with no saved result,
+    or a cell showing an error (#REF!, #N/A ...), refuses the whole file: its value isn't known,
+    so it is never read as blank.
     """
     if len(data) > MAX_FILE_BYTES:
         raise IntakeError(f"File is larger than {MAX_FILE_BYTES // 1_000_000} MB; split it or contact us.")
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            # Python's zip reader also stops at each part's stated size, so a part can't unpack
+            # to more than this by under-stating its size.
             if sum(info.file_size for info in archive.infolist()) > MAX_XLSX_UNPACKED_BYTES:
                 raise IntakeError("This Excel file unpacks to more than 50 MB. Export a shorter date range.")
         from openpyxl import load_workbook
@@ -379,24 +385,33 @@ def _xlsx_rows(data: bytes) -> list[tuple[int, list[str]]]:
     except Exception as exc:
         raise IntakeError("This Excel file can't be opened. Export it again as Excel (.xlsx) or as CSV.") from exc
     try:
-        sheets = [sheet for sheet in book.worksheets if sheet.max_row and sheet.max_row > 0]
         filled = []
-        for sheet in sheets:
+        for sheet in book.worksheets:
             rows = []
-            for number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
-                if number > MAX_ROWS:
-                    raise IntakeError(f"This Excel file has more than {MAX_ROWS:,} rows. Export a shorter date range.")
-                if len(row) > MAX_COLUMNS:
-                    if any(v not in (None, "") for v in row[MAX_COLUMNS:]):
-                        raise IntakeError(f"This Excel file has more than {MAX_COLUMNS} columns.")
-                    row = row[:MAX_COLUMNS]
-                cells = [_cell_text(v) for v in row]
-                while cells and not cells[-1].strip():
-                    cells.pop()
-                if cells:
-                    rows.append((number, cells))
+            with sheet._get_source() as source:
+                parser = _exact_cell_parser()(source, sheet._shared_strings, data_only=True, epoch=book.epoch,
+                                              date_formats=book._date_formats, timedelta_formats=book._timedelta_formats)
+                for number, row in parser.parse():
+                    if number > MAX_ROWS:
+                        raise IntakeError(f"This Excel file has more than {MAX_ROWS:,} rows. Export a shorter date range.")
+                    values = {}
+                    for cell in row:
+                        if cell["value"] in (None, ""):
+                            continue
+                        if cell["column"] > MAX_COLUMNS:
+                            raise IntakeError(f"This Excel file has more than {MAX_COLUMNS} columns.")
+                        values[cell["column"]] = _cell_text(cell["value"], f"{_column_letter(cell['column'] - 1)}{number}")
+                    cells = [values.get(column, "") for column in range(1, max(values, default=0) + 1)]
+                    while cells and not cells[-1].strip():
+                        cells.pop()
+                    if cells:
+                        rows.append((number, cells))
             if rows:
                 filled.append(rows)
+    except IntakeError:
+        raise
+    except Exception as exc:
+        raise IntakeError("This Excel file can't be opened. Export it again as Excel (.xlsx) or as CSV.") from exc
     finally:
         book.close()
     if not filled:
@@ -408,28 +423,56 @@ def _xlsx_rows(data: bytes) -> list[tuple[int, list[str]]]:
     return [(number, cells + [""] * (width - len(cells))) for number, cells in filled[0]]
 
 
-def _cell_text(value) -> str:
-    """One Excel cell as text, without rounding. Dates become YYYY-MM-DD (never ambiguous)."""
-    from datetime import date as date_type, datetime as datetime_type
-    from decimal import Decimal
+class _Unavailable(str):
+    """A cell whose value isn't in the file: a formula never calculated, or an error like #REF!."""
 
-    if value is None:
-        return ""
+
+@functools.cache
+def _exact_cell_parser():
+    from openpyxl.worksheet._reader import WorkSheetParser
+    from openpyxl.xml.constants import SHEET_MAIN_NS
+
+    formula_tag, value_tag = f"{{{SHEET_MAIN_NS}}}f", f"{{{SHEET_MAIN_NS}}}v"
+
+    class ExactCellParser(WorkSheetParser):
+        """openpyxl's sheet reader, except that a number keeps the exact text stored in the file
+        (openpyxl turns it into a binary float) and a missing formula result or an error is kept
+        visible instead of reading as blank."""
+
+        def parse_cell(self, element):
+            cell = super().parse_cell(element)
+            if element.find(formula_tag) is not None and element.find(value_tag) is None:
+                cell["value"] = _Unavailable("a formula with no saved result")
+            elif cell["data_type"] == "e":
+                cell["value"] = _Unavailable(f"an error ({cell['value']})")
+            elif cell["data_type"] == "n" and cell["value"] is not None:
+                cell["value"] = Decimal(element.findtext(value_tag).strip())
+            return cell
+
+    return ExactCellParser
+
+
+def _cell_text(value, where: str = "") -> str:
+    """One Excel cell as text, without rounding. Dates become YYYY-MM-DD (never ambiguous)."""
+    if isinstance(value, _Unavailable):
+        raise IntakeError(f"Cell {where} holds {value}, so its value isn't known. Open the file in Excel, check "
+                          "that cell and save it again (Excel saves every formula's result), or export it as CSV.")
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
     if isinstance(value, int):
         return str(value)
-    if isinstance(value, float):
-        # repr gives the shortest text that reads back as exactly this stored value, so 1234.5
-        # stays "1234.5" and a value like 0.30000000000000004 stays visible and is refused.
-        return repr(value) if not value.is_integer() else str(int(value))
     if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, datetime_type):
+        if not value.is_finite():
+            raise IntakeError(f"Cell {where} holds '{value}', which isn't a number Excel can show.")
+        return format(value, "f")  # the stored digits exactly: 1.2345E3 -> "1234.5", 12.50 stays "12.50"
+    if isinstance(value, float):
+        # Numbers are read as Decimal above; a float here would already be rounded, so it is refused.
+        raise IntakeError(f"Cell {where} couldn't be read exactly. Export the file as CSV instead.")
+    if isinstance(value, datetime):
         if (value.hour, value.minute, value.second, value.microsecond) != (0, 0, 0, 0):
             return value.isoformat(sep=" ")  # a time of day isn't a date: refused by the date check
         return value.date().isoformat()
-    if isinstance(value, date_type):
+    if isinstance(value, date):
         return value.isoformat()
     return str(value)
 
@@ -685,6 +728,7 @@ def amount_scope_question(headers: list[str], records: list[Record], mapping: di
     amount = mapping.get("amount")
     if not amount or _norm(amount) in LINE_AMOUNTS or is_document_total(amount):
         return None
+    records = _without_layout(headers, records, mapping)
     index = {f: headers.index(h) for f, h in mapping.items() if h and h in headers}
     # Exact duplicate rows are rejected anyway, so they don't make a document multi-line.
     amounts: dict[tuple[str, ...], list] = {}
@@ -806,41 +850,96 @@ def _summary_label(cells: tuple[str, ...], headers: list[str], mapping: dict[str
     return None
 
 
-# A report's total row: "TOTAL", "Total", or "Total for Coastal Bakery". Only when it is the row's first
-# filled cell and the row has no date: a real line always has a date.
-TOTAL_ROW = re.compile(r"(?i)^total(\s+for\b.*)?:?$")
+# A report's total row says "TOTAL", "Total", or "Total for Coastal Bakery" in its first filled cell.
+TOTAL_ROW = re.compile(r"(?i)^total(?:\s+for\s+(?P<group>.+?))?:?$")
+# The footer accounting reports end with, such as "Accrual basis Tuesday, October 20, 2026 10:00 AM".
+FOOTER_ROW = re.compile(r"(?i)^(?:accrual|cash)\s+basis\b")
 
 
-def _layout_row(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]) -> str | None:
-    """Why this row is part of a report's layout and not a sale or cost, or None.
+def _total_row(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]):
+    """(label, group, amount) when the row is shaped like a report's total row, else None.
 
-    Only two kinds, both unable to hold a line of their own: a total row (its first filled cell
-    says "Total" or "Total for ...", and it has no date) and a lone heading or note (exactly one
-    filled cell, with no amount). Every other row is checked as usual.
+    The shape alone is never enough to skip it: its first filled cell says "Total" or "Total for
+    ...", it has no date, every other filled cell is a number (no customer, job or invoice), and
+    its amount is filled. _layout_rows then checks that the amount equals the rows above it.
     """
     filled = [c.strip() for c in cells if c.strip()]
-    if not filled:
+    label = TOTAL_ROW.match(filled[0]) if filled else None
+    if not label or len(cells) != len(headers) or mapping.get("amount") not in headers:
         return None
+    if mapping.get("date") in headers and cells[headers.index(mapping["date"])].strip():
+        return None
+    try:
+        amount = money(cells[headers.index(mapping["amount"])].strip())
+        for other in filled[1:]:
+            money(other)
+    except ValueError:
+        return None
+    return filled[0], label.group("group"), amount
 
-    def cell(field_name):
-        header = mapping.get(field_name)
-        if header not in headers:
-            return ""
-        i = headers.index(header)
-        return cells[i].strip() if i < len(cells) else ""
 
-    if TOTAL_ROW.match(filled[0]) and not cell("date"):
-        return f"A total row ('{filled[0]}'): it adds up the lines above it, which are counted instead."
-    if len(filled) == 1 and not cell("amount"):
-        return f"A heading or note ('{filled[0]}'), not a sale or cost."
-    return None
+def _layout_rows(headers: list[str], records: list[Record], mapping: dict[str, str | None]) -> dict[int, str]:
+    """Rows of a report's layout that are not a sale or cost, by row number, with the reason.
+
+    A row is skipped only with proof that it holds no line of its own:
+    - a total row (see _total_row) whose amount equals the sum of the rows directly above it,
+      back to the start of the file or to a heading or total row. "Total for X" below a heading
+      "X" must equal exactly the rows under that heading.
+    - a heading: a row with one filled cell and no amount, closed by such a "Total for <its text>".
+    - the report's footer ("Accrual basis ..." or "Cash basis ..."), alone on the file's last row.
+    Every other row, including one that only looks like a total or heading, is checked as usual,
+    so anything unclear is rejected and counted as possibly missing money, never skipped.
+    """
+    if mapping.get("amount") not in headers:
+        return {}
+    amount_at = headers.index(mapping["amount"])
+    layout: dict[int, str] = {}
+    running = Decimal(0)  # the sum of every row's amount so far (layout rows aren't added)
+    # The running sum at each place a total may start from: the file's start, and just after
+    # each heading or total row. Cleared by a row whose amount can't be read, since a total
+    # spanning that row can't be checked.
+    starts = {running}
+    headings: dict[str, tuple[int, Decimal]] = {}  # open heading text -> (row, running sum there)
+    for position, rec in enumerate(records):
+        cells = rec.cells
+        total = _total_row(cells, headers, mapping)
+        if total:
+            label, group, amount = total
+            heading = headings.pop(group, None) if group else None
+            if (running - heading[1] == amount) if heading else (running - amount in starts):
+                layout[rec.row] = f"A total row ('{label}'): it equals the rows above it, which are counted instead."
+                if heading:
+                    layout[heading[0]] = f"A heading ('{group}'), closed by the total row on row {rec.row}."
+                starts.add(running)
+                continue
+        filled = [c.strip() for c in cells if c.strip()]
+        if len(cells) == len(headers) and len(filled) == 1 and not cells[amount_at].strip():
+            if FOOTER_ROW.match(filled[0]) and position == len(records) - 1:
+                layout[rec.row] = f"The report's footer ('{filled[0]}'), not a sale or cost."
+            else:
+                headings[filled[0]] = (rec.row, running)
+                starts.add(running)
+            continue
+        try:
+            if len(cells) != len(headers):
+                raise ValueError("a row of the wrong width")
+            running += money(cells[amount_at].strip()) if cells[amount_at].strip() else Decimal(0)
+        except ValueError:
+            starts.clear()
+            headings.clear()
+    return layout
+
+
+def _without_layout(headers: list[str], records: list[Record], mapping: dict[str, str | None]) -> list[Record]:
+    layout = _layout_rows(headers, records, mapping)
+    return [r for r in records if r.row not in layout]
 
 
 def _is_line(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]) -> bool:
-    """False for rows rejected or skipped on their own (payments/transfers, labeled subtotals, a
-    report's total and heading rows), which therefore don't make a document multi-line."""
-    return not (_cash_movement_type(cells, headers, mapping) or _summary_label(cells, headers, mapping)
-                or _layout_row(cells, headers, mapping))
+    """False for rows rejected on their own (payments/transfers, labeled subtotals), which
+    therefore don't make a document multi-line. A report's total and heading rows are taken
+    out before this is asked (_without_layout)."""
+    return not (_cash_movement_type(cells, headers, mapping) or _summary_label(cells, headers, mapping))
 
 
 def _per_document_amounts(mapping: dict[str, str | None], question: dict | None, amount_scope: str | None) -> bool:
@@ -859,6 +958,7 @@ def subtotal_questions(headers: list[str], records: list[Record], mapping: dict[
     """
     if _per_document_amounts(mapping, amount_scope_question(headers, records, mapping, kind), amount_scope):
         return []
+    records = _without_layout(headers, records, mapping)
     return [{"row": row, "label": _label(key, kind), "amount": text}
             for row, (key, text) in _subtotal_rows(headers, records, mapping, kind).items()]
 
@@ -875,8 +975,7 @@ def _subtotal_rows(headers: list[str], records: list[Record], mapping: dict[str,
         seen.add(r.cells)
         # Labeled summary rows and cash movements are rejected on their own, so they are
         # neither asked about nor counted among a document's lines.
-        if (_summary_label(r.cells, headers, mapping) or _cash_movement_type(r.cells, headers, mapping)
-                or _layout_row(r.cells, headers, mapping)):
+        if _summary_label(r.cells, headers, mapping) or _cash_movement_type(r.cells, headers, mapping):
             continue
         values = {f: r.cells[i].strip() for f, i in index.items()}
         key = _possible_document_key(values, kind)
@@ -920,6 +1019,10 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
     index = {f: headers.index(h) for f, h in mapping.items() if h}
     result = IntakeResult(kind=kind, total_rows=len(records), mapped_fields=tuple(index), headers=tuple(headers))
     seen_rows: dict[tuple[str, ...], int] = {}
+    # A report's proven total, heading and footer rows are listed as skipped; everything below
+    # works on the other rows only.
+    layout = _layout_rows(headers, records, mapping)
+    lines = [r for r in records if r.row not in layout]
     # A whole-document total on a document with several lines would be counted once
     # per line, so those lines are rejected until a line amount column is chosen.
     # A column named as a document total groups by invoice or bill number; the owner's
@@ -928,14 +1031,14 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
     answered_total = question is not None and amount_scope == "document"
     key_of = _possible_document_key if answered_total and not total_header else _document_key
     per_document = total_header or answered_total
-    lines_per_document = _lines_per_document(headers, records, mapping, kind, key_of) if per_document else Counter()
+    lines_per_document = _lines_per_document(headers, lines, mapping, kind, key_of) if per_document else Counter()
     types = _type_columns(headers, mapping)
-    all_lines = _lines_per_document(headers, records, mapping, kind, _possible_document_key)
+    all_lines = _lines_per_document(headers, lines, mapping, kind, _possible_document_key)
     summaries = Counter(_possible_document_key({f: r.cells[i].strip() for f, i in index.items()}, kind)
-                        for r in records if len(r.cells) == len(headers) and _summary_label(r.cells, headers, mapping))
-    per_day = _lines_per_vendor_day(headers, records, mapping) if answered_total and kind == "costs" else Counter()
+                        for r in lines if len(r.cells) == len(headers) and _summary_label(r.cells, headers, mapping))
+    per_day = _lines_per_vendor_day(headers, lines, mapping) if answered_total and kind == "costs" else Counter()
     entity = "Invoice" if kind == "invoices" else "Bill"
-    candidates = {} if _per_document_amounts(mapping, question, amount_scope) else _subtotal_rows(headers, records, mapping, kind)
+    candidates = {} if _per_document_amounts(mapping, question, amount_scope) else _subtotal_rows(headers, lines, mapping, kind)
     subtotals = subtotals or {}
     unanswered = [row for row in candidates if row not in subtotals]
     if unanswered:
@@ -943,9 +1046,8 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
 
     for rec in records:
         number = rec.row
-        layout = _layout_row(rec.cells, headers, mapping)
-        if layout:
-            result.skipped.append({"row": number, "cells": rec.cells, "reason": layout})
+        if number in layout:
+            result.skipped.append({"row": number, "cells": rec.cells, "reason": layout[number]})
             continue
         if len(rec.cells) != len(headers):
             result.rejected.append({"row": number, "cells": rec.cells, "values": {}, "money_missing": True,
@@ -966,6 +1068,10 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             except ValueError:
                 reasons.append(f"Amount '{values['amount']}' isn't a valid dollar amount (written like 1,234.56: "
                                "commas only between thousands, max 2 decimals). '12,50' isn't read as 12.50 or 1,250.")
+        total = _total_row(rec.cells, headers, mapping)
+        if total:
+            reasons.append(f"Looks like a total row ('{total[0]}'), but its amount doesn't equal the rows above "
+                           "it, so it can't safely be left out. Check the rows it adds up.")
         if kind == "costs" and amount is not None and amount < 0:
             reasons.append("Cost is negative; record refunds or credits separately.")
         document = key_of(values, kind)
