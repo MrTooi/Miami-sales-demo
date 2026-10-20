@@ -1,4 +1,4 @@
-# MarginX: follow-ups before real export files
+# MargenX: follow-ups before real export files
 
 **Status:** open. These items are deferred under D-005. They must be resolved, or each one explicitly accepted by the owner, **before any real customer data is used** (D-003, step 3).
 

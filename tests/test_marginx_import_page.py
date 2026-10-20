@@ -4,7 +4,7 @@ import unittest
 
 from streamlit.testing.v1 import AppTest
 
-PAGE = str(Path(__file__).resolve().parents[1] / "pages" / "1_MarginX_Import.py")
+PAGE = str(Path(__file__).resolve().parents[1] / "pages" / "1_MargenX_Import.py")
 INVOICE_DATE_QUESTION = "In fictional_invoices.csv, what date is 10/01/2026?"
 SAMPLE_AMOUNT_QUESTION = "In fictional_invoices.csv, invoice FIC-1002 has 2 lines. What is 'Total' on each line?"
 
@@ -29,7 +29,7 @@ def run_source(source):
     return at
 
 
-class MarginXImportPageTests(unittest.TestCase):
+class MargenXImportPageTests(unittest.TestCase):
     def run_page(self, sample_set="test"):
         """The page on the made-up files; most tests use the messy test set, which asks questions."""
         at = AppTest.from_file(PAGE, default_timeout=30)

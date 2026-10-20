@@ -1,4 +1,4 @@
-# MarginX shop conversation guide (one page)
+# MargenX shop conversation guide (one page)
 
 For Alex and Abrey. Use it for **15–20 minute conversations** with owners or managers of small Miami print, sign and apparel shops (2–15 people). These are conversations only: **no files, no photos of screens, no taking their data.**
 
@@ -52,7 +52,7 @@ Use the issue #30 format. **Keep what they said separate from what you think it 
 | Software | QuickBooks Online; job no. on invoices only |
 | Pilot? | Yes / no / maybe, and when |
 | Would pay? | Their number, or "didn't say" |
-| Supports MarginX? | yes / no / unclear |
+| Supports MargenX? | yes / no / unclear |
 | How sure are you? | 0.0–1.0 |
 | Date | YYYY-MM-DD |
 

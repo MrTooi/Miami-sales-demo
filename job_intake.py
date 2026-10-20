@@ -1,6 +1,6 @@
-"""MarginX step 1: job-level CSV intake with a "what's missing" report.
+"""MargenX step 1: job-level CSV intake with a "what's missing" report.
 
-One CSV at a time (invoices or costs). MarginX works out the file type, column
+One CSV at a time (invoices or costs). MargenX works out the file type, column
 mapping and date format, applies them only when they are unambiguous, and asks the
 owner otherwise; every row is then either accepted or rejected with a plain reason.
 Nothing is silently dropped, repaired, coerced or guessed, and cell text is
@@ -787,7 +787,7 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             reasons.append(f"The transaction type is blank, so whether this row is a {what} can't be told; "
                            "not imported. Fill in its type where the data comes from.")
         elif unrecognized and kind == "invoices":
-            reasons.append(f"Type '{unrecognized}' isn't a sale type MarginX recognizes (Invoice, Sales Receipt, "
+            reasons.append(f"Type '{unrecognized}' isn't a sale type MargenX recognizes (Invoice, Sales Receipt, "
                            "Credit Memo), or the row's type columns disagree, so it isn't counted as a sale. If it "
                            "is one, fix its type where the data comes from.")
         elif unrecognized:
@@ -909,7 +909,7 @@ def missing_report(result: IntakeResult) -> list[dict]:
     if spaced:
         r, f = spaced[0]
         items.append({"level": "info", "text": f"{_count(len(spaced), 'value')} had extra spaces at the start or end, "
-                      f"which MarginX ignores (for example row {r['row']}: {r['original'][f]!r})."})
+                      f"which MargenX ignores (for example row {r['row']}: {r['original'][f]!r})."})
     dates = sorted(r["date"] for r in accepted)
     distinct = f" ({_count(len(counts), entity)})" if counts and all(keys) else ""
     items.append({"level": "info", "text": f"{_count(len(accepted), noun)} imported{distinct}, dated {dates[0]} to {dates[-1]}."})
@@ -926,7 +926,7 @@ def safe_cell(value: str) -> str:
 
     That is when it starts with = + - @ or a tab, carriage return or line feed, or
     when it reaches one of = + - @ after leading spaces or control characters.
-    Used for on-screen tables, whose toolbar can export CSV. MarginX offers no
+    Used for on-screen tables, whose toolbar can export CSV. MargenX offers no
     repair-file download: owners fix data where it lives and export again.
     """
     text = "" if value is None else str(value)

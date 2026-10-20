@@ -1,4 +1,4 @@
-"""What the MarginX results screen says: headline coverage, the after-costs line, escaping, no outside requests."""
+"""What the MargenX results screen says: headline coverage, the after-costs line, escaping, no outside requests."""
 from pathlib import Path
 import unittest
 from unittest import mock

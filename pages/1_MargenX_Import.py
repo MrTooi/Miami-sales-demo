@@ -1,6 +1,6 @@
-"""MarginX step 1: drop in CSV files, see what's missing.
+"""MargenX step 1: drop in CSV files, see what's missing.
 
-Designed so the owner does as little as possible: MarginX works out the file
+Designed so the owner does as little as possible: MargenX works out the file
 type, the columns and the date format itself, and asks one plain question only
 when it genuinely can't tell. Every automatic choice is shown and can be changed.
 It never guesses money: anything it can't read is listed with a reason.
@@ -33,7 +33,7 @@ import pilot_safety as ps  # noqa: E402
 
 SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"
 SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")
-# A clean made-up shop for showing MarginX to owners: no questions to answer, one losing job, a big
+# A clean made-up shop for showing MargenX to owners: no questions to answer, one losing job, a big
 # customer who barely makes money, one job missing labor, and rent as unlinked overhead.
 DEMO_FILES = ("demo_sign_shop_invoices.csv", "demo_sign_shop_costs.csv")
 DEFAULT_SAMPLE_SET = "demo"
@@ -45,7 +45,7 @@ NOT_MAPPED = "(not in this file)"
 EXCLUDED = "excluded"
 LEVEL_LABELS = {"problem": "Problem", "gap": "Missing", "info": "Note"}
 # Deposits, transfers and payments are cash movements, not sales or costs (MVP spec).
-BANK_MESSAGE = ("MarginX can't read bank, card or payment statements yet: deposits, payments and transfers "
+BANK_MESSAGE = ("MargenX can't read bank, card or payment statements yet: deposits, payments and transfers "
                 "aren't sales or costs. Export your invoices and your bills from your accounting software instead.")
 
 st.set_page_config(page_title=f"{ui.BRAND} | Where your money is made", page_icon="▰", layout="wide")
@@ -98,13 +98,13 @@ if end_col.button("End session and clear everything", width="stretch"):
     st.rerun()
 ended = st.session_state.pop("just_ended", None)
 if ended == "released":
-    st.success("Session ended. The uploaded files were removed from MarginX's upload storage, and the answers and "
-               "results were cleared from this session. Close this browser tab and stop MarginX to finish the visit. "
+    st.success("Session ended. The uploaded files were removed from MargenX's upload storage, and the answers and "
+               "results were cleared from this session. Close this browser tab and stop MargenX to finish the visit. "
                "The original files on this laptop (Downloads, AirDrop, USB) must still be deleted by hand.")
 elif ended:
     # Never claim a deletion that couldn't be checked.
-    st.warning("Answers and results were cleared, but MarginX couldn't confirm the uploaded files were deleted "
-               "from memory. Close this browser tab now and stop MarginX (Ctrl+C) to finish clearing.")
+    st.warning("Answers and results were cleared, but MargenX couldn't confirm the uploaded files were deleted "
+               "from memory. Close this browser tab now and stop MargenX (Ctrl+C) to finish clearing.")
 st.session_state["session_number"] = session
 
 use_samples = controls.toggle("Try it with the made-up sample files", value=not PILOT, key=f"samples-{session}")
@@ -144,7 +144,7 @@ def describe_format(name: str, example: str | None) -> str:
 
 
 def show_file(position: int, name: str, data: bytes, same_as: str | None = None) -> ji.IntakeResult | str | None:
-    """Read one file and show its results, asking only what MarginX can't work out.
+    """Read one file and show its results, asking only what MargenX can't work out.
 
     Returns what was imported; EXCLUDED for a file that adds nothing (a bank statement, headers
     only); or None while a question is unanswered or the file can't be read.
@@ -178,7 +178,7 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
             return EXCLUDED
     else:
         kind = detected
-    settings = st.expander("How MarginX read this file (change anything that's wrong)")
+    settings = st.expander("How MargenX read this file (change anything that's wrong)")
     with settings:
         kind = st.radio("File type", [*KIND_LABELS, "bank"], index=list(KIND_LABELS).index(kind),
                         format_func=lambda k: KIND_LABELS.get(k, "a bank, card or payment statement"), horizontal=True,
@@ -187,7 +187,7 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
         st.info(BANK_MESSAGE)
         return EXCLUDED
 
-    # Columns: suggested automatically; the owner is asked for required ones MarginX can't
+    # Columns: suggested automatically; the owner is asked for required ones MargenX can't
     # find, and for optional ones where two columns could fit (e.g. "Job" and "Project").
     mapping = ji.suggest_mapping(headers, kind)
     ambiguous = ji.ambiguous_columns(headers, kind)
@@ -289,8 +289,8 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
     st.caption(f"Read as {KIND_LABELS[kind]}, dates as {date_format}.")
     report = ji.missing_report(result)
     problems_found = sum(1 for item in report if item["level"] != "info")
-    with st.expander(f"What MarginX found in this file ({problems_found} to look at)" if problems_found
-                     else "What MarginX found in this file"):
+    with st.expander(f"What MargenX found in this file ({problems_found} to look at)" if problems_found
+                     else "What MargenX found in this file"):
         for item in report:
             # Report text can quote values from the file, so it is shown as plain text.
             st.text(f"{LEVEL_LABELS[item['level']]}: {item['text']}")
@@ -353,7 +353,7 @@ def _details(report: jp.ProfitReport) -> None:
                f"imported cost lines {report.cost_dates[0]} to {report.cost_dates[1]}. "
                "Lines that couldn't be imported are listed with each file below, under Your files.")
     st.caption("'Complete' means these files have the job's sales, labor and materials or outsourced work, every "
-               "cost typed and nothing failed to import. MarginX can't tell whether the files cover every cost "
+               "cost typed and nothing failed to import. MargenX can't tell whether the files cover every cost "
                "of the job, so check that they span the whole job.")
     counts = {s: sum(1 for j in report.jobs if j.status == s) for s in jp.STATUS_ORDER}
     st.text(f"{len(report.jobs)} jobs: {counts['complete']} complete, {counts['provisional']} provisional "

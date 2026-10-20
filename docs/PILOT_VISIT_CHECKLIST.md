@@ -1,18 +1,18 @@
-# MarginX pilot visit checklist (sit-down pilot)
+# MargenX pilot visit checklist (sit-down pilot)
 
 **Use this only after the owner has approved real data for a named pilot shop in a written decision (D-006 or later).** Until then, use the made-up sample files only. Merging step 3 doesn't approve real data by itself (D-003).
 
-How the pilot works: Alex or Abrey visits the shop and runs MarginX on a team laptop, with the shop owner present. The shop's files are read in memory only. They are never saved, uploaded or kept after the session.
+How the pilot works: Alex or Abrey visits the shop and runs MargenX on a team laptop, with the shop owner present. The shop's files are read in memory only. They are never saved, uploaded or kept after the session.
 
 ## Before the visit (on the team laptop)
 - [ ] **Disk encryption is on:** FileVault on a Mac, BitLocker on Windows.
 - [ ] **The laptop has a password and locks** after a few minutes idle.
-- [ ] **Latest MarginX:** in the project folder, run `git pull`.
+- [ ] **Latest MargenX:** in the project folder, run `git pull`.
 - [ ] **No screen recording, screen sharing or remote-control apps** are running.
-- [ ] **No tunnel or proxy is running** (e.g. ngrok, Cloudflare Tunnel, Tailscale Funnel, a VPN "share" feature). MarginX refuses requests that show signs of a proxy or tunnel, but it can't detect every one.
+- [ ] **No tunnel or proxy is running** (e.g. ngrok, Cloudflare Tunnel, Tailscale Funnel, a VPN "share" feature). MargenX refuses requests that show signs of a proxy or tunnel, but it can't detect every one.
 - [ ] **Practice once with the sample files** so the visit goes quickly.
 
-## Starting MarginX in pilot mode
+## Starting MargenX in pilot mode
 Run this in the project folder.
 
 Mac:
@@ -25,7 +25,7 @@ Windows (PowerShell):
 $env:MARGINX_PILOT="1"; streamlit run marginx_pilot.py --server.address localhost
 ```
 
-`marginx_pilot.py` opens **only** the MarginX page. The older Ledger demo (`app.py`) is turned off whenever pilot mode is set, because it keeps imports in a file on the laptop. Never upload a shop's files anywhere else.
+`marginx_pilot.py` opens **only** the MargenX page. The older Ledger demo (`app.py`) is turned off whenever pilot mode is set, because it keeps imports in a file on the laptop. Never upload a shop's files anywhere else.
 
 The page must say **"Pilot session on this laptop"**. If it says "made-up data only", pilot mode isn't on: stop, don't use real files, and check the command.
 
@@ -40,18 +40,18 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
 6. **No screenshots or photos of the screen.**
 
 ## Before you leave (don't skip this)
-- [ ] Click **End session and clear everything** in MarginX. It should say the uploaded files "were removed from MarginX's upload storage". If it says it **couldn't confirm** that, go straight to the next step. End session only clears what MarginX holds: it does **not** delete the original CSV files on the laptop.
-- [ ] Close the browser tab, then stop MarginX: press Ctrl+C in the terminal and close the terminal. Error details can appear there.
+- [ ] Click **End session and clear everything** in MargenX. It should say the uploaded files "were removed from MargenX's upload storage". If it says it **couldn't confirm** that, go straight to the next step. End session only clears what MargenX holds: it does **not** delete the original CSV files on the laptop.
+- [ ] Close the browser tab, then stop MargenX: press Ctrl+C in the terminal and close the terminal. Error details can appear there.
 - [ ] **Delete the shop's files from the laptop.** Check Downloads, the Desktop and wherever AirDrop saved them. **Then empty the Trash/Recycle Bin.**
 - [ ] **Delete the files from the USB drive**, or give the drive to the owner.
 - [ ] Ask the owner whether they want the exported files deleted from **their** computer too.
 - [ ] Note the date, the shop (by type, e.g. "sign shop A") and that the deletion was done, without any of their figures.
 
 ## Before the first real visit, and after any Streamlit upgrade
-Repeat the real upload-and-delete test with a **made-up** CSV. MarginX's cleanup relies on Streamlit 1.65.0 internals (`pilot_safety.release_uploads`).
+Repeat the real upload-and-delete test with a **made-up** CSV. MargenX's cleanup relies on Streamlit 1.65.0 internals (`pilot_safety.release_uploads`).
 1. Start pilot mode and tick the agreement.
 2. Upload the made-up CSV and check that its line is read.
-3. Click **End session**. It must show the "removed from MarginX's upload storage" message, and the file name and results must be gone.
+3. Click **End session**. It must show the "removed from MargenX's upload storage" message, and the file name and results must be gone.
 4. Run the test suite (`python -m unittest discover -s tests`). It must pass.
 
 ## If something goes wrong
@@ -62,7 +62,7 @@ Repeat the real upload-and-delete test with a **made-up** CSV. MarginX's cleanup
 ## What this setup does and doesn't protect
 - **It does:**
   - Files stay on one laptop and in memory only.
-  - Nothing is saved by MarginX. **End session** removes the uploaded files from MarginX's upload storage, clears the answers and results, and checks the files are gone before saying so. It can't prove that no copy remains anywhere in the computer's memory, which is why the tab is closed and MarginX stopped at the end of every visit (stopping MarginX drops everything). A closed tab's files are dropped within about 10 seconds.
+  - Nothing is saved by MargenX. **End session** removes the uploaded files from MargenX's upload storage, clears the answers and results, and checks the files are gone before saying so. It can't prove that no copy remains anywhere in the computer's memory, which is why the tab is closed and MargenX stopped at the end of every visit (stopping MargenX drops everything). A closed tab's files are dropped within about 10 seconds.
   - No usage data is sent anywhere.
   - Error pages show no file contents.
   - Real files are refused unless pilot mode is on, the app listens on this computer only, and the browser visit itself looks local (no proxy or tunnel signs).
@@ -71,4 +71,4 @@ Repeat the real upload-and-delete test with a **made-up** CSV. MarginX's cleanup
   - It doesn't protect files the laptop itself kept: Downloads, Trash, AirDrop, the USB drive. That's what the deletion steps are for.
   - It doesn't protect the laptop if it's lost while unlocked.
   - It can't detect every tunnel or remote-access tool. That's why none may be running during a visit.
-  - It doesn't make MarginX's figures certain. "Provisional" results must be explained as provisional.
+  - It doesn't make MargenX's figures certain. "Provisional" results must be explained as provisional.

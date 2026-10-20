@@ -1,4 +1,4 @@
-# MarginX sample files (fictional)
+# MargenX sample files (fictional)
 
 Every business, person and amount in these files is **made up**, and they contain deliberate problems so the "what's missing" report has something to show:
 

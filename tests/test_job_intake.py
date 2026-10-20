@@ -518,7 +518,7 @@ class MappingTests(unittest.TestCase):
 
     def test_date_format_is_chosen_only_when_one_format_reads_the_most_dates(self):
         self.assertEqual("MM/DD/YYYY", ji.suggest_date_format(["10/01/2026", "12/31/2026"]))
-        # One date only ISO can read signals a second convention, so MarginX asks instead.
+        # One date only ISO can read signals a second convention, so MargenX asks instead.
         self.assertIsNone(ji.suggest_date_format(["10/01/2026", "10/31/2026", "2026-10-06"]))
         self.assertIsNone(ji.suggest_date_format(["10/31/2026", "31/10/2026", "10/01/2026"]))  # month-first and day-first mixed
         self.assertEqual("YYYY-MM-DD", ji.suggest_date_format(["2026-10-01", "2026-10-02"]))
@@ -653,7 +653,7 @@ class DuplicateTests(unittest.TestCase):
                           "amount": "1.00", "job_id": " J-5 "}, record["original"])
         self.assertEqual(("FIC-1", "J-5"), (record["invoice_id"], record["job_id"]))  # trimmed working values
         # ...and the trimming is reported, never silent.
-        self.assertIn("3 values had extra spaces at the start or end, which MarginX ignores (for example row 2: '  FIC-1 ')",
+        self.assertIn("3 values had extra spaces at the start or end, which MargenX ignores (for example row 2: '  FIC-1 ')",
                       texts(ji.missing_report(result)))
 
     def test_identical_rows_are_rejected_once(self):

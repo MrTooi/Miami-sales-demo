@@ -1,10 +1,10 @@
-"""MarginX step 3a: safety basics for the sit-down pilot.
+"""MargenX step 3a: safety basics for the sit-down pilot.
 
 A pilot shop's real files are used only on a team laptop, with the shop owner present:
-MarginX runs locally, reads files in memory, never saves them, and forgets everything when
+MargenX runs locally, reads files in memory, never saves them, and forgets everything when
 the session ends. Real files are allowed only when pilot mode is switched on, the app listens
 on a loopback address, AND the browser's request itself looks local (a loopback Host and no
-proxy or tunnel forwarding headers). Otherwise MarginX stays made-up data only.
+proxy or tunnel forwarding headers). Otherwise MargenX stays made-up data only.
 
 Limit, stated honestly: these checks catch ordinary deployments, proxies and tunnels, but code
 alone can't prove that nothing forwards traffic to the laptop. The pilot checklist therefore
@@ -21,8 +21,8 @@ PILOT_ENV = "MARGINX_PILOT"
 LOCAL_ADDRESSES = {"localhost", "127.0.0.1", "::1"}
 
 CONSENT_TEXT = (
-    "I own or manage this business and agree to MarginX reading these files on this laptop, with me present. "
-    "The files go only to MarginX on this laptop, never to an outside server; they are read in memory only and "
+    "I own or manage this business and agree to MargenX reading these files on this laptop, with me present. "
+    "The files go only to MargenX on this laptop, never to an outside server; they are read in memory only and "
     "are not saved or kept after this session. I can stop at any time, and I can ask for the session to be "
     "ended right away."
 )
