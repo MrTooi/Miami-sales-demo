@@ -400,11 +400,23 @@ def _xlsx_rows(data: bytes) -> list[tuple[int, list[str]]]:
             with sheet._get_source() as source:
                 parser = _exact_cell_parser()(source, sheet._shared_strings, data_only=True, epoch=book.epoch,
                                               date_formats=book._date_formats, timedelta_formats=book._timedelta_formats)
+                last_row = 0
                 for number, row in parser.parse():
                     if number > MAX_ROWS:
                         raise IntakeError(f"This Excel file has more than {MAX_ROWS:,} rows. Export a shorter date range.")
+                    # Excel writes rows, and cells within a row, in order, each once. A file that
+                    # repeats or reorders them could hide one value behind another, so it is refused.
+                    if number <= last_row:
+                        raise IntakeError(f"Row {number} appears twice or out of order in this Excel file, so which "
+                                          "values belong to it can't be told. Export it again from the program it came from.")
+                    last_row, last_column = number, 0
                     values = {}
                     for cell in row:
+                        if cell["row"] != number or cell["column"] <= last_column:
+                            raise IntakeError(f"A cell in row {number} appears twice, out of order or outside its row in "
+                                              "this Excel file, so its value can't be trusted. Export it again from the "
+                                              "program it came from.")
+                        last_column = cell["column"]
                         if cell["value"] in (None, ""):
                             continue
                         if cell["column"] > MAX_COLUMNS:
@@ -876,22 +888,25 @@ def _total_row(cells: tuple[str, ...], headers: list[str], mapping: dict[str, st
     """(label, group, amount) when the row is shaped like a report's total row, else None.
 
     The shape alone is never enough to skip it: its first filled cell says "Total" or "Total for
-    ...", it has no date, every other filled cell is a number (no customer, job or invoice), and
-    its amount is filled. _layout_rows then checks that the amount equals the rows above it.
+    ...", its amount is filled, every other chosen column (date, customer, job, invoice, ...) is
+    blank, even with a number such as job 456, and any other filled cell is a number in a column
+    nobody chose. _layout_rows then checks that the amount equals the rows above it.
     """
-    filled = [c.strip() for c in cells if c.strip()]
-    label = TOTAL_ROW.match(filled[0]) if filled else None
+    filled = [(i, c.strip()) for i, c in enumerate(cells) if c.strip()]
+    label = TOTAL_ROW.match(filled[0][1]) if filled else None
     if not label or len(cells) != len(headers) or mapping.get("amount") not in headers:
         return None
-    if mapping.get("date") in headers and cells[headers.index(mapping["date"])].strip():
-        return None
+    amount_at = headers.index(mapping["amount"])
+    chosen = {headers.index(h) for h in mapping.values() if h in headers}
     try:
-        amount = money(cells[headers.index(mapping["amount"])].strip())
-        for other in filled[1:]:
+        amount = money(cells[amount_at].strip())
+        for i, other in filled[1:]:
+            if i != amount_at and i in chosen:
+                return None
             money(other)
     except ValueError:
         return None
-    return filled[0], label.group("group"), amount
+    return filled[0][1], label.group("group"), amount
 
 
 def _layout_rows(headers: list[str], records: list[Record], mapping: dict[str, str | None]) -> dict[int, str]:
@@ -1037,6 +1052,8 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
     seen_rows: dict[tuple[str, ...], int] = {}
     # A report's proven total, heading and footer rows are listed as skipped; everything below
     # works on the other rows only.
+    if len({r.row for r in records}) != len(records):
+        raise IntakeError("Two rows in the file have the same row number, so they can't be told apart.")
     layout = _layout_rows(headers, records, mapping)
     lines = [r for r in records if r.row not in layout]
     # A whole-document total on a document with several lines would be counted once

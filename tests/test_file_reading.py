@@ -191,6 +191,27 @@ class ExcelReadingTests(unittest.TestCase):
             with self.assertRaisesRegex(ji.IntakeError, "more than 1 rows"):
                 ji.read_file("sales.xlsx", xlsx(table))
 
+    def test_repeated_or_reordered_rows_and_cells_refuse_the_file(self):
+        sale = text_cells(2, "INV-1", "2026-10-02", "A", "J-1").replace("</row>", '<c r="E2"><v>100</v></c></row>')
+        # A second row 2 that would total the first: both could otherwise be skipped as one row.
+        total_again = '<row r="2"><c r="A2" t="inlineStr"><is><t>Total</t></is></c><c r="E2"><v>100</v></c></row>'
+        with self.assertRaisesRegex(ji.IntakeError, "Row 2 appears twice or out of order"):
+            ji.read_file("sales.xlsx", raw_xlsx(RAW_HEADER + sale + total_again))
+        with self.assertRaisesRegex(ji.IntakeError, "Row 1 appears twice or out of order"):
+            ji.read_file("sales.xlsx", raw_xlsx(sale + RAW_HEADER))
+        # The same cell twice: the second would silently replace the first.
+        twice = sale.replace("</row>", '<c r="E2"><v>1</v></c></row>')
+        with self.assertRaisesRegex(ji.IntakeError, "A cell in row 2 appears twice, out of order or outside its row"):
+            ji.read_file("sales.xlsx", raw_xlsx(RAW_HEADER + twice))
+        outside = sale.replace('<c r="E2">', '<c r="E7">')
+        with self.assertRaisesRegex(ji.IntakeError, "A cell in row 2 appears twice, out of order or outside its row"):
+            ji.read_file("sales.xlsx", raw_xlsx(RAW_HEADER + outside))
+        # intake itself also refuses two records with one row number.
+        headers = ["Invoice", "Date", "Customer", "Job", "Amount"]
+        records = [ji.Record(2, ("INV-1", "10/02/2026", "A", "J-1", "100.00")), ji.Record(2, ("Total", "", "", "", "100.00"))]
+        with self.assertRaisesRegex(ji.IntakeError, "same row number"):
+            ji.intake(headers, records, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+
     def test_size_and_shape_limits_refuse_the_file(self):
         table = [["Invoice", "Date", "Customer", "Amount"], ["INV-1", date(2026, 10, 2), "A", 1]]
         data = xlsx(table)
@@ -282,6 +303,8 @@ class ReportLayoutTests(unittest.TestCase):
         cases = {
             "a date": ("Total", "10/02/2026", "Total Fitness (fictional)", "J-2", "100.00"),
             "a customer and job": ("Total", "", "Customer A (fictional)", "J-1", "100.00"),
+            "a customer and job written as numbers": ("Total", "", "123", "456", "100.00"),
+            "a job written as a number": ("Total", "", "", "456", "100.00"),
             "only an invoice number": ("INV-7", "", "", "", ""),
             "only an amount": ("", "", "", "", "50.00"),
             "a total that doesn't add up": ("Total", "", "", "", "99.00"),
