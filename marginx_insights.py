@@ -27,12 +27,26 @@ class Summary:
     left_after_job_costs: Decimal  # sum of job contributions that have a figure
     share_percent: int | None    # left / sales of the jobs that have a figure, whole percent
     jobs: int
+    jobs_with_figure: int        # jobs counted in left_after_job_costs
+    sales_with_figure: Decimal   # the sales those jobs cover
+    jobs_without_figure: int     # unavailable jobs: left out of the total, not counted as zero
+    unlinked_sales: Decimal      # sales lines with no job number: in sales, not in any job's figure
+    unlinked_sales_lines: int
     losing_jobs: int
     jobs_to_check: int           # provisional or unavailable
     figure_is_provisional: bool  # any job counted in the total isn't complete
-    unlinked_costs: Decimal      # costs in the file not tied to any job (rent, other overhead...)
-    after_unlinked_costs: Decimal  # left_after_job_costs minus unlinked_costs: what these files leave
+    unlinked_costs: Decimal      # costs in the file not tied to any job
+    overhead_costs: Decimal      # the part of unlinked_costs that is clear overhead or fees (rent...)
+    unassigned_job_costs: Decimal  # the rest: costs with no job number that may belong to jobs
+    # Sales minus every cost in these files, or None when some sales aren't in the job total
+    # (jobs without a figure, sales without a job number): a total then would be wrong, so it's withheld.
+    after_unlinked_costs: Decimal | None
     usual_margin: Decimal | None   # share kept across complete jobs (0.30 = 30%), when there are enough
+
+    @property
+    def figure_is_partial(self) -> bool:
+        """The job total leaves out some sales: jobs without a figure or sales without a job number."""
+        return bool(self.jobs_without_figure or self.unlinked_sales_lines)
 
 
 @dataclass(frozen=True)
@@ -108,16 +122,25 @@ def summarize(report: ProfitReport) -> Summary:
     counted = [j for j in report.jobs if j.contribution is not None]
     counted_sales = sum((j.sales for j in counted), ZERO)
     left = sum((j.contribution for j in counted), ZERO)
+    without_figure = len(report.jobs) - len(counted)
+    partial = bool(without_figure or report.unlinked_sales_lines or not counted)
     return Summary(
         sales=sum((j.sales for j in report.jobs), ZERO) + report.unlinked_sales,
         left_after_job_costs=left,
         share_percent=percent(left, counted_sales),
         jobs=len(report.jobs),
+        jobs_with_figure=len(counted),
+        sales_with_figure=counted_sales,
+        jobs_without_figure=without_figure,
+        unlinked_sales=report.unlinked_sales,
+        unlinked_sales_lines=report.unlinked_sales_lines,
         losing_jobs=sum(1 for j in counted if j.contribution < 0),
         jobs_to_check=sum(1 for j in report.jobs if j.status != "complete"),
         figure_is_provisional=any(j.status != "complete" for j in counted),
         unlinked_costs=report.unlinked_costs,
-        after_unlinked_costs=left - report.unlinked_costs,
+        overhead_costs=report.unlinked_costs - report.unlinked_job_costs,
+        unassigned_job_costs=report.unlinked_job_costs,
+        after_unlinked_costs=None if partial else left - report.unlinked_costs,
         usual_margin=usual_margin(report),
     )
 
@@ -177,7 +200,10 @@ def attention(report: ProfitReport) -> list[Insight]:
     missing = [j for j in report.jobs if j.status == "unavailable"]
     if missing:
         items.append(Insight("info", f"{len(missing)} job{'s' if len(missing) != 1 else ''} without a figure yet",
-                             "They have no sales or no costs in these files, so no profit is shown for them."))
+                             ("They have no sales or no costs in these files, so no profit is shown for them and they "
+                              "aren't in 'Left after job costs'." if len(missing) != 1 else
+                              "It has no sales or no costs in these files, so no profit is shown for it and it "
+                              "isn't in 'Left after job costs'.")))
     if report.unlinked_job_cost_lines:
         items.append(Insight("warn", f"{money(report.unlinked_job_costs)} of costs aren't linked to a job",
                              "If some belong to jobs, those jobs' figures are too high."))

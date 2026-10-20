@@ -1,7 +1,7 @@
 """MarginX look and feel: brand styles and the HTML for the results screen.
 
 Light, calm and plain-spoken, matching the website: mint background, white cards, dark-green
-accents. Every value that can come from a shop's file (customer names, job descriptions,
+accents. No web fonts or other outside requests: the page works offline, as the pilot promises. Every value that can come from a shop's file (customer names, job descriptions,
 reasons) is HTML-escaped here before it reaches the page.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ TAGLINE = "Profit per job for print, sign and apparel shops"
 
 _CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap');
+/* No web fonts: the page makes no outside requests. Brand fonts are used only if installed. */
 :root{--mx-green:#0F7A55;--mx-green-dark:#0B5C40;--mx-mint:#E6F6EE;--mx-mint-2:#F4FBF7;--mx-ink:#0E241B;
 --mx-muted:#5A6F66;--mx-line:#DCEDE5;--mx-card:#FFFFFF;--mx-red:#B42318;--mx-red-bg:#FDECEA;--mx-amber:#9A5B05;
 --mx-amber-bg:#FEF4E2;--mx-blue:#1E5C8C;--mx-blue-bg:#E8F1F9}
@@ -28,9 +28,9 @@ html,body,[data-testid="stAppViewContainer"]{background:linear-gradient(180deg,v
 [data-testid="stAppViewContainer"] *{font-family:'Inter',system-ui,sans-serif}
 [data-testid="stIconMaterial"]{font-family:'Material Symbols Rounded'!important}
 .block-container{max-width:1080px;padding-top:2.2rem;padding-bottom:4rem}
-h1,h2,h3,.mx-h{font-family:'Plus Jakarta Sans','Inter',sans-serif!important;color:var(--mx-ink)!important;letter-spacing:-.02em}
+h1,h2,h3,.mx-h{font-family:'Plus Jakarta Sans','Inter',system-ui,sans-serif!important;color:var(--mx-ink)!important;letter-spacing:-.02em}
 .mx-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
-.mx-brand{display:flex;align-items:center;gap:10px;font-family:'Plus Jakarta Sans',sans-serif;font-weight:800;font-size:1.25rem;color:var(--mx-ink)}
+.mx-brand{display:flex;align-items:center;gap:10px;font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-weight:800;font-size:1.25rem;color:var(--mx-ink)}
 .mx-brand b{color:var(--mx-green)}
 .mx-mark{width:34px;height:34px;border-radius:10px;background:var(--mx-green);display:flex;align-items:center;justify-content:center}
 .mx-pill{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:600;padding:5px 11px;border-radius:999px;background:var(--mx-amber-bg);color:var(--mx-amber)}
@@ -40,11 +40,11 @@ h1,h2,h3,.mx-h{font-family:'Plus Jakarta Sans','Inter',sans-serif!important;colo
 .mx-step.on{background:var(--mx-green);color:#fff;border-color:var(--mx-green);font-weight:600}
 .mx-step.done{color:var(--mx-green);font-weight:600}
 .mx-kicker{color:var(--mx-muted);font-size:.9rem;margin:2px 0 4px}
-.mx-title{font-family:'Plus Jakarta Sans',sans-serif;font-weight:800;font-size:2.05rem;line-height:1.12;letter-spacing:-.03em;margin:0 0 18px;color:var(--mx-ink)}
+.mx-title{font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-weight:800;font-size:2.05rem;line-height:1.12;letter-spacing:-.03em;margin:0 0 18px;color:var(--mx-ink)}
 .mx-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
 .mx-metric{background:var(--mx-card);border:1px solid var(--mx-line);border-radius:16px;padding:16px 18px;box-shadow:0 1px 2px rgba(14,36,27,.04)}
 .mx-metric .l{font-size:.82rem;color:var(--mx-muted);font-weight:500}
-.mx-metric .v{font-family:'Plus Jakarta Sans',sans-serif;font-size:1.65rem;font-weight:800;letter-spacing:-.02em;margin-top:4px;color:var(--mx-ink)}
+.mx-metric .v{font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:1.65rem;font-weight:800;letter-spacing:-.02em;margin-top:4px;color:var(--mx-ink)}
 .mx-metric .s{font-size:.8rem;color:var(--mx-muted);margin-top:2px}
 .mx-metric .v.red{color:var(--mx-red)}.mx-metric .v.amber{color:var(--mx-amber)}.mx-metric .v.green{color:var(--mx-green)}
 .mx-card{background:var(--mx-card);border:1px solid var(--mx-line);border-radius:18px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 2px rgba(14,36,27,.04)}
@@ -60,16 +60,16 @@ h1,h2,h3,.mx-h{font-family:'Plus Jakarta Sans','Inter',sans-serif!important;colo
 .mx-bar{height:7px;background:#EEF5F1;border-radius:6px;overflow:hidden;margin:3px 0}
 .mx-bar i{display:block;height:7px;border-radius:6px}
 .mx-bar i.sales{background:#A7E3C8}.mx-bar i.left{background:var(--mx-green)}.mx-bar i.neg{background:var(--mx-red)}
-.mx-row .r{text-align:right}.mx-row .r .a{font-weight:700;font-family:'Plus Jakarta Sans',sans-serif}.mx-row .r .p{font-size:.8rem;color:var(--mx-muted)}
+.mx-row .r{text-align:right}.mx-row .r .a{font-weight:700;font-family:'Plus Jakarta Sans',system-ui,sans-serif}.mx-row .r .p{font-size:.8rem;color:var(--mx-muted)}
 .mx-job{display:grid;grid-template-columns:12px minmax(0,1fr) auto 120px;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--mx-line);font-size:.95rem}
 .mx-job:first-of-type{border-top:0}
 .mx-dot{width:10px;height:10px;border-radius:50%}.mx-dot.complete{background:var(--mx-green)}.mx-dot.loss{background:var(--mx-red)}.mx-dot.provisional{background:#E0A43A}.mx-dot.unavailable{background:#B7C4BE}
 .mx-job .w small{color:var(--mx-muted);font-size:.82rem}
 .mx-tag{font-size:.75rem;padding:3px 9px;border-radius:999px;white-space:nowrap}
 .mx-tag.complete{background:var(--mx-mint);color:var(--mx-green-dark)}.mx-tag.provisional{background:var(--mx-amber-bg);color:var(--mx-amber)}.mx-tag.unavailable{background:#EEF2F0;color:var(--mx-muted)}
-.mx-job .a{text-align:right;font-weight:700;font-family:'Plus Jakarta Sans',sans-serif}.mx-job .a.neg{color:var(--mx-red)}
+.mx-job .a{text-align:right;font-weight:700;font-family:'Plus Jakarta Sans',system-ui,sans-serif}.mx-job .a.neg{color:var(--mx-red)}
 .mx-after{display:flex;justify-content:space-between;gap:14px;align-items:center;background:#fff;border:1px dashed #BFE3D2;border-radius:14px;padding:12px 18px;margin:-4px 0 18px;font-size:.9rem;color:var(--mx-muted)}
-.mx-after b{font-family:'Plus Jakarta Sans',sans-serif;font-size:1.15rem;color:var(--mx-ink)}
+.mx-after b{font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:1.15rem;color:var(--mx-ink)}
 details.mx-d{border-top:1px solid var(--mx-line)}details.mx-d:first-of-type{border-top:0}
 details.mx-d>summary{list-style:none;cursor:pointer}details.mx-d>summary::-webkit-details-marker{display:none}
 details.mx-d>summary .mx-job,details.mx-d>summary .mx-row{border-top:0}
@@ -81,12 +81,12 @@ details[open] .mx-chev{display:inline-block;transform:rotate(90deg)}
 .mx-break tr,.mx-break td{border:0!important;background:transparent!important}.mx-break td{padding:3px 0!important;font-size:.88rem}.mx-break td.r{text-align:right;font-variant-numeric:tabular-nums}
 .mx-break tr.tot td{border-top:1px solid var(--mx-line);font-weight:700;padding-top:6px}
 .mx-break .why{color:var(--mx-amber);margin-top:8px}.mx-break .price{color:var(--mx-green-dark);margin-top:8px}
-.mx-job .a .p{display:block;font-size:.75rem;font-weight:500;color:var(--mx-muted);font-family:'Inter',sans-serif}
+.mx-job .a .p{display:block;font-size:.75rem;font-weight:500;color:var(--mx-muted);font-family:'Inter',system-ui,sans-serif}
 .mx-legend{font-size:.78rem;color:var(--mx-muted);margin-top:8px}
 .mx-legend span{display:inline-block;width:12px;height:7px;border-radius:3px;margin:0 5px 1px 0;vertical-align:middle}
 .mx-foot{font-size:.82rem;color:var(--mx-muted);margin:4px 2px 18px}
-.mx-file{font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:1rem;margin:14px 0 2px;color:var(--mx-ink)}
-.mx-section{font-family:'Plus Jakarta Sans',sans-serif;font-weight:800;font-size:1.25rem;margin:26px 0 6px;color:var(--mx-ink)}
+.mx-file{font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-weight:700;font-size:1rem;margin:14px 0 2px;color:var(--mx-ink)}
+.mx-section{font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-weight:800;font-size:1.25rem;margin:26px 0 6px;color:var(--mx-ink)}
 div.stButton>button{border-radius:11px!important;border:1px solid var(--mx-line)!important;background:#fff!important;color:var(--mx-ink)!important;font-weight:600!important}
 div.stButton>button:hover{border-color:var(--mx-green)!important;color:var(--mx-green)!important}
 div[data-testid="stExpander"]{border:1px solid var(--mx-line)!important;border-radius:14px!important;background:rgba(255,255,255,.7)!important}
@@ -147,30 +147,16 @@ def results(report: ProfitReport, summary: Summary, items: list[Insight], period
     """The results screen: headline, key numbers, what needs attention, customers and jobs."""
     _html(f'<div class="mx-kicker">{escape(period)}</div><div class="mx-title">Here\'s where your money was made</div>')
 
-    left_note = (f"{summary.share_percent}% of sales on jobs with a figure" if summary.share_percent is not None else "")
-    if summary.figure_is_provisional:
-        left_note += " · includes jobs that need a check"
-    losing_class = "red" if summary.losing_jobs else "green"
-    check_class = "amber" if summary.jobs_to_check else "green"
-    metrics = [
-        ("Sales", _money(summary.sales), f"{summary.jobs} jobs"),
-        ("Left after job costs", _money(summary.left_after_job_costs), escape(left_note), ""),
-        ("Jobs losing money", f"{summary.losing_jobs} of {summary.jobs}", "", losing_class),
-        ("Jobs that need a check", str(summary.jobs_to_check), "missing costs or figures" if summary.jobs_to_check
-         else "all jobs complete", check_class),
-    ]
     cards = []
-    for m in metrics:
-        label, value, sub = m[0], m[1], m[2]
-        cls = m[3] if len(m) > 3 else ""
+    for label, value, sub, cls in _metrics(summary):
         cards.append(f'<div class="mx-metric"><div class="l">{escape(label)}</div><div class="v {cls}">{value}</div>'
-                     f'<div class="s">{sub}</div></div>')
+                     f'<div class="s">{escape(sub)}</div></div>')
     _html(f'<div class="mx-grid">{"".join(cards)}</div>')
-    if summary.unlinked_costs:
-        _html(f'<div class="mx-after"><div>After the {_money(summary.unlinked_costs)} of costs not tied to any job '
-              f'(rent and other overhead), these files leave <b>{_money(summary.after_unlinked_costs)}</b></div>'
-              f'<div style="font-size:.8rem;max-width:300px;text-align:right">Your real profit only if these files '
-              f'include all your costs for the period.</div></div>')
+    after = _after_costs(summary)
+    if after:
+        main, note = after
+        _html(f'<div class="mx-after"><div>{main}</div>'
+              f'<div style="font-size:.8rem;max-width:320px;text-align:right">{escape(note)}</div></div>')
 
     if items:
         icons = {"loss": "↓", "warn": "!", "info": "i"}
@@ -189,6 +175,79 @@ def results(report: ProfitReport, summary: Summary, items: list[Insight], period
 
     _customers(report)
     _jobs(report, summary)
+
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _left_out(summary: Summary) -> list[str]:
+    """What the job total leaves out, in words ("4 jobs without a figure", "$385.50 of sales with no job number")."""
+    parts = []
+    if summary.jobs_without_figure:
+        parts.append(f"{_plural(summary.jobs_without_figure, 'job')} without a figure")
+    if summary.unlinked_sales_lines:
+        parts.append(f"{money(summary.unlinked_sales)} of sales with no job number")
+    return parts
+
+
+def _metrics(summary: Summary) -> list[tuple[str, str, str, str]]:
+    """The four headline cards as (label, value HTML, plain-text note, colour class).
+
+    "Left after job costs" always says which jobs it covers, so a partial total never reads as the whole.
+    """
+    sales_note = _plural(summary.jobs, "job")
+    if summary.unlinked_sales_lines:
+        sales_note += f" · {money(summary.unlinked_sales)} with no job number"
+    if summary.jobs_with_figure:
+        cover = (f"From {summary.jobs_with_figure} of {summary.jobs} jobs" if summary.figure_is_partial
+                 else f"From all {_plural(summary.jobs, 'job')}")
+        left_note = [cover]
+        if summary.share_percent is not None:
+            left_note.append(f"{summary.share_percent}% of their sales")
+        if summary.figure_is_provisional:
+            left_note.append("some still need a check")
+        left = (_money(summary.left_after_job_costs), " · ".join(left_note))
+    else:
+        left = ("—", "No job has a figure yet")
+    losing = f"{summary.losing_jobs} of {summary.jobs_with_figure}"
+    return [
+        ("Sales", _money(summary.sales), sales_note, ""),
+        ("Left after job costs", left[0], left[1], ""),
+        ("Jobs losing money", losing, "jobs with a figure" if summary.figure_is_partial else "",
+         "red" if summary.losing_jobs else "green"),
+        ("Jobs that need a check", str(summary.jobs_to_check),
+         "missing costs or figures" if summary.jobs_to_check else "all jobs complete",
+         "amber" if summary.jobs_to_check else "green"),
+    ]
+
+
+def _after_costs(summary: Summary) -> tuple[str, str] | None:
+    """The line under the cards about costs not tied to any job, as (main HTML, plain-text note).
+
+    It keeps overhead (rent, fees) apart from costs that simply have no job number, and gives a
+    total only when every sale is in the job total; otherwise it says why the total is withheld.
+    """
+    if not summary.unlinked_costs:
+        return None
+    if summary.overhead_costs and summary.unassigned_job_costs:
+        of_which = (f" ({money(summary.overhead_costs)} of overhead such as rent, and "
+                    f"{money(summary.unassigned_job_costs)} with no job number that may belong to jobs)")
+    elif summary.overhead_costs:
+        of_which = " (overhead such as rent)"
+    else:
+        of_which = " (they have no job number and may belong to jobs)"
+    costs = f"{_money(summary.unlinked_costs)} of costs not tied to any job{escape(of_which)}"
+    if summary.after_unlinked_costs is None:
+        missing = " and ".join(_left_out(summary)) or "some sales"
+        return (f"There are {costs}. A total after them isn't shown yet",
+                f"The job total leaves out {missing}, so a total after these costs would be wrong.")
+    note = ("Sales minus every cost in these files, before tax. If any costs are missing from the files, "
+            "your real profit is lower.")
+    if summary.figure_is_provisional:
+        note += " Some jobs still need a check, so this may be too high."
+    return f"After the {costs}, these files leave <b>{_money(summary.after_unlinked_costs)}</b>", note
 
 
 def _customers(report: ProfitReport) -> None:

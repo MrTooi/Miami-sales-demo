@@ -5,6 +5,7 @@ import unittest
 import job_intake as ji
 import job_profit as jp
 import marginx_insights as mi
+from job_profit import ZERO
 
 SAMPLES = Path(__file__).resolve().parents[1] / "sample_data" / "marginx"
 
@@ -41,6 +42,48 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(Decimal("50.00"), summary.left_after_job_costs)  # only J-1 has a figure
         self.assertEqual(50, summary.share_percent)
 
+    def test_total_says_which_jobs_it_covers_when_some_have_no_figure(self):
+        # J-1 complete, J-2 has sales but no costs (no figure): the total covers 1 of 2 jobs.
+        report = report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/01/2026,B,J-2,60.00\n",
+                             b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                             b"B-2,10/01/2026,Paper,J-1,Materials,30.00\nB-3,10/01/2026,Landlord,,Rent,10.00\n")
+        summary = mi.summarize(report)
+        self.assertEqual((1, 2, 1, Decimal("100.00")), (summary.jobs_with_figure, summary.jobs,
+                                                         summary.jobs_without_figure, summary.sales_with_figure))
+        self.assertTrue(summary.figure_is_partial)
+        self.assertFalse(summary.figure_is_provisional)  # J-1 itself is complete
+        self.assertIsNone(summary.after_unlinked_costs)  # withheld: J-2's sales aren't in the job total
+
+    def test_no_job_with_a_figure_gives_no_share_and_no_total(self):
+        report = report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\n",
+                             b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Landlord,,Rent,10.00\n")
+        summary = mi.summarize(report)
+        self.assertEqual((0, ZERO, None, None), (summary.jobs_with_figure, summary.left_after_job_costs,
+                                                summary.share_percent, summary.after_unlinked_costs))
+        self.assertTrue(summary.figure_is_partial)
+
+    def test_sales_without_a_job_number_withhold_the_total(self):
+        report = report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/01/2026,A,,40.00\n",
+                             b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                             b"B-2,10/01/2026,Paper,J-1,Materials,30.00\nB-3,10/01/2026,Landlord,,Rent,10.00\n")
+        summary = mi.summarize(report)
+        self.assertEqual((0, 1, Decimal("40.00")), (summary.jobs_without_figure, summary.unlinked_sales_lines,
+                                                    summary.unlinked_sales))
+        self.assertTrue(summary.figure_is_partial)
+        self.assertIsNone(summary.after_unlinked_costs)
+
+    def test_overhead_is_kept_apart_from_costs_with_no_job_number(self):
+        report = report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\n",
+                             b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                             b"B-2,10/01/2026,Paper,J-1,Materials,30.00\nB-3,10/01/2026,Landlord,,Rent,10.00\n"
+                             b"B-4,10/01/2026,Paper,,Materials,15.00\n")
+        summary = mi.summarize(report)
+        self.assertEqual((Decimal("25.00"), Decimal("10.00"), Decimal("15.00")),
+                         (summary.unlinked_costs, summary.overhead_costs, summary.unassigned_job_costs))
+        # Every sale is in the job total, so sales minus every cost in the files is exact: 50 - 25.
+        self.assertFalse(summary.figure_is_partial)
+        self.assertEqual(Decimal("25.00"), summary.after_unlinked_costs)
+
     def test_money_is_exact_and_drops_only_zero_cents(self):
         self.assertEqual(["$1,300", "$12.50", "-$140", "$0.05"],
                          [mi.money(Decimal(v)) for v in ("1300.00", "12.50", "-140.00", "0.05")])
@@ -74,6 +117,8 @@ class PricingTests(unittest.TestCase):
     def test_after_unlinked_costs_is_exact(self):
         summary = mi.summarize(demo_report())
         self.assertEqual((Decimal("2000.00"), Decimal("1640.00")), (summary.unlinked_costs, summary.after_unlinked_costs))
+        self.assertEqual((Decimal("2000.00"), ZERO), (summary.overhead_costs, summary.unassigned_job_costs))
+        self.assertFalse(summary.figure_is_partial)  # all 8 demo jobs have a figure
 
 
 class AttentionTests(unittest.TestCase):
