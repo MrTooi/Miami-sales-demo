@@ -344,6 +344,20 @@ class ReportLayoutTests(unittest.TestCase):
         self.assertTrue(all(r["money_missing"] for r in result.rejected))
         self.assertEqual(["INV-1", "INV-2", "INV-3"], [r["invoice_id"] for r in result.accepted])
 
+    def test_a_named_total_needs_its_own_heading(self):
+        headers = ["Group", "Date", "Invoice", "Customer", "Job", "Amount"]
+        mapping = ji.suggest_mapping(headers, "invoices")
+        sale = ("", "10/02/2026", "INV-1", "Bakery (fictional)", "J-1", "100.00")
+        for above in ([], [("Gym (fictional)", "", "", "", "", "")]):  # no heading, or a different one
+            rows = [*above, sale, ("Total for Bakery (fictional)", "", "", "", "", "100.00")]
+            records = [ji.Record(n, r) for n, r in enumerate(rows, start=2)]
+            result = ji.intake(headers, records, mapping, "invoices", "MM/DD/YYYY")
+            self.assertEqual([], result.skipped)
+            total = result.rejected[-1]
+            self.assertEqual(len(rows) + 1, total["row"])
+            self.assertTrue(total["money_missing"])
+            self.assertIn("Looks like a total row", " ".join(total["reasons"]))
+
     def test_a_number_or_date_is_never_a_heading_even_when_a_total_closes_it(self):
         # "500.00" in the invoice column may be a misplaced amount; a zero "Total for 500.00" mustn't hide it.
         headers = ["Invoice", "Date", "Customer", "Job", "Amount"]

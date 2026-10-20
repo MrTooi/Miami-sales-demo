@@ -915,9 +915,9 @@ def _layout_rows(headers: list[str], records: list[Record], mapping: dict[str, s
     """Rows of a report's layout that are not a sale or cost, by row number, with the reason.
 
     A row is skipped only with proof that it holds no line of its own:
-    - a total row (see _total_row) whose amount equals the sum of the rows directly above it,
-      back to the start of the file or to a heading or total row. "Total for X" below a heading
-      "X" must equal exactly the rows under that heading.
+    - a total row (see _total_row) whose amount equals the sum of the rows directly above it.
+      "Total for X" needs a heading "X" above it and must equal exactly the rows under that
+      heading; a plain "Total" may go back to the start of the file or to a heading or total row.
     - a heading: a row with one filled cell, not a number or date, and no amount, closed by such
       a "Total for <its text>". One that is never closed is rejected, not skipped.
     - the report's footer ("Accrual basis ..." or "Cash basis ..."), alone on the file's last row.
@@ -939,8 +939,10 @@ def _layout_rows(headers: list[str], records: list[Record], mapping: dict[str, s
         total = _total_row(cells, headers, mapping)
         if total:
             label, group, amount = total
+            # "Total for X" is proven only by the rows under its own heading "X"; a plain "Total" by
+            # the rows back to the file's start or to any heading or total row.
             heading = headings.pop(group, None) if group else None
-            if (running - heading[1] == amount) if heading else (running - amount in starts):
+            if (heading is not None and running - heading[1] == amount) if group else (running - amount in starts):
                 layout[rec.row] = f"A total row ('{label}'): it equals the rows above it, which are counted instead."
                 if heading:
                     layout[heading[0]] = f"A heading ('{group}'), closed by the total row on row {rec.row}."
