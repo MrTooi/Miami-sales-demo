@@ -1,7 +1,7 @@
 # Miami print/service shops: how they run, and what MargenX needs
 
 - **Date:** 2026-10-18. **Author:** Claude Code, at the owner's request.
-- **Product name:** the owner renamed Ledger to **MargenX** on 2026-10-18. The repo still says "Ledger" until a rename PR lands.
+- **Product name:** the owner renamed Ledger to **MarginX** on 2026-10-18, and settled the spelling as **MargenX** (matching the brand website) on 2026-10-20. The repo still says "Ledger" until a rename PR lands.
 - **Evidence level:** desk research only (vendor pages, community forums, Census, law-firm summaries). That is level 7–10 on the evidence hierarchy in `.github/copilot-instructions.md`. **None of this is customer evidence.** Every item marked *inference* or *verify* must be checked with real shops before we rely on it.
 
 ## 1. The market around us (observed)

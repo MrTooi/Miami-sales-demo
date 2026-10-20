@@ -2,7 +2,7 @@
 
 **Status:** draft for review (#92). **Scope source:** D-003 in `docs/DECISIONS.md`.
 
-The owner renamed the product from Ledger to **MargenX** on 2026-10-18. Code and other docs still say Ledger until a separate rename PR lands. Market notes come from `docs/research/MIAMI_SHOP_RESEARCH.md` (PR #95), which is desk research only, not customer evidence.
+The owner renamed the product from Ledger to **MarginX** on 2026-10-18, and settled the spelling as **MargenX** (matching the brand website) on 2026-10-20. Code and other docs still say Ledger until a separate rename PR lands. Market notes come from `docs/research/MIAMI_SHOP_RESEARCH.md` (PR #95), which is desk research only, not customer evidence.
 
 ## Who it's for
 - **Customers:** owners of small, job-based print, sign and apparel-printing shops in Miami-Dade, roughly 2–15 people.

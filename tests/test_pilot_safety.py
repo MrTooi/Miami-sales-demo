@@ -133,7 +133,9 @@ class PilotEntryPointTests(unittest.TestCase):
         page = " ".join(m.value for m in at.markdown)
         # The MargenX header (product name and tagline), not the Ledger demo, in any capitalisation.
         import marginx_ui as ui
-        self.assertIn(f"{ui.BRAND[:-1]}<b>{ui.BRAND[-1]}</b>", page)
+        self.assertEqual("MargenX", ui.BRAND)  # the owner's spelling (2026-10-20)
+        self.assertIn("Margen<b>X</b>", page)
+        self.assertNotIn("marginx", page.lower())
         self.assertIn(ui.TAGLINE, page)
         self.assertNotIn("ledger", page.lower())
         self.assertEqual([], [t.value for t in at.title])
