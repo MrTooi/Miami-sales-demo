@@ -149,6 +149,24 @@ class SafetyTests(unittest.TestCase):
                       "complete costs, added together.", html)
         self.assertNotIn("average", html)
 
+    def test_job_breakdown_includes_fees_on_the_job_and_adds_up(self):
+        html = render(report_from(
+            b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\n",
+            b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1 + b"B-3,10/01/2026,Bank,J-1,Bank fees,5.00\n"))
+        # $100 − $30 − $20 − $5 = $45: every line that's subtracted is shown.
+        self.assertIn('<tr><td>Sold for</td><td class="r">$100</td></tr><tr><td>Materials</td><td class="r">−$30</td>'
+                      '</tr><tr><td>Labor</td><td class="r">−$20</td></tr><tr><td>Fees &amp; overhead on this job</td>'
+                      '<td class="r">−$5</td></tr><tr class="tot"><td>Left after job costs</td><td class="r">$45</td>',
+                      html)
+
+    def test_a_small_customer_loss_is_still_a_visible_bar(self):
+        html = render(report_from(
+            b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,1000.00\nI-2,10/01/2026,B,J-2,100.00\n",
+            b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,200.00\n"
+            b"B-2,10/01/2026,Paper,J-1,Materials,200.00\nB-3,10/01/2026,Crew,J-2,Labor,51.00\n"
+            b"B-4,10/01/2026,Paper,J-2,Materials,50.00\n"))
+        self.assertIn('<i class="neg" style="width:3%">', html)  # B lost $1: under 1% of $1,000, still shown
+
     def test_styles_make_no_outside_requests(self):
         self.assertNotIn("http", ui._CSS)
         self.assertNotIn("@import", ui._CSS)

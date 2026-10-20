@@ -288,7 +288,9 @@ def _customers(report: ProfitReport) -> None:
     rows = []
     for c in sorted(counted, key=lambda c: (-c.contribution, c.customer)):
         share = percent(c.contribution, c.sales)  # the same rounding as the attention list
-        left_width = min(100, int(abs(c.contribution) * 100 / top))  # a loss is drawn as a red bar, not hidden
+        left_width = min(100, int(abs(c.contribution) * 100 / top))
+        if c.contribution < 0:
+            left_width = max(left_width, 3)  # a loss, however small, is always a visible red bar
         bar = "neg" if c.contribution < 0 else "left"
         note = "" if c.status == "complete" else "<small>Needs a check</small>"
         jobs = [j for j in report.jobs if j.job_id in c.jobs]
