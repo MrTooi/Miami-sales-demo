@@ -90,3 +90,26 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
   - Requests are sent with `store: false`.
   - A diff or description that looks like it contains a credential is never sent.
 - Evidence / links: Issue #92.
+
+### D-005 — Stopping rule for manual reviews of MarginX import labels while data is fictional-only
+- Date: 2026-10-20
+- Status: Accepted (in force once this record is merged with the owner's approval)
+- Decided by: Human owner (MrTooi), who chose "b" in a Claude Code session on 2026-10-20, after about 15 manual review rounds on PR #102. Each round found one narrower spreadsheet-label variant.
+- Context:
+  - MarginX reads CSV exports with free-text labels (account names, transaction types, categories). The set of possible labels has no end, so a careful reviewer can always find another variant.
+  - Every uncertain case already fails closed: the row is rejected with a reason, and affected jobs and customers are shown as Provisional, never as a confident Complete figure.
+  - All data is fictional until the pilot data-safety minimums are merged and the owner approves real data (D-003). The real QuickBooks/Square export layouts are not known yet.
+- Decision:
+  1. For MarginX import and classification PRs, while data is fictional-only, the manual independent review gives PASS or PASS WITH WARNINGS unless it finds a defect that can show a wrong figure as Complete for a **common, realistic export layout**.
+  2. Narrower label variants are listed as "Follow-ups for real pilot files". They are not merge blockers.
+  3. Before any real data is used, those follow-ups are resolved by supporting the shops' actual export layouts explicitly. A layout that isn't supported is shown as unsupported or Provisional, never guessed.
+- Not changed:
+  - D-004 itself: the automatic review still runs, and high-risk changes still need a separate manual review.
+  - Merging still needs the owner's explicit approval for each PR.
+  - Every finance, security and evidence rule in `AGENTS.md`.
+  - Real customer data still needs step 3 (pilot data-safety minimums) and a separate owner decision.
+- Consequences / risks:
+  - Faster merges for supervised, fictional-data steps.
+  - Some label variants stay unhandled until real exports are tested. This is acceptable only because uncertain rows fail closed and no real data is used.
+  - The follow-up list must be carried into real-export testing, not forgotten.
+- Evidence / links: PR #102 manual review comments; PR #100.
