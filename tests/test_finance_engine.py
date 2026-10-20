@@ -135,6 +135,7 @@ class MoneySizeTests(unittest.TestCase):
         # file can hold) is still exact: the Inexact trap would raise if anything were rounded.
         from decimal import Inexact, localcontext
         with localcontext() as ctx:
+            ctx.prec = 28  # Python's default, which MargenX's sums use; set here so the check doesn't depend on the test run
             ctx.traps[Inexact] = True
             for amount in (MAX_MONEY, -MAX_MONEY, Decimal("0.01")):
                 self.assertEqual(amount * 10 ** 9, sum([amount] * 1000, Decimal(0)) * 10 ** 6)
