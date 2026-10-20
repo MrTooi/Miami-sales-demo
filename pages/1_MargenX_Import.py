@@ -121,7 +121,7 @@ else:
     if not confirmed:
         st.info("Tick the box above to choose files.")
     else:
-        uploads = st.file_uploader("Drop your sales and cost CSV files here", type=["csv"],
+        uploads = st.file_uploader("Drop your sales and cost files here (CSV or Excel)", type=["csv", "xlsx"],
                                    accept_multiple_files=True, key=f"upload-{session}")
         if ps.upload_allowed(False, bool(uploads), confirmed):
             files = [(u.name, u.getvalue()) for u in uploads]
@@ -158,10 +158,13 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
     # Each file in the list gets its own widget namespace, even if two files are identical.
     key = f"f{position}-{hashlib.sha256(name.encode('utf-8') + data).hexdigest()[:12]}"
     try:
-        headers, records = ji.read_csv(data)
+        headers, records, notes = ji.read_file(name, data)
     except ji.IntakeError as exc:
         st.error(f"This file can't be read: {ui.md_text(exc)}")
         return
+    for note in notes:
+        # How the file was read (title lines skipped, placeholder column names): shown, never hidden.
+        st.caption(ui.md_text(note))
     if not records:
         st.info("This file has column headers but no rows, so there is nothing to import.")
         return EXCLUDED
@@ -301,6 +304,13 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
             st.dataframe(
                 pd.DataFrame([{"Row in file": r["row"], "Why": ji.safe_cell(" ".join(r["reasons"])),
                                "Original row": ji.safe_cell(" | ".join(r["cells"]))} for r in result.rejected]),
+                hide_index=True, width="stretch",
+            )
+    if result.skipped:
+        with st.expander(f"Report lines skipped: totals and headings ({len(result.skipped)})"):
+            st.dataframe(
+                pd.DataFrame([{"Row in file": r["row"], "Why": ji.safe_cell(r["reason"]),
+                               "Original row": ji.safe_cell(" | ".join(r["cells"]))} for r in result.skipped]),
                 hide_index=True, width="stretch",
             )
     return result

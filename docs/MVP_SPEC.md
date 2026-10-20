@@ -17,7 +17,7 @@ The owner renamed the product from Ledger to **MarginX** on 2026-10-18, and sett
 | Labor hours per job | Optional | Time sheet or spreadsheet |
 | Payment processor or bank deposits | Optional | Square, bank |
 
-- **Formats:** CSV first (D-003). Excel (.xlsx), several files at once, and saved per-shop column mappings come in later reviewed steps, once coverage and provenance rules are defined.
+- **Formats:** CSV and Excel (.xlsx), one sheet per file. Excel was pulled forward from step 4 on 2026-10-20 because QuickBooks Online exports reports as Excel. Report-style files are read too: title lines above the column names are skipped, and total and heading rows are listed as skipped, never counted. Several files at once and saved per-shop column mappings still come in a later reviewed step, once coverage and provenance rules are defined.
 - **Columns:** the owner maps unfamiliar columns to ours, and the mapping is validated before any value is used.
 - **Bank and card exports:** these are never automatically treated as revenue or costs. Provider movements, fees, transfers and genuine expenses are told apart first, so nothing is double-counted (`LAUNCH_RISK_REGISTER.md`).
 
@@ -62,7 +62,7 @@ None of these has been measured yet; they are targets, not results. Record actua
    - `finance_engine.summarize` is a period-total helper with no job or customer grouping, not an existing job-profit engine.
    - Linking the two files needs only what is required for profit. Excel and saved mappings wait for step 4.
 3. **Pilot data-safety minimums** (`LAUNCH_RISK_REGISTER.md`). After this, and only with the owner's explicit approval of real data, 1–2 pilot shops can use MargenX on their own files.
-4. **Excel (.xlsx), more file combinations and saved per-shop mappings**, plus coverage and provenance rules.
+4. **More file combinations and saved per-shop mappings**, plus coverage and provenance rules. (Reading Excel and report-style files was done early, on 2026-10-20.)
 5. **"Where you're losing money" list.**
 6. **Weekly summary.**
 
