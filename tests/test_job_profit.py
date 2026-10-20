@@ -248,20 +248,31 @@ class CompletenessTests(unittest.TestCase):
         self.assertEqual(("complete", Decimal("50.00")), (report.jobs[0].status, report.jobs[0].contribution))
         self.assertIn("$90.00 aren't linked to a job", " ".join(report.notes))
 
-    def test_direct_cost_words_win_over_fee_words(self):
-        for text, category in (("Materials processing", "materials"), ("Labor fees", "labor"),
-                               ("Outsourced install fee", "outsourced"), ("Ink processing fee", "materials"),
+    def test_mixed_labels_are_other_and_never_exempt(self):
+        for text, category in (("Materials processing", "other"), ("Labor fees", "other"),
+                               ("Outsourced install fee", "other"), ("Ink processing fee", "other"),
                                ("Processing fees", "fees_overhead"), ("Rent", "fees_overhead"),
                                ("Merchant fees", "fees_overhead"), ("Delivery fee", "other"),
-                               ("Installation fee", "other"), ("Rush fee", "other")):
+                               ("Installation fee", "other"), ("Rush fee", "other"),
+                               ("Cost of Goods Sold:Materials", "materials"), ("Job Labor", "labor")):
             self.assertEqual(category, jp.cost_category(text), text)
-        # The review's example: unlinked "Materials processing" holds the job back.
+        # Unlinked "Materials processing" may belong to the job: it holds the job back.
         report = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
                              b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n"
                              b"B-3,10/02/2026,Paper Co,,Materials processing,40.00\n",
                              b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n")
         self.assertEqual(("provisional", Decimal("50.00")), (report.jobs[0].status, report.jobs[0].contribution))
         self.assertIn("worth $40.00 have no job number", " ".join(report.jobs[0].reasons))
+
+    def test_negated_labels_never_confirm_materials_or_outsourced_work(self):
+        for text in ("Non-material costs", "No materials", "Not outsourced", "Non-outsourced work", "No labor"):
+            self.assertEqual("other", jp.cost_category(text), text)
+            report = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                                 b"B-2,10/01/2026,Shop,J-1," + text.encode() + b",30.00\n",
+                                 b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n")
+            job, customer = report.jobs[0], report.customers[0]
+            self.assertEqual(("provisional", Decimal("50.00")), (job.status, job.contribution), text)  # still subtracted
+            self.assertEqual("provisional", customer.status, text)
 
     def test_unlinked_delivery_or_installation_fees_hold_jobs_back(self):
         for fee in (b"Delivery fee", b"Installation fee"):
@@ -304,6 +315,17 @@ class CompletenessTests(unittest.TestCase):
         self.assertEqual((Decimal("3.90"), Decimal("46.10"), "complete"),
                          (job.costs["fees_overhead"] + job.costs["other"], job.contribution, job.status))
         self.assertEqual(Decimal("2.90"), job.costs["fees_overhead"])
+
+    def test_payout_net_of_fees_is_never_a_sale_or_a_cost(self):
+        costs = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                 b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n")
+        report = self.report(costs, b"Invoice,Date,Customer,Job,Type,Amount\nI-1,10/01/2026,Bakery,J-1,Invoice,100.00\n"
+                                    b"I-2,10/01/2026,Square,J-1,Payout net of fees,40.00\n")
+        job = report.jobs[0]
+        self.assertEqual((Decimal("100.00"), "provisional"), (job.sales, job.status))  # never $90 Complete
+        report = self.report(costs + b"B-3,10/01/2026,Bank,J-1,Transfer less fees,40.00\n")
+        job = report.jobs[0]
+        self.assertEqual((Decimal("50.00"), "provisional"), (job.total_costs, job.status))
 
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))

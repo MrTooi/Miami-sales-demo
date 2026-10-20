@@ -66,13 +66,24 @@ DATE_FORMATS = {
     "DD/MM/YYYY": "%d/%m/%Y",
 }
 
-LABOR_WORDS = ("labor", "labour", "wages", "payroll")
-_LABOR = re.compile(r"\b(?<!non[- ])(?<!non)(" + "|".join(LABOR_WORDS) + r")\b", re.IGNORECASE)
+# Whole cost types (after any "Parent:" account prefix) that are labor. Only an exact match
+# counts, so "Non-labor", "No labor" or "Labor fees" never confirm labor. Shared with job_profit.
+LABOR_TYPES = {
+    "labor", "labour", "wages", "payroll", "direct labor", "direct labour", "contract labor", "contract labour",
+    "labor costs", "labour costs", "job labor", "shop labor", "production labor", "installation labor",
+    "install labor", "design labor", "salaries and wages", "wages and salaries", "payroll expenses",
+}
 
 
-def is_labor(cost_type: str) -> bool:
-    """A whole-word labor category; "Non-labor" or "nonlabor" doesn't count."""
-    return bool(_LABOR.search(cost_type or ""))
+def cost_type_name(cost_type: str | None) -> str:
+    """A cost type reduced to its own name: the part after any "Parent:" account prefix, in
+    lower case, punctuation as spaces ("Cost of Goods Sold:Job Labor" -> "job labor")."""
+    return re.sub(r"[^a-z0-9]+", " ", (cost_type or "").split(":")[-1].lower()).strip()
+
+
+def is_labor(cost_type: str | None) -> bool:
+    """True only when the whole type is a recognized labor name."""
+    return cost_type_name(cost_type) in LABOR_TYPES
 
 
 # Header words that point to one kind of file. "bill to" (an invoice field) is
@@ -110,10 +121,27 @@ DOCUMENT_TOTALS = {"invoice total", "bill total", "invoice amount", "bill amount
 
 # Columns whose cells say what kind of transaction a row is ("Type: Payment").
 TYPE_HEADERS = {"type", "transaction type", "txn type", "trans type", "entry type", "document type", "doc type"}
-# Row types that are cash movements, not sales or costs. ("Check" is an ordinary way to
-# pay an expense, and credit memos are legitimate negative invoice lines, so neither is here.)
+# Words that signal money moving. A row type containing one is never guessed at: it must be
+# exactly a known cash-movement type (not a line) or exactly a known fee type (a cost);
+# anything else ("Payout net of fees") is unclear and rejected as possibly missing money.
 ROW_CASH_WORDS = {"payment", "payments", "deposit", "deposits", "transfer", "transfers", "payout", "payouts",
                   "settlement", "settlements", "withdrawal", "withdrawals", "receipt", "received"}
+# Whole row types that are cash movements, not sales or costs. ("Check" is an ordinary way to
+# pay an expense, and credit memos are legitimate negative invoice lines, so neither is here.)
+CASH_MOVEMENT_TYPES = {
+    "payment", "payments", "deposit", "deposits", "bank deposit", "transfer", "transfers", "bank transfer",
+    "funds transfer", "payout", "payouts", "settlement", "settlements", "withdrawal", "withdrawals", "receipt",
+    "received", "receive payment", "received payment", "payment received", "customer payment", "invoice payment",
+    "bill payment", "bill payment check", "bill payment credit card", "bill pmt check", "bill pmt cc",
+    "bank credit", "credit card payment", "loan payment",
+}
+# Whole row types that are fees for moving money: ordinary costs.
+FEE_TYPES = {
+    "payment processing fee", "payment processing fees", "processing fee", "processing fees", "merchant fee",
+    "merchant fees", "transfer fee", "transfer fees", "payout fee", "payout fees", "wire fee", "wire fees",
+    "bank fee", "bank fees", "bank charges", "service charge", "service charges", "transaction fee",
+    "transaction fees", "credit card fees", "card processing fees", "deposit fee", "deposit fees",
+}
 # Description/memo/type text marking a summary row rather than a line of its own.
 SUMMARY_LABELS = {"subtotal", "sub total", "total", "invoice total", "bill total", "grand total", "total due",
                   "amount due", "balance due", "total amount"}
@@ -472,14 +500,20 @@ def _type_columns(headers: list[str], mapping: dict[str, str | None]) -> list[in
 
 
 def _cash_movement_type(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
-    """The row's type text when it names a payment, transfer, deposit, payout or settlement,
-    or a bank credit ("Bank Credit"). Credit memos, credit card charges and other credits are
-    not: those are ordinary lines or unclear (see _unclear_credit)."""
+    """The row's type text when the whole type is a known cash movement ("Payment", "Transfer",
+    "Bill Payment (Check)", "Bank Credit"): money moving, not a line."""
     for i in type_columns:
-        words = set(_norm(cells[i]).split())
-        if words & {"fee", "fees"}:
-            continue  # "Payment processing fees", "Transfer fee": a cost of moving money, not the money
-        if words & ROW_CASH_WORDS or {"bank", "credit"} <= words:
+        if _norm(cells[i]) in CASH_MOVEMENT_TYPES:
+            return cells[i].strip()
+    return None
+
+
+def _mixed_cash_type(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
+    """The row's type text when it mentions money moving but is neither a known cash movement nor
+    a known fee ("Payout net of fees"): what it is can't be told, so it is never guessed."""
+    for i in type_columns:
+        text = _norm(cells[i])
+        if set(text.split()) & ROW_CASH_WORDS and text not in CASH_MOVEMENT_TYPES and text not in FEE_TYPES:
             return cells[i].strip()
     return None
 
@@ -653,7 +687,12 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             what = "sale" if kind == "invoices" else "cost"
             reasons.append(f"Type '{movement}' is a payment, transfer or deposit (money moving), not a {what}; "
                            "not imported.")
-        unclear = None if movement else _unclear_credit(rec.cells, types)
+        mixed = None if movement else _mixed_cash_type(rec.cells, types)
+        if mixed:
+            # Real money may be missing here, so this is not counted as "not a line".
+            reasons.append(f"Type '{mixed}' mentions money moving (a payment, payout, transfer or deposit) but "
+                           "isn't a plain payment or fee, so what it is can't be told; not imported.")
+        unclear = None if movement or mixed else _unclear_credit(rec.cells, types)
         if unclear:
             # Real money may be missing here, so this is not counted as "not a line".
             reasons.append(f"Type '{unclear}' could be a customer or supplier credit or money received; "

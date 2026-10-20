@@ -237,6 +237,20 @@ class MappingTests(unittest.TestCase):
         self.assertEqual({"label": "Paper Co on 10/1/2026 (no bill number)", "lines": 2},
                          ji.amount_scope_question(headers, rows, ji.suggest_mapping(headers, "costs"), "costs"))
 
+    def test_row_types_that_mention_money_moving_are_matched_whole_or_refused(self):
+        headers, rows = ji.read_csv(b"Date,Vendor,Type,Amount\n10/31/2026,Square,Payment processing fees,2.90\n"
+                                    b"10/31/2026,Bank,Transfer,500.00\n10/31/2026,Square,Payout net of fees,40.00\n"
+                                    b"10/31/2026,Bank,Transfer less fees,40.00\n10/31/2026,Bank,Wire fee,15.00\n")
+        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY", "line")
+        self.assertEqual([2, 6], [r["row"] for r in result.accepted])  # the two fees are costs
+        self.assertEqual([(3, False), (4, True), (5, True)], [(r["row"], r["money_missing"]) for r in result.rejected])
+        self.assertIn("isn't a plain payment or fee", " ".join(result.rejected[1]["reasons"]))
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Type,Amount\nI-1,10/31/2026,Demo,Invoice,100.00\n"
+                                    b"I-2,10/31/2026,Square,Payout net of fees,40.00\n")
+        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        self.assertEqual(([2], [3]), ([r["row"] for r in result.accepted], [r["row"] for r in result.rejected]))
+        self.assertTrue(result.rejected[0]["money_missing"])
+
     def test_labeled_subtotal_rows_are_never_counted_even_under_a_line_amount_header(self):
         headers, rows = ji.read_csv(b"Invoice,Date,Customer,Description,Line Amount\n"
                                     b"INV-1,10/31/2026,Acme,Sign,40.00\nINV-1,10/31/2026,Acme,Install,60.00\n"
@@ -592,10 +606,11 @@ class CostIntakeTests(unittest.TestCase):
         self.assertIn("1 of 8 imported cost lines have no cost type", report)
         self.assertIn("No labor costs were found", report)
 
-    def test_labor_detection_is_whole_word_and_not_negated(self):
-        for value in ("Labor", "Direct labour", "Wages", "payroll - shop", "LABOR"):
+    def test_labor_detection_needs_a_whole_recognized_labor_type(self):
+        for value in ("Labor", "Direct labour", "Wages", "Payroll", "LABOR", "Cost of Goods Sold:Job Labor"):
             self.assertTrue(ji.is_labor(value), value)
-        for value in ("Non-labor", "nonlabor", "Non labor", "Laboratory supplies", "Materials", "", None):
+        for value in ("Non-labor", "nonlabor", "Non labor", "No labor", "Labor fees", "Laboratory supplies",
+                      "payroll - shop", "Materials", "", None):
             self.assertFalse(ji.is_labor(value), value)
         headers, rows = ji.read_csv(b"Date,Payee,Type,Amount\n10/01/2026,A,Non-labor,1.00\n")
         result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")

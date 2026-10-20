@@ -20,7 +20,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from job_intake import IntakeResult, is_labor
+from job_intake import LABOR_TYPES, IntakeResult, cost_type_name
 
 ZERO = Decimal("0.00")
 CATEGORIES = ("materials", "outsourced", "labor", "fees_overhead", "other", "unknown")
@@ -42,10 +42,19 @@ FEE_OVERHEAD_TYPES = {
     "payment processing fee", "payment processing fees", "credit card processing", "credit card fees",
     "card processing fees", "bank fee", "bank fees", "bank charges",
 }
-MATERIAL_WORDS = {"material", "materials", "supplies", "supply", "inventory", "stock", "substrate", "substrates",
-                  "blanks", "media", "ink", "vinyl", "paper"}
-OUTSOURCED_WORDS = {"outsourced", "outsource", "outsourcing", "subcontract", "subcontractor", "subcontractors",
-                    "subcontracted", "contractor", "contractors"}
+# Whole cost types (after any "Parent:" account prefix) that are materials or outsourced work
+# (labor's list, LABOR_TYPES, is in job_intake). Only an exact match counts, so "Non-material costs", "No materials" or "Materials
+# processing" never confirm materials: they are subtracted as "other" and can't make a job complete.
+MATERIAL_TYPES = {
+    "materials", "material", "supplies", "job supplies", "job materials", "materials and supplies",
+    "supplies and materials", "inventory", "printing supplies", "production materials", "raw materials",
+    "substrates", "blanks", "ink", "vinyl", "paper", "media", "cost of materials", "materials cost",
+}
+OUTSOURCED_TYPES = {
+    "outsourced", "outsourced work", "outsourcing", "subcontract", "subcontractor", "subcontractors",
+    "subcontracted work", "contractor", "contractors", "outside services", "sublet", "outsourced printing",
+    "contract printing",
+}
 
 STATUS_ORDER = ("complete", "provisional", "unavailable")
 STATUS_LABELS = {"complete": "Complete", "provisional": "Provisional", "unavailable": "Unavailable"}
@@ -56,26 +65,21 @@ BASIS = ("Direct job contribution: sales billed on each job's invoice lines (cre
 
 
 def cost_category(cost_type: str | None) -> str:
-    """Materials, outsourced, labor, fees/overhead, other, or unknown (blank or a "not known"
-    marker), from the cost type text.
+    """Materials, outsourced, labor, fees/overhead, other, or unknown, from the cost type text.
 
-    Direct-cost words win ("Materials processing" is materials), and fees/overhead must be the
-    whole type from a short list ("Rent", "Merchant fees"), because a cost typed as fees or
-    overhead is treated as outside the job when it has no job number.
+    Only a whole, recognized type counts (after any "Parent:" account prefix, as in
+    "Cost of Goods Sold:Materials"): labels are never read word by word, so a negated or mixed
+    label ("Non-material costs", "Equipment rent") can't confirm materials or count as overhead.
+    Any other label is "other": subtracted, but it never makes a job complete, and when
+    unlinked it may belong to a job. Blank or "not known" markers are "unknown".
     """
-    text = (cost_type or "").strip()
-    if not text or re.sub(r"[^a-z0-9]+", " ", text.lower()).strip() in UNKNOWN_TYPES:
+    name = cost_type_name(cost_type)
+    if not name or name in UNKNOWN_TYPES:
         return "unknown"
-    if is_labor(text):
-        return "labor"
-    words_in_order = re.sub(r"[^a-z0-9]+", " ", text.lower()).split()
-    words = set(words_in_order)
-    if words & OUTSOURCED_WORDS:
-        return "outsourced"
-    if words & MATERIAL_WORDS:
-        return "materials"
-    if " ".join(words_in_order) in FEE_OVERHEAD_TYPES:
-        return "fees_overhead"
+    for category, names in (("labor", LABOR_TYPES), ("materials", MATERIAL_TYPES),
+                            ("outsourced", OUTSOURCED_TYPES), ("fees_overhead", FEE_OVERHEAD_TYPES)):
+        if name in names:
+            return category
     return "other"
 
 
