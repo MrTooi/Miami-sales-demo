@@ -302,7 +302,7 @@ def read_file(name: str, data: bytes) -> tuple[list[str], list[Record], list[str
     name is blank in such a report gets a visible placeholder name. Anything else unclear is refused.
     """
     is_xlsx = name.lower().endswith(".xlsx")
-    if is_xlsx != data.startswith(b"PK\x03\x04"):
+    if not (is_xlsx or name.lower().endswith(".csv")) or is_xlsx != data.startswith(b"PK\x03\x04"):
         raise IntakeError("The file's name and contents don't match (an Excel file must end in .xlsx, a CSV file "
                           "in .csv). Export it again as CSV or Excel (.xlsx).")
     table = _xlsx_rows(data) if is_xlsx else _csv_rows(data)
@@ -451,6 +451,10 @@ def _xlsx_rows(data: bytes) -> list[tuple[int, list[str]]]:
     return [(number, cells + [""] * (width - len(cells))) for number, cells in filled[0]]
 
 
+# The time part of an ISO date that is exactly midnight: 00:00, 00:00:00, 00:00:00.000, Z or +00:00.
+MIDNIGHT = re.compile(r"00:00(?::00(?:\.0+)?)?(?:Z|[+-]00:?00)?")
+
+
 class _Unavailable(str):
     """A cell whose value isn't in the file: a formula never calculated, or an error like #REF!."""
 
@@ -484,6 +488,14 @@ def _exact_cell_parser():
                 # number, which no date check accepts.
                 stored = Decimal(element.findtext(value_tag).strip())
                 if stored != stored.to_integral_value():
+                    cell["value"] = stored
+            elif cell["data_type"] == "d" and cell["value"] is not None:
+                # A date written as text (t="d"): openpyxl drops part of a fraction of a second, so the
+                # stored text is checked. Any time of day other than midnight keeps the stored text,
+                # which no date check accepts.
+                stored = element.findtext(value_tag).strip()
+                time = stored.partition("T")[2]
+                if time and not MIDNIGHT.fullmatch(time):
                     cell["value"] = stored
             return cell
 

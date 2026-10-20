@@ -156,6 +156,17 @@ class ExcelReadingTests(unittest.TestCase):
                 self.assertIn("doesn't match", " ".join(result.rejected[0]["reasons"]))
         self.assertEqual("2026-10-02", result.accepted[0]["date"])
 
+    def test_a_date_written_as_text_with_any_time_of_day_is_refused_exactly(self):
+        # t="d" cells hold ISO text; openpyxl would read 00:00:00.000001 as midnight.
+        for stored, accepted in (("2026-10-02T00:00:00.000001", False), ("2026-10-02T00:00:00.0000001", False),
+                                 ("2026-10-02T14:30:00", False), ("2026-10-02T00:00:00", True), ("2026-10-02", True)):
+            line = text_cells(2, "INV-1", "", "Bakery (fictional)", "J-1", "10.00").replace(
+                '<c r="C2"', f'<c r="B2" t="d"><v>{stored}</v></c><c r="C2"')
+            result, _ = intake("sales.xlsx", raw_xlsx(RAW_HEADER + line), "invoices", "YYYY-MM-DD")
+            self.assertEqual(accepted, bool(result.accepted), stored)
+            if accepted:
+                self.assertEqual("2026-10-02", result.accepted[0]["date"])
+
     def test_formulas_without_a_saved_result_and_error_cells_refuse_the_file(self):
         # A formula Excel never calculated has no value in the file. It is never read as blank.
         with self.assertRaisesRegex(ji.IntakeError, "Cell E2 holds a formula with no saved result"):
@@ -199,6 +210,8 @@ class ExcelReadingTests(unittest.TestCase):
             ji.read_file("sales.xlsx", b"Invoice,Date,Customer,Amount\nINV-1,10/02/2026,A,1.00\n")
         with self.assertRaisesRegex(ji.IntakeError, "name and contents don't match"):
             ji.read_file("sales.csv", xlsx(table))
+        with self.assertRaisesRegex(ji.IntakeError, "name and contents don't match"):
+            ji.read_file("sales.txt", b"Invoice,Date,Customer,Amount\nINV-1,10/02/2026,A,1.00\n")
         with self.assertRaisesRegex(ji.IntakeError, "can't be opened"):
             ji.read_file("sales.xlsx", b"PK\x03\x04 not really a zip")
         with mock.patch.object(ji, "MAX_XLSX_UNPACKED_BYTES", 100):
