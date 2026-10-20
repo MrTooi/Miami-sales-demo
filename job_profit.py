@@ -102,6 +102,7 @@ class JobResult:
     cost_lines: int
     status: str
     reasons: list[str] = field(default_factory=list)
+    description: str = ""  # the first description on the job's invoice lines, for display only
 
     @property
     def total_costs(self) -> Decimal:
@@ -138,6 +139,9 @@ class ProfitReport:
     unlinked_sales_lines: int = 0
     unlinked_costs: Decimal = ZERO
     unlinked_cost_lines: int = 0
+    # The part of unlinked_costs that isn't clear overhead or fees: it may belong to jobs.
+    unlinked_job_costs: Decimal = ZERO
+    unlinked_job_cost_lines: int = 0
     invoice_dates: tuple[str, str] | None = None
     cost_dates: tuple[str, str] | None = None
     basis: str = BASIS
@@ -178,6 +182,7 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
     sales: dict[str, Decimal] = defaultdict(lambda: ZERO)
     customers: dict[str, set[str]] = defaultdict(set)
     invoice_lines: dict[str, int] = defaultdict(int)
+    descriptions: dict[str, str] = {}
     billed: set[str] = set()  # jobs with at least one positive sale (not only credits)
     # Sales with no job number, by look-alike customer name (see _fold), so "bakery" counts for "Bakery".
     no_job_sales: dict[str, list[Decimal]] = defaultdict(list)
@@ -191,6 +196,8 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
         sales[job] += line["amount"]
         customers[job].add(line["customer"])
         invoice_lines[job] += 1
+        if line.get("description") and job not in descriptions:
+            descriptions[job] = line["description"]
         if line["amount"] > 0:
             billed.add(job)
 
@@ -362,6 +369,10 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
     if linked_fees:
         report.notes.append(f"{format_money(linked_fees)} of fees or overhead were recorded against jobs and are "
                             "subtracted from those jobs (column 'Fees & overhead on this job').")
+    report.unlinked_job_costs = sum(unlinked_job_costs, ZERO)
+    report.unlinked_job_cost_lines = len(unlinked_job_costs)
+    for job in report.jobs:
+        job.description = descriptions.get(job.job_id, "")
     # Unlinked costs are disclosed in two parts: clear overhead and fees (outside the basis), and
     # anything else, which may belong to a job (and keeps every job provisional, above).
     unlinked_overhead = report.unlinked_costs - sum(unlinked_job_costs, ZERO)

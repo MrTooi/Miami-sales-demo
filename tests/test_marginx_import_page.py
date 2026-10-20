@@ -18,6 +18,11 @@ def radio(at, label):
     return next(r for r in at.radio if r.label == label)
 
 
+def rejected_table(at):
+    """The first "Rows that couldn't be used" table (results tables now come before the files)."""
+    return next(d.value for d in at.dataframe if "Row in file" in d.value.columns)
+
+
 def run_source(source):
     at = AppTest.from_string(source, default_timeout=30)
     at.run()
@@ -69,9 +74,9 @@ class MarginXImportPageTests(unittest.TestCase):
         text = page_text(at)
         self.assertIn("4 rows of 10 couldn't be imported", text)
         self.assertIn("1 of 6 imported invoice lines have no job number", text)
-        rejected_table = at.dataframe[0].value
-        self.assertEqual([7, 8, 10, 11], list(rejected_table["Row in file"]))
-        self.assertTrue(all(rejected_table["Why"].str.len() > 0))
+        rejected = rejected_table(at)
+        self.assertEqual([7, 8, 10, 11], list(rejected["Row in file"]))
+        self.assertTrue(all(rejected["Why"].str.len() > 0))
 
     def test_own_upload_requires_made_up_confirmation(self):
         at = self.run_page()
@@ -122,7 +127,7 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertIn("2 rows of 2 couldn't be imported", page_text(at))
         self.assertIn("No invoice lines were imported", page_text(at))
-        self.assertEqual([2, 3], list(at.dataframe[0].value["Row in file"]))  # every row listed with its reason
+        self.assertEqual([2, 3], list(rejected_table(at)["Row in file"]))  # every row listed with its reason
         self.assertEqual(0, len(at.get("download_button")))  # no repair-file download (removed on purpose)
 
     def test_automatic_date_format_can_be_changed_and_report_recomputes(self):
@@ -282,7 +287,7 @@ class MarginXImportPageTests(unittest.TestCase):
         text = page_text(at)
         self.assertIn("2 rows of 2 couldn't be imported", text)
         self.assertIn("No invoice lines were imported", text)
-        self.assertEqual([2, 3], list(at.dataframe[0].value["Row in file"]))
+        self.assertEqual([2, 3], list(rejected_table(at)["Row in file"]))
 
     def test_repeated_generic_total_asks_what_the_number_is(self):
         csv_text = ("Invoice,Date,Customer,Description,Total\n"
@@ -383,7 +388,7 @@ class MarginXImportPageTests(unittest.TestCase):
                              "INV-1,10/31/2026,X (fictional),Subtotal,100.00\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertFalse(at.exception, at.exception)
         self.assertIn("2 invoice lines imported (1 invoice)", page_text(at))
-        self.assertEqual([4], list(at.dataframe[0].value["Row in file"]))
+        self.assertEqual([4], list(rejected_table(at)["Row in file"]))
 
     def test_unlabeled_sum_under_line_amount_is_asked_about(self):
         at = self.with_files("Invoice,Date,Customer,Description,Line Amount\n"
@@ -408,7 +413,7 @@ class MarginXImportPageTests(unittest.TestCase):
 
     def test_sample_profit_by_job_after_answering_the_questions(self):
         at = self.run_page()
-        self.assertTrue(any("waits until every file above is read" in i.value for i in at.info))  # not before answers
+        self.assertTrue(any("appear here once every file below is read" in i.value for i in at.info))  # not before answers
         radio(at, SAMPLE_AMOUNT_QUESTION).set_value("line").run()
         radio(at, INVOICE_DATE_QUESTION).set_value("MM/DD/YYYY").run()
         self.assertFalse(at.exception, at.exception)
@@ -461,7 +466,7 @@ class MarginXImportPageTests(unittest.TestCase):
             'SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")', f"SAMPLE_FILES = {tuple(files)!r}")
         at = run_source(source)
         self.assertFalse(at.exception, at.exception)
-        self.assertTrue(any("waits until every file above is read" in i.value and "c_unclear.csv" in i.value
+        self.assertTrue(any("appear here once every file below is read" in i.value and "c_unclear.csv" in i.value
                             for i in at.info))
         self.assertFalse(any("Direct contribution" in d.value.columns for d in at.dataframe))
         # Saying it's a bank statement settles it, and profit is calculated.

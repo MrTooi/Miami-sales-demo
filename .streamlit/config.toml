@@ -4,6 +4,8 @@
 gatherUsageStats = false
 
 [client]
+# No developer toolbar (Deploy, menu) for shop owners.
+toolbarMode = "viewer"
 # Show only a generic message in the page, never exception details or tracebacks: they could
 # quote values from a file. (Details still go to the terminal running the app, on that laptop.)
 showErrorDetails = "none"
@@ -15,3 +17,11 @@ maxUploadSize = 5
 # A closed browser tab's session, with its uploaded files, may be dropped after 10 seconds
 # instead of the default 2 minutes.
 disconnectedSessionTTL = 10
+
+[theme]
+# MarginX's light, brand-green look (matches the website). The older Ledger demo restyles itself.
+base = "light"
+primaryColor = "#0F7A55"
+backgroundColor = "#F4FBF7"
+secondaryBackgroundColor = "#E6F6EE"
+textColor = "#0E241B"
