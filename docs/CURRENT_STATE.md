@@ -57,7 +57,7 @@ Internal code names (`marginx_ui.py`, `marginx_insights.py`, `marginx_pilot.py`,
   - Spanish
 - **"Complete" means complete per the imported files** (sales, labor, and materials or outsourced work present, nothing rejected), not reconciled business profit. MargenX can't know about costs that were never recorded.
 - The website draft claims things MargenX doesn't do yet (Excel, labor hours, quoted vs. actual, card fees, the "change what happened" sliders). Fix them before it goes public.
-- **Real customer data is prohibited** until step 3b is done and the owner records **D-006** (real data approved for a named pilot shop).
+- **Real customer data is prohibited** until step 3b is done and the owner records the real-data decision (**D-007 or later**; real data approved for a named pilot shop).
 
 ## Next actions, in order
 1. **Accuracy self-tests** (requested by the owner; nothing on GitHub yet):
@@ -73,7 +73,7 @@ Internal code names (`marginx_ui.py`, `marginx_insights.py`, `marginx_pilot.py`,
    - whether to build the Opportunity Radar **evidence store** (issue #1, open), proposed so conversation notes become scored evidence
    - where Abrey records notes (a Google Sheet, or a page Claude builds)
 4. After Abrey's software note (due Wed 2026-10-21): **step 3b**, the real export layouts plus the high-priority follow-ups, guided by what shops actually use. Candidates to validate in conversations first: labor hours × rate (as an estimate), how-to-export instructions, profit by product type, quoted vs. actual.
-5. D-006, then the first sit-down pilot visit, following `docs/PILOT_VISIT_CHECKLIST.md`. Repeat the real upload-and-delete browser test before it.
+5. The real-data decision (D-007 or later), then the first sit-down pilot visit, following `docs/PILOT_VISIT_CHECKLIST.md`. Repeat the real upload-and-delete browser test before it.
 
 ## Paused or background
 - **AI-team readiness gate** (Suites A/B/C, #11/#69/#35): paused by the owner's choice (focus on MargenX). The run details below are from the earlier snapshot and weren't re-checked on 2026-10-20 evening; #69 is still open. The round-3 Suite A scheduled run `39175749268` (2026-10-18, at `34e43ee`) **failed** and is **not recorded on #69**. Every scheduled run since refuses at "Require reviewed hardening change" (expected; no paid call). A→B→C successes: 0. Unattended agents stay disabled.
