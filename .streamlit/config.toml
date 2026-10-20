@@ -1,0 +1,13 @@
+# MarginX safety settings (step 3a). Apply everywhere, pilot laptop included.
+[browser]
+# Send no usage statistics anywhere.
+gatherUsageStats = false
+
+[client]
+# Show only a generic message in the page, never exception details or tracebacks: they could
+# quote values from a file. (Details still go to the terminal running the app, on that laptop.)
+showErrorDetails = "none"
+
+[server]
+# Matches job_intake.MAX_FILE_BYTES (5 MB): larger uploads are refused before they are read.
+maxUploadSize = 5

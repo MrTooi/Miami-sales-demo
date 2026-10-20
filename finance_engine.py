@@ -1,12 +1,22 @@
 """Deterministic financial calculations. No inferred costs or savings."""
+import re
 from decimal import Decimal, InvalidOperation
+
+
+# U.S. amounts only: commas strictly as thousands separators ("1,234.56"), a dot for cents.
+# "12,50", "1,5" or "1.234,56" could be European style (12.50) or a typo, so they are refused
+# rather than read as 1250 or 15 (issue #36).
+_US_AMOUNT = re.compile(r"^[+-]?\$?[+-]?(\d+|\d{1,3}(,\d{3})+)(\.\d+)?$")
 
 
 def money(value):
     try:
         if value is None or isinstance(value, bool):
             raise ValueError("Missing/invalid money value")
-        amount = Decimal(str(value).replace("$", "").replace(",", "").strip())
+        text = str(value).strip()
+        if isinstance(value, str) and not _US_AMOUNT.match(text):
+            raise ValueError("Not a U.S. dollar amount")
+        amount = Decimal(text.replace("$", "").replace(",", ""))
         if not amount.is_finite() or amount.as_tuple().exponent < -2:
             raise ValueError("Money must have at most two decimal places")
         return amount

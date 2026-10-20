@@ -761,7 +761,8 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             try:
                 amount = money(values["amount"])
             except ValueError:
-                reasons.append(f"Amount '{values['amount']}' isn't a valid dollar amount (max 2 decimals).")
+                reasons.append(f"Amount '{values['amount']}' isn't a valid dollar amount (written like 1,234.56: "
+                               "commas only between thousands, max 2 decimals). '12,50' isn't read as 12.50 or 1,250.")
         if kind == "costs" and amount is not None and amount < 0:
             reasons.append("Cost is negative; record refunds or credits separately.")
         document = key_of(values, kind)
