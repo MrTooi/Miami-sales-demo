@@ -1,5 +1,6 @@
 """The static demo page (D-006): the made-up demo shop, built from the real MargenX code, with no
 way to send anything anywhere."""
+from html.parser import HTMLParser
 import importlib.util
 from pathlib import Path
 import re
@@ -12,6 +13,24 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("build_demo_page", ROOT / "scripts" / "build_demo_page.py")
 build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build)
+
+
+# Display-only HTML: text, layout, a table, an inline drawing and the details/summary breakdowns.
+ALLOWED_TAGS = {"title", "meta", "style", "main", "div", "span", "b", "small", "h3", "table", "tr", "td",
+                "details", "summary", "i", "svg", "path"}
+ALLOWED_ATTRIBUTES = {"name", "content", "class", "style",  # meta, classes, inline styles
+                      "width", "height", "viewbox", "fill", "aria-hidden", "d", "stroke", "stroke-width",
+                      "stroke-linejoin"}  # the brand mark's inline SVG
+
+
+class _Inventory(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags, self.attributes = set(), set()
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.add(tag)
+        self.attributes.update(name for name, _ in attrs)
 
 
 class DemoPageTests(unittest.TestCase):
@@ -33,11 +52,19 @@ class DemoPageTests(unittest.TestCase):
         self.assertIn("Example data only", self.page)
 
     def test_page_has_no_way_to_send_anything(self):
+        # Every tag and attribute must come from a short allowlist of display-only HTML. A script, form,
+        # input, button, frame, media, link, event handler or URL-bearing attribute fails the test.
+        found = _Inventory()
+        found.feed(self.page)
+        self.assertEqual(set(), found.tags - ALLOWED_TAGS, "unexpected tags")
+        self.assertEqual(set(), found.attributes - ALLOWED_ATTRIBUTES, "unexpected attributes")
+        self.assertFalse(any(a.startswith("on") for a in found.attributes))
         lowered = self.page.lower()
-        for forbidden in ("<script", "<form", "<input", "<textarea", "<button", "<iframe", "<object", "<embed",
-                          "upload", "onclick", "onload", "onerror", "javascript:", "@import", "action="):
+        # Nothing that loads or sends anything from CSS or text: no url(), @import, protocol or
+        # protocol-relative address, and no data: or javascript: scheme.
+        for forbidden in ("url(", "@import", "javascript:", "data:", "upload"):
             self.assertNotIn(forbidden, lowered, forbidden)
-        self.assertEqual([], re.findall(r"https?://", self.page))  # no outside requests or links
+        self.assertEqual([], re.findall(r"(?:https?:)?//[a-z0-9.-]+\.[a-z]", lowered))
 
     def test_clicking_a_job_or_customer_still_opens_its_breakdown(self):
         self.assertGreaterEqual(self.page.count("<details"), 12)  # 8 jobs + 4 customers in the demo shop

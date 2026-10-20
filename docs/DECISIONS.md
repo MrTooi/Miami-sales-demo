@@ -123,6 +123,7 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
   1. The public demo is one static HTML page of the made-up demo sign shop, built by `scripts/build_demo_page.py` from the real MargenX code. It has no server, script, form or upload path, and says plainly that every name and number is invented.
   2. It is published as a claude.ai artifact. The owner shares it from the Share menu. Claude Code never changes sharing or deploys.
   3. No real shop data, sign-up forms, analytics, scripts or visitor-data collection on it without a new owner decision.
+  4. The page may carry the early-access wording the owner approved for shop outreach on 2026-10-20 ("try it early, at no cost"; "we're inviting a few Miami shops first"), the same offer Abrey's outreach email makes. It promises no date, price or feature. Any visit with a shop's real files still needs the real-data decision below.
 - Not changed:
   - Real customer data still needs step 3b and a separate owner decision for a named pilot shop (D-007 or later), and is used only in the sit-down pilot on the team laptop.
   - No hosted Streamlit app is published (PR #112 was closed).

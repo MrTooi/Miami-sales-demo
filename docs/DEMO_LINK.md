@@ -16,7 +16,8 @@ owners. Decision: **D-006** in `docs/DECISIONS.md`.
 
 - The page is published as a claude.ai artifact. It is private until the owner shares it from the
   page's **Share** menu: either with Abrey's email, or as a link anyone can open.
-- Sharing is the owner's step. Claude Code never changes sharing or deploys.
+- Claude Code publishes or republishes the page only when the owner asks, and never changes who can
+  see it: sharing is always the owner's step.
 
 ## Updating it
 
@@ -26,7 +27,8 @@ After a merge that changes MargenX's screen or the demo shop files, rebuild and 
 python scripts/build_demo_page.py margenx-demo.html
 ```
 
-Then ask Claude Code to republish that file to the same link. The link stays the same.
+Then the owner asks Claude Code to republish that file to the same artifact. Republishing to the
+same artifact keeps its link and its sharing settings.
 
 ## Rules
 
