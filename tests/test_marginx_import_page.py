@@ -479,6 +479,16 @@ class MarginXImportPageTests(unittest.TestCase):
         self.assertEqual(("$10.00", "Complete"), (job["Direct contribution"], job["Status"]))
         self.assertTrue(any("can't tell whether the files cover every cost" in c.value for c in at.caption))
 
+    def test_payment_processing_fee_is_subtracted_on_the_page(self):
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                             "Bill,Date,Vendor,Job,Type,Amount\nB-1,10/31/2026,Crew (fictional),J-1,Labor,20.00\n"
+                             "B-2,10/31/2026,Paper Co (fictional),J-1,Materials,30.00\n"
+                             "B-3,10/31/2026,Square (fictional),J-1,Payment processing fees,2.90\n")
+        self.assertFalse(at.exception, at.exception)
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("$2.90", "$47.10", "Complete"),
+                         (job["Fees & overhead on this job"], job["Direct contribution"], job["Status"]))
+
     def test_header_only_file_needs_no_questions(self):
         at = self.with_files("Invoice,Date,Customer,Amount\n", "Date,Vendor,Amount\n10/31/2026,A,1.00\n")
         self.assertTrue(any("no rows" in i.value for i in at.info))

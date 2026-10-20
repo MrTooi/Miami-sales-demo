@@ -477,6 +477,8 @@ def _cash_movement_type(cells: tuple[str, ...], type_columns: list[int]) -> str 
     not: those are ordinary lines or unclear (see _unclear_credit)."""
     for i in type_columns:
         words = set(_norm(cells[i]).split())
+        if words & {"fee", "fees"}:
+            continue  # "Payment processing fees", "Transfer fee": a cost of moving money, not the money
         if words & ROW_CASH_WORDS or {"bank", "credit"} <= words:
             return cells[i].strip()
     return None

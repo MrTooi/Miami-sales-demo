@@ -294,6 +294,17 @@ class CompletenessTests(unittest.TestCase):
         report = self.report(costs + b"B-3,10/31/2026,Landlord,,Rent,40.00\n", invoices)
         self.assertEqual(("complete", "complete"), (report.jobs[0].status, report.customers[0].status))
 
+    def test_payment_processing_fees_are_costs_not_cash_movements(self):
+        report = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                             b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n"
+                             b"B-3,10/01/2026,Square,J-1,Payment processing fees,2.90\n"
+                             b"B-4,10/01/2026,Bank,J-1,Transfer fee,1.00\n",
+                             b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n")
+        job = report.jobs[0]
+        self.assertEqual((Decimal("3.90"), Decimal("46.10"), "complete"),
+                         (job.costs["fees_overhead"] + job.costs["other"], job.contribution, job.status))
+        self.assertEqual(Decimal("2.90"), job.costs["fees_overhead"])
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))

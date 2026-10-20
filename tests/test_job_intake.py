@@ -210,6 +210,10 @@ class MappingTests(unittest.TestCase):
         self.assertEqual([3, 5], [r["row"] for r in result.accepted])  # materials and an expense paid by check
         self.assertEqual([2, 4], [r["row"] for r in result.rejected])
         self.assertTrue(all("not a cost" in " ".join(r["reasons"]) for r in result.rejected))
+        # A fee for moving money is a cost, not the money moving.
+        headers, rows = ji.read_csv(b"Date,Vendor,Type,Amount\n10/31/2026,Square,Payment processing fees,2.90\n")
+        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")
+        self.assertEqual(([2], []), ([r["row"] for r in result.accepted], result.rejected))
 
     def test_bank_credit_rows_are_rejected_but_credit_memos_and_card_charges_stay(self):
         headers, rows = ji.read_csv(b"Invoice,Date,Customer,Type,Amount\n"
