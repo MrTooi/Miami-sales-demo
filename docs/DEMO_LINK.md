@@ -28,6 +28,9 @@ Claude Code never deploys. These steps use your own accounts.
 ## Updating and taking it down
 
 - The link follows the `main` branch: once a pull request is merged, the demo updates by itself.
+- After any merge that changes the MargenX page or `pilot_safety.py`, open the link again and repeat
+  step 6: the notice is there, there's no upload box, and other addresses (for example `/app`) land
+  back on the demo.
 - To take it down: on share.streamlit.io, open the app's **⋮** menu and choose **Delete**.
 
 ## Rules
