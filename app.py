@@ -12,6 +12,7 @@ import streamlit as st
 from app_ledger import deterministic_batch_id, normalize_transfer_frame, sales_to_integrity_records
 from data_pipeline import analyze, findings, normalize
 from ledger_store import LedgerStore
+from pilot_safety import MADE_UP_TEXT, PILOT_ENV
 from ui_theme import apply_theme, confidence_card, render_footer, render_header, section_header
 
 st.set_page_config(
@@ -21,6 +22,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 apply_theme()
+
+# The older Ledger demo has no pilot consent and keeps imports in a SQLite file, so it is
+# switched off entirely whenever pilot mode is set (pilot sessions use marginx_pilot.py).
+if os.environ.get(PILOT_ENV, "").strip() == "1":
+    st.error("The Ledger demo is turned off during pilot sessions. Start MarginX with marginx_pilot.py "
+             "(see docs/PILOT_VISIT_CHECKLIST.md).")
+    st.stop()
 
 
 def dollars(value):
@@ -51,6 +59,9 @@ workspace_db = os.path.join(tempfile.gettempdir(), f"ledger-{workspace_id}.db")
 render_header()
 
 with st.expander("Data sources & imports", expanded=False):
+    # Demo only: own files are accepted (and kept in the demo's SQLite file) only once they are
+    # confirmed as made-up, and the upload boxes don't appear before that.
+    made_up = st.checkbox(MADE_UP_TEXT, key="legacy_made_up")
     source_col, sales_col, expense_col = st.columns([0.9, 1.15, 1.15])
     with source_col:
         sales_source = st.selectbox(
@@ -58,20 +69,22 @@ with st.expander("Data sources & imports", expanded=False):
             ["manual_upload", "square_export", "quickbooks_export", "other_export"],
             help="Used for duplicate and conflict tracking. This is not a live connection yet.",
         )
-    with sales_col:
-        sales_file = st.file_uploader(
-            "Sales file",
-            type=["csv", "xlsx"],
-            key="sales",
-            help="Required: id (or order_id), date, service, amount. Negative amounts are refunds.",
-        )
-    with expense_col:
-        expenses_file = st.file_uploader(
-            "Expense file",
-            type=["csv", "xlsx"],
-            key="expenses",
-            help="Required: id, date, category (direct or operating), amount.",
-        )
+    sales_file = expenses_file = None
+    if made_up:
+        with sales_col:
+            sales_file = st.file_uploader(
+                "Sales file",
+                type=["csv", "xlsx"],
+                key="sales",
+                help="Required: id (or order_id), date, service, amount. Negative amounts are refunds.",
+            )
+        with expense_col:
+            expenses_file = st.file_uploader(
+                "Expense file",
+                type=["csv", "xlsx"],
+                key="expenses",
+                help="Required: id, date, category (direct or operating), amount.",
+            )
     st.caption("Sales and expense files should cover the same accounting period. Missing costs are never estimated.")
 
 try:
@@ -355,7 +368,8 @@ with tabs[3]:
                     key="transfer_source",
                     help="Use a stable source name such as square, chase, or bank_of_america.",
                 )
-                transfer_file = st.file_uploader("Transfer file", type=["csv", "xlsx"], key="transfer_file")
+                transfer_file = (st.file_uploader("Transfer file", type=["csv", "xlsx"], key="transfer_file")
+                                 if made_up else None)
 
                 if transfer_file is not None:
                     try:

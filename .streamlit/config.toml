@@ -1,0 +1,17 @@
+# MarginX safety settings (step 3a). Apply everywhere, pilot laptop included.
+[browser]
+# Send no usage statistics anywhere.
+gatherUsageStats = false
+
+[client]
+# Show only a generic message in the page, never exception details or tracebacks: they could
+# quote values from a file. (Details still go to the terminal running the app, on that laptop.)
+showErrorDetails = "none"
+
+[server]
+# Streamlit's upload cap, in MiB (5 MiB = 5,242,880 bytes). The CSV reader separately refuses
+# files over job_intake.MAX_FILE_BYTES (5,000,000 bytes), so the effective limit is 5,000,000.
+maxUploadSize = 5
+# A closed browser tab's session, with its uploaded files, may be dropped after 10 seconds
+# instead of the default 2 minutes.
+disconnectedSessionTTL = 10

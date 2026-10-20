@@ -5,12 +5,16 @@ type, the columns and the date format itself, and asks one plain question only
 when it genuinely can't tell. Every automatic choice is shown and can be changed.
 It never guesses money: anything it can't read is listed with a reason.
 
-Pilot preview: made-up files only (D-003). Files are processed in memory for
-this session and are never saved.
+Made-up files only (D-003), except in pilot mode: on a team laptop, with pilot
+mode switched on and the app reachable from that computer alone (pilot_safety),
+a pilot shop's own files may be read with the owner's consent. Either way, files
+are processed in memory for this session only and never saved; "End session"
+forgets everything.
 """
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
 from pathlib import Path
 
@@ -23,6 +27,7 @@ if _REPO_ROOT not in sys.path:
 
 import job_intake as ji  # noqa: E402
 import job_profit as jp  # noqa: E402
+import pilot_safety as ps  # noqa: E402
 from ui_theme import apply_theme  # noqa: E402
 
 SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"
@@ -39,23 +44,75 @@ BANK_MESSAGE = ("MarginX can't read bank, card or payment statements yet: deposi
 st.set_page_config(page_title="MarginX | Check your data", page_icon="▰", layout="wide")
 apply_theme()
 
-st.title("MarginX: check your data")
-st.warning(
-    "**Pilot preview: use the sample files or made-up data only.** Don't upload real customer, invoice or bank "
-    "files yet. Files are checked in memory for this session and never saved."
-)
+def _request_headers():
+    try:
+        return dict(st.context.headers)
+    except Exception:  # no browser request (e.g. tests): never counts as local
+        return None
 
-use_samples = st.toggle("Try it with the made-up sample files", value=True)
+
+PILOT = ps.pilot_mode(os.environ, st.get_option("server.address"), _request_headers())
+
+st.title("MarginX: check your data")
+if PILOT:
+    st.warning(
+        "**Pilot session on this laptop.** A pilot shop's own files may be used only with the shop owner present "
+        "and agreeing below. Files are read in memory only, never saved, and forgotten when you press "
+        "**End session**."
+    )
+else:
+    st.warning(
+        "**Pilot preview: use the sample files or made-up data only.** Don't upload real customer, invoice or bank "
+        "files yet. Files are checked in memory for this session and never saved."
+    )
+
+# "End session" forgets every file, answer and result: the session's state is cleared and the
+# upload box gets a new key, so nothing from the visit stays in the app.
+session = st.session_state.get("session_number", 0)
+def _release_uploads() -> bool:
+    """Delete this browser session's uploaded files from Streamlit's memory and confirm it."""
+    try:
+        from streamlit.runtime import Runtime
+        from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
+
+        ctx = get_script_run_ctx()
+        manager = Runtime.instance().uploaded_file_mgr if Runtime.exists() else None
+        return ps.release_uploads(manager, ctx.session_id if ctx else None)
+    except Exception:
+        return False
+
+
+if st.button("End session and clear everything"):
+    released = _release_uploads()
+    st.session_state.clear()
+    st.session_state["session_number"] = session + 1
+    st.session_state["just_ended"] = "released" if released else "unconfirmed"
+    st.rerun()
+ended = st.session_state.pop("just_ended", None)
+if ended == "released":
+    st.success("Session ended. The uploaded files were removed from MarginX's upload storage, and the answers and "
+               "results were cleared from this session. Close this browser tab and stop MarginX to finish the visit. "
+               "The original files on this laptop (Downloads, AirDrop, USB) must still be deleted by hand.")
+elif ended:
+    # Never claim a deletion that couldn't be checked.
+    st.warning("Answers and results were cleared, but MarginX couldn't confirm the uploaded files were deleted "
+               "from memory. Close this browser tab now and stop MarginX (Ctrl+C) to finish clearing.")
+st.session_state["session_number"] = session
+
+use_samples = st.toggle("Try it with the made-up sample files", value=not PILOT, key=f"samples-{session}")
 files: list[tuple[str, bytes]] = []
 if use_samples:
     files = [(name, (SAMPLES / name).read_bytes()) for name in SAMPLE_FILES]
 else:
-    uploads = st.file_uploader("Drop your sales and cost CSV files here", type=["csv"], accept_multiple_files=True)
-    confirmed = st.checkbox("These files are made-up (no real customer, invoice or bank data).")
-    if ji.upload_allowed(False, bool(uploads), confirmed):
-        files = [(u.name, u.getvalue()) for u in uploads]
-    elif uploads:
-        st.info("Tick the box above to continue.")
+    # The box comes first: the upload area isn't shown, so no file can be received, until it is ticked.
+    confirmed = st.checkbox(ps.CONSENT_TEXT if PILOT else ps.MADE_UP_TEXT, key=f"confirm-{session}")
+    if not confirmed:
+        st.info("Tick the box above to choose files.")
+    else:
+        uploads = st.file_uploader("Drop your sales and cost CSV files here", type=["csv"],
+                                   accept_multiple_files=True, key=f"upload-{session}")
+        if ps.upload_allowed(False, bool(uploads), confirmed):
+            files = [(u.name, u.getvalue()) for u in uploads]
 if not files:
     st.stop()
 
