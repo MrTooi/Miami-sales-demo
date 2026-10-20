@@ -59,6 +59,13 @@ class HeadlineTests(unittest.TestCase):
         self.assertIn("Sales minus every cost in these files, before tax.", html)
         self.assertNotIn("rent and other overhead", html)
 
+    def test_sales_with_no_job_number_are_never_hidden_behind_nothing_stands_out(self):
+        html = render(report_from(
+            b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/01/2026,A,,40.00\n",
+            b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1))
+        self.assertIn("$40 of sales have no job number", html)
+        self.assertNotIn("Nothing stands out", html)
+
     def test_demo_shop(self):
         html = render(report_from((SAMPLES / "demo_sign_shop_invoices.csv").read_bytes(),
                                   (SAMPLES / "demo_sign_shop_costs.csv").read_bytes()))

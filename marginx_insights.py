@@ -223,6 +223,10 @@ def attention(report: ProfitReport) -> list[Insight]:
                               "aren't in 'Left after job costs'." if len(missing) != 1 else
                               "It has no sales or no costs in these files, so no profit is shown for it and it "
                               "isn't in 'Left after job costs'.")))
+    if report.unlinked_sales_lines:
+        items.append(Insight("warn", f"{money(report.unlinked_sales)} of sales have no job number",
+                             "They're in your sales but not in any job's figure. Add the job number in your "
+                             "invoicing software to see what those jobs left you."))
     if report.unlinked_job_cost_lines:
         items.append(Insight("warn", f"{money(report.unlinked_job_costs)} of costs aren't linked to a job",
                              "If some belong to jobs, those jobs' figures are too high."))
