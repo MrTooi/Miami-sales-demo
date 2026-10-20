@@ -17,9 +17,13 @@ The manual reviewer judged that neither is established as a common job-linked co
 3. **QuickBooks layouts.** Test representative QuickBooks Online and Desktop invoice and bill exports: line amounts vs. document totals, transaction types, account hierarchy, inventory vs. COGS.
 4. **Square reports.** Confirm what each field means (gross vs. net sales, discounts, refunds, taxes, processing fees, settlements/payouts), so nothing is double-counted.
 5. **Job links.** Confirm that jobs are linked across invoices and bills, and how complete those links are. Use source transaction and line identifiers for duplicate detection instead of exact-row matching.
-6. **Coverage.** Check the dates and sources each export covers, so "Complete" isn't read as "every transaction for the job was supplied".
-7. **Pilot data safety.** Complete the D-003 pilot data-safety minimums (security, provenance, retention), then get a separate owner decision before real data is used.
-8. **Real uploads.** Test real browser uploads and multi-file sessions.
+6. **Report-style exports (Excel and CSV).** Reading Excel and report layouts (title lines, total and heading rows) is built and tested on made-up files only (`tests/test_file_reading.py`). Still to confirm with a real export, such as the QuickBooks Online test drive or a shop's screen:
+   - the exact column names and order of "Sales by Customer Detail" and of a costs report
+   - whether line rows repeat the customer name, or name it only in a heading row above them. MargenX doesn't copy a heading down onto the lines below it, so if lines leave the customer blank they are rejected with a reason, never guessed.
+   - how real exports lay out costs that are tied only to a customer, or to nothing.
+7. **Coverage.** Check the dates and sources each export covers, so "Complete" isn't read as "every transaction for the job was supplied".
+8. **Pilot data safety.** Complete the D-003 pilot data-safety minimums (security, provenance, retention), then get a separate owner decision before real data is used.
+9. **Real uploads.** Test real browser uploads and multi-file sessions.
 
 ## Before the pilot (recommended)
 - **Fee categories.** Make intake fee types and profit-report categories match. "Bank service charges" and "Transfer fee" are accepted as fees at intake but reported under "Other job costs".

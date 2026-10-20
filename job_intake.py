@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -203,6 +204,13 @@ SUMMARY_LABELS = {"subtotal", "sub total", "total", "invoice total", "bill total
 
 FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 MAX_FILE_BYTES = 5_000_000
+# Excel files are zip archives: their unpacked size is limited too, so a small file can't hide a huge one.
+MAX_XLSX_UNPACKED_BYTES = 50_000_000
+MAX_ROWS = 50_000
+MAX_COLUMNS = 100
+# Report exports (for example QuickBooks Online) put title lines above the column names. The column
+# names are looked for within this many non-empty lines at the top.
+MAX_TITLE_LINES = 12
 
 
 class IntakeError(ValueError):
@@ -218,6 +226,10 @@ class IntakeResult:
     rejected: list[dict] = field(default_factory=list)
     mapped_fields: tuple[str, ...] = ()
     headers: tuple[str, ...] = ()
+    # Report layout lines that are clearly not a sale or cost: a total row ("Total for Bakery",
+    # "TOTAL") or a lone heading or note. Listed with their reason, never counted, and never
+    # treated as missing money. {"row": n, "cells": original cells, "reason": ...}
+    skipped: list[dict] = field(default_factory=list)
 
 
 def _norm(header: str) -> str:
@@ -239,6 +251,23 @@ def _is_blank_line(cells: list[str]) -> bool:
 
 def read_csv(data: bytes) -> tuple[list[str], list[Record]]:
     """Parse CSV bytes into headers and records, refusing anything ambiguous."""
+    table = _csv_rows(data)
+    headers = list(table[0][1])  # kept exactly as written, so exports round-trip
+    _check_headers(headers)
+    return headers, [Record(number, tuple(cells)) for number, cells in table[1:]]
+
+
+def _check_headers(headers: list[str]) -> None:
+    if len(headers) < 2:
+        raise IntakeError("Only one column was found. The file may use a separator other than commas.")
+    if any(not h.strip() for h in headers):
+        raise IntakeError("A column has no header name. Every column needs a header.")
+    if len({h.strip().lower() for h in headers}) != len(headers):
+        raise IntakeError("Two columns have the same header name.")
+
+
+def _csv_rows(data: bytes) -> list[tuple[int, list[str]]]:
+    """Every non-empty CSV record with its spreadsheet row number."""
     if len(data) > MAX_FILE_BYTES:
         raise IntakeError(f"File is larger than {MAX_FILE_BYTES // 1_000_000} MB; split it or contact us.")
     try:
@@ -257,14 +286,152 @@ def read_csv(data: bytes) -> tuple[list[str], list[Record]]:
         raise IntakeError(f"File isn't valid CSV ({exc}). Check for unbalanced quotes.") from exc
     if not table:
         raise IntakeError("File is empty.")
-    headers = list(table[0][1])  # kept exactly as written, so exports round-trip
-    if len(headers) < 2:
-        raise IntakeError("Only one column was found. The file may use a separator other than commas.")
-    if any(not h.strip() for h in headers):
-        raise IntakeError("A column has no header name. Every column needs a header.")
-    if len({h.strip().lower() for h in headers}) != len(headers):
-        raise IntakeError("Two columns have the same header name.")
-    return headers, [Record(number, tuple(cells)) for number, cells in table[1:]]
+    return table
+
+
+def read_file(name: str, data: bytes) -> tuple[list[str], list[Record], list[str]]:
+    """Read a CSV or Excel (.xlsx) file into headers, records and plain notes on how it was read.
+
+    Report exports (for example from QuickBooks Online) may have title lines above the column
+    names: these are found and skipped, and a note says which lines were skipped. A column whose
+    name is blank in such a report gets a visible placeholder name. Anything else unclear is refused.
+    """
+    is_xlsx = name.lower().endswith(".xlsx")
+    if is_xlsx != data.startswith(b"PK\x03\x04"):
+        raise IntakeError("The file's name and contents don't match (an Excel file must end in .xlsx, a CSV file "
+                          "in .csv). Export it again as CSV or Excel (.xlsx).")
+    table = _xlsx_rows(data) if is_xlsx else _csv_rows(data)
+    start = _header_row(table)
+    notes = []
+    if start:
+        titles = " / ".join(next(c.strip() for c in cells if c.strip()) for _, cells in table[:start])
+        notes.append(f"Skipped {start} title line{'s' if start != 1 else ''} above the column names: {titles}.")
+    headers = [h.strip() for h in table[start][1]]
+    while headers and not headers[-1]:  # empty trailing columns (common in Excel)
+        headers.pop()
+    unnamed = [i for i, h in enumerate(headers) if not h]
+    if unnamed and start:
+        # Reports leave some column names blank (for example the column holding customer names
+        # and "Total for" rows). It gets a placeholder so it can still be chosen by hand.
+        for i in unnamed:
+            headers[i] = f"(no name, column {_column_letter(i)})"
+        notes.append("Columns without a name got a placeholder name: "
+                     + ", ".join(headers[i] for i in unnamed) + ".")
+    _check_headers(headers)
+    width = len(headers)
+    records = []
+    for number, cells in table[start + 1:]:
+        if len(cells) > width and not any(c.strip() for c in cells[width:]):
+            cells = cells[:width]  # only empty cells past the last named column
+        records.append(Record(number, tuple(cells)))
+    return headers, records, notes
+
+
+def _column_letter(index: int) -> str:
+    letters = ""
+    index += 1
+    while index:
+        index, rest = divmod(index - 1, 26)
+        letters = chr(65 + rest) + letters
+    return letters
+
+
+def _header_row(table: list[tuple[int, list[str]]]) -> int:
+    """Where the column names are: the first line with two or more filled cells, none of them a
+    number or a date, when every line above it is a title (one filled cell at most). If the lines
+    above don't look like titles, the first line is taken, as in a plain export."""
+    for position, (_, cells) in enumerate(table[:MAX_TITLE_LINES + 1]):
+        filled = [c.strip() for c in cells if c.strip()]
+        if len(filled) >= 2:
+            if position and all(not _looks_like_data(c) for c in filled):
+                return position
+            return 0
+    return 0
+
+
+def _looks_like_data(text: str) -> bool:
+    try:
+        money(text)
+        return True
+    except ValueError:
+        return any(_parse_date(text, fmt) for fmt in DATE_FORMATS.values())
+
+
+def _xlsx_rows(data: bytes) -> list[tuple[int, list[str]]]:
+    """Every non-empty row of an Excel file's only sheet, as text, with its Excel row number.
+
+    Numbers never pass through floating-point arithmetic: a number cell is written as the
+    shortest text that reads back as the same stored value (what Excel shows unformatted), and
+    then checked by the same strict money and date rules as a CSV. A value with more than two
+    decimals is refused, never rounded. A formula with no saved result reads as blank.
+    """
+    if len(data) > MAX_FILE_BYTES:
+        raise IntakeError(f"File is larger than {MAX_FILE_BYTES // 1_000_000} MB; split it or contact us.")
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            if sum(info.file_size for info in archive.infolist()) > MAX_XLSX_UNPACKED_BYTES:
+                raise IntakeError("This Excel file unpacks to more than 50 MB. Export a shorter date range.")
+        from openpyxl import load_workbook
+
+        book = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    except IntakeError:
+        raise
+    except Exception as exc:
+        raise IntakeError("This Excel file can't be opened. Export it again as Excel (.xlsx) or as CSV.") from exc
+    try:
+        sheets = [sheet for sheet in book.worksheets if sheet.max_row and sheet.max_row > 0]
+        filled = []
+        for sheet in sheets:
+            rows = []
+            for number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+                if number > MAX_ROWS:
+                    raise IntakeError(f"This Excel file has more than {MAX_ROWS:,} rows. Export a shorter date range.")
+                if len(row) > MAX_COLUMNS:
+                    if any(v not in (None, "") for v in row[MAX_COLUMNS:]):
+                        raise IntakeError(f"This Excel file has more than {MAX_COLUMNS} columns.")
+                    row = row[:MAX_COLUMNS]
+                cells = [_cell_text(v) for v in row]
+                while cells and not cells[-1].strip():
+                    cells.pop()
+                if cells:
+                    rows.append((number, cells))
+            if rows:
+                filled.append(rows)
+    finally:
+        book.close()
+    if not filled:
+        raise IntakeError("File is empty.")
+    if len(filled) > 1:
+        raise IntakeError("This Excel file has data on more than one sheet. Export one report per file, or save "
+                          "the sheet you need as CSV.")
+    width = max(len(cells) for _, cells in filled[0])
+    return [(number, cells + [""] * (width - len(cells))) for number, cells in filled[0]]
+
+
+def _cell_text(value) -> str:
+    """One Excel cell as text, without rounding. Dates become YYYY-MM-DD (never ambiguous)."""
+    from datetime import date as date_type, datetime as datetime_type
+    from decimal import Decimal
+
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        # repr gives the shortest text that reads back as exactly this stored value, so 1234.5
+        # stays "1234.5" and a value like 0.30000000000000004 stays visible and is refused.
+        return repr(value) if not value.is_integer() else str(int(value))
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime_type):
+        if (value.hour, value.minute, value.second, value.microsecond) != (0, 0, 0, 0):
+            return value.isoformat(sep=" ")  # a time of day isn't a date: refused by the date check
+        return value.date().isoformat()
+    if isinstance(value, date_type):
+        return value.isoformat()
+    return str(value)
 
 
 def _suggest(headers: list[str], kind: str) -> tuple[dict[str, str | None], dict[str, list[str]]]:
@@ -639,10 +806,41 @@ def _summary_label(cells: tuple[str, ...], headers: list[str], mapping: dict[str
     return None
 
 
+# A report's total row: "TOTAL", "Total", or "Total for Coastal Bakery". Only when it is the row's first
+# filled cell and the row has no date: a real line always has a date.
+TOTAL_ROW = re.compile(r"(?i)^total(\s+for\b.*)?:?$")
+
+
+def _layout_row(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]) -> str | None:
+    """Why this row is part of a report's layout and not a sale or cost, or None.
+
+    Only two kinds, both unable to hold a line of their own: a total row (its first filled cell
+    says "Total" or "Total for ...", and it has no date) and a lone heading or note (exactly one
+    filled cell, with no amount). Every other row is checked as usual.
+    """
+    filled = [c.strip() for c in cells if c.strip()]
+    if not filled:
+        return None
+
+    def cell(field_name):
+        header = mapping.get(field_name)
+        if header not in headers:
+            return ""
+        i = headers.index(header)
+        return cells[i].strip() if i < len(cells) else ""
+
+    if TOTAL_ROW.match(filled[0]) and not cell("date"):
+        return f"A total row ('{filled[0]}'): it adds up the lines above it, which are counted instead."
+    if len(filled) == 1 and not cell("amount"):
+        return f"A heading or note ('{filled[0]}'), not a sale or cost."
+    return None
+
+
 def _is_line(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]) -> bool:
-    """False for rows rejected on their own (payments/transfers, labeled subtotals), which
-    therefore don't make a document multi-line."""
-    return not (_cash_movement_type(cells, headers, mapping) or _summary_label(cells, headers, mapping))
+    """False for rows rejected or skipped on their own (payments/transfers, labeled subtotals, a
+    report's total and heading rows), which therefore don't make a document multi-line."""
+    return not (_cash_movement_type(cells, headers, mapping) or _summary_label(cells, headers, mapping)
+                or _layout_row(cells, headers, mapping))
 
 
 def _per_document_amounts(mapping: dict[str, str | None], question: dict | None, amount_scope: str | None) -> bool:
@@ -677,7 +875,8 @@ def _subtotal_rows(headers: list[str], records: list[Record], mapping: dict[str,
         seen.add(r.cells)
         # Labeled summary rows and cash movements are rejected on their own, so they are
         # neither asked about nor counted among a document's lines.
-        if _summary_label(r.cells, headers, mapping) or _cash_movement_type(r.cells, headers, mapping):
+        if (_summary_label(r.cells, headers, mapping) or _cash_movement_type(r.cells, headers, mapping)
+                or _layout_row(r.cells, headers, mapping)):
             continue
         values = {f: r.cells[i].strip() for f, i in index.items()}
         key = _possible_document_key(values, kind)
@@ -744,6 +943,10 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
 
     for rec in records:
         number = rec.row
+        layout = _layout_row(rec.cells, headers, mapping)
+        if layout:
+            result.skipped.append({"row": number, "cells": rec.cells, "reason": layout})
+            continue
         if len(rec.cells) != len(headers):
             result.rejected.append({"row": number, "cells": rec.cells, "values": {}, "money_missing": True,
                                     "reasons": [f"Row has {len(rec.cells)} cells, header has {len(headers)}."]})
@@ -865,6 +1068,9 @@ def missing_report(result: IntakeResult) -> list[dict]:
     # Each accepted record is one line of a file; one invoice or bill can span several lines.
     noun = "invoice line" if result.kind == "invoices" else "cost line"
     entity = "invoice" if result.kind == "invoices" else "bill"
+    if result.skipped:
+        items.append({"level": "info", "text": f"{_count(len(result.skipped), 'total or heading row')} from the "
+                      "report's layout were skipped: they aren't sales or costs. Each one is listed below."})
     if result.rejected:
         items.append({"level": "problem", "text": f"{_count(len(result.rejected), 'row')} of {total} couldn't be imported. "
                       "Each one is listed below with the reason. Fix them where the data comes from "
