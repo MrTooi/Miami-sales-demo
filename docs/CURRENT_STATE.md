@@ -27,7 +27,8 @@ Branch → tests (`~/.venvs/miami-sales-demo/bin/python -m unittest discover -s 
 | D-005 review stopping rule plus the real-export follow-up list | `docs/DECISIONS.md`, `docs/MARGINX_REAL_EXPORT_FOLLOWUPS.md` | Merged (#103) |
 | Shop conversation guide | `docs/SHOP_CONVERSATION_GUIDE.md` | Merged (#105) |
 | **Redesign:** results-first dashboard in the website's light mint/green style (see "What the redesign shows" below) | `marginx_ui.py`, `marginx_insights.py`, `pages/1_MargenX_Import.py` | Merged (#108). Automated review PASS WITH WARNINGS; ChatGPT manual review round 1 **FAIL**, round 2 **PASS WITH WARNINGS** (both recorded as PR comments). 681 tests. |
-| **Rename to MargenX:** header, tab title, page address (`/MargenX_Import`), consent text, messages, shop-facing docs | many files (text only) | Merged (#109). Automated review PASS. |
+| **Rename to MargenX:** header, tab title, page file (`pages/1_MargenX_Import.py`), consent text, messages, shop-facing docs | many files (text only) | Merged (#109). Automated review PASS. |
+| **Older Ledger screen retired** (owner decision 2026-10-20): `streamlit run app.py` opens only the MargenX page, at the main address `/` (the same as `marginx_pilot.py`). The old dashboard and `ui_theme.py` are removed; shared code (`finance_engine.py`, `data_pipeline.py`, `ledger_store.py`, `app_ledger.py`) stays because MargenX or the paused readiness tooling uses it | `app.py` | PR open (see GitHub) |
 
 ### What the redesign shows (#108)
 As implemented and tested in #108 (regression tests in `tests/test_marginx_ui.py`, `tests/test_marginx_insights.py`, `tests/test_marginx_import_page.py`), and reviewed in the ChatGPT manual review round 2. This summary is not itself evidence. The rule behind it: **a number that is incomplete says so, or isn't shown.**

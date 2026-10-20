@@ -1,6 +1,6 @@
-# Miami Small Business Sales Dashboard
+# MargenX
 
-A Streamlit demonstration using fictional sales data. Upload CSV or XLSX files with `date`, `service`, and `amount` columns. Negative amounts represent refunds.
+Profit per job for small print, sign and apparel shops. It reads the sales and cost CSV files a shop already exports, and shows which jobs and customers make or lose money, saying plainly when a figure is incomplete. This is a demonstration with fictional data (sample files in `sample_data/marginx/`).
 
 ## Run locally
 

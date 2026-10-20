@@ -1,7 +1,7 @@
 """MargenX pilot entry point: only the MargenX page, nothing else.
 
-Pilot sessions start the app with this file (docs/PILOT_VISIT_CHECKLIST.md), so the older
-Ledger demo in app.py, with its own upload boxes and SQLite storage, isn't reachable at all.
+Pilot sessions start the app with this file (docs/PILOT_VISIT_CHECKLIST.md). app.py now opens
+the same single page; the older Ledger screen with its own upload boxes and SQLite storage was retired.
 st.navigation replaces the automatic pages/ list, so no other page can be opened either.
 """
 import streamlit as st

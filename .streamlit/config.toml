@@ -19,7 +19,7 @@ maxUploadSize = 5
 disconnectedSessionTTL = 10
 
 [theme]
-# MargenX's light, brand-green look (matches the website). The older Ledger demo restyles itself.
+# MargenX's light, brand-green look (matches the website).
 base = "light"
 primaryColor = "#0F7A55"
 backgroundColor = "#F4FBF7"

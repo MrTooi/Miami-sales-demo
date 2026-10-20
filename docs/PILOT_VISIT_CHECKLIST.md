@@ -25,7 +25,7 @@ Windows (PowerShell):
 $env:MARGINX_PILOT="1"; streamlit run marginx_pilot.py --server.address localhost
 ```
 
-`marginx_pilot.py` opens **only** the MargenX page. The older Ledger demo (`app.py`) is turned off whenever pilot mode is set, because it keeps imports in a file on the laptop. Never upload a shop's files anywhere else.
+`marginx_pilot.py` opens **only** the MargenX page. (`app.py` now opens the same single page. The older Ledger screen, which kept imports in a file on the laptop, was retired on 2026-10-20.) Never upload a shop's files anywhere else.
 
 The page must say **"Pilot session on this laptop"**. If it says "made-up data only", pilot mode isn't on: stop, don't use real files, and check the command.
 
