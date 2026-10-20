@@ -9,6 +9,7 @@ How the pilot works: Alex or Abrey visits the shop and runs MarginX on a team la
 - [ ] **The laptop has a password and locks** after a few minutes idle.
 - [ ] **Latest MarginX:** in the project folder, run `git pull`.
 - [ ] **No screen recording, screen sharing or remote-control apps** are running.
+- [ ] **No tunnel or proxy is running** (e.g. ngrok, Cloudflare Tunnel, Tailscale Funnel, a VPN "share" feature). MarginX refuses requests that show signs of a proxy or tunnel, but it can't detect every one.
 - [ ] **Practice once with the sample files** so the visit goes quickly.
 
 ## Starting MarginX in pilot mode
@@ -26,7 +27,7 @@ $env:MARGINX_PILOT="1"; streamlit run app.py --server.address localhost
 
 Open the **MarginX Import** page. It must say **"Pilot session on this laptop"**. If it says "made-up data only", pilot mode isn't on: stop, don't use real files, and check the command.
 
-Pilot mode only works with `--server.address localhost`. This keeps other computers from reaching the app. Never run pilot mode on a shared or public server.
+Pilot mode only works with `--server.address localhost`, opened in a browser on this same laptop at `http://localhost:8501`. This keeps other computers from reaching the app. Never run pilot mode on a shared or public server.
 
 ## During the visit
 1. **Explain what happens.** Use the agreement text on the screen: we read their files on this laptop only, nothing is kept, and they can stop at any time.
@@ -55,8 +56,10 @@ Pilot mode only works with `--server.address localhost`. This keeps other comput
   - Nothing is saved by MarginX.
   - No usage data is sent anywhere.
   - Error pages show no file contents.
-  - Real files are refused unless pilot mode is on and the app runs on this computer only.
+  - Real files are refused unless pilot mode is on, the app listens on this computer only, and the browser visit itself looks local (no proxy or tunnel signs).
+  - The upload area doesn't appear until the shop owner ticks the agreement.
 - **It doesn't:**
   - It doesn't protect files the laptop itself kept: Downloads, Trash, AirDrop, the USB drive. That's what the deletion steps are for.
   - It doesn't protect the laptop if it's lost while unlocked.
+  - It can't detect every tunnel or remote-access tool. That's why none may be running during a visit.
   - It doesn't make MarginX's figures certain. "Provisional" results must be explained as provisional.

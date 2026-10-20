@@ -44,7 +44,14 @@ BANK_MESSAGE = ("MarginX can't read bank, card or payment statements yet: deposi
 st.set_page_config(page_title="MarginX | Check your data", page_icon="▰", layout="wide")
 apply_theme()
 
-PILOT = ps.pilot_mode(os.environ, st.get_option("server.address"))
+def _request_headers():
+    try:
+        return dict(st.context.headers)
+    except Exception:  # no browser request (e.g. tests): never counts as local
+        return None
+
+
+PILOT = ps.pilot_mode(os.environ, st.get_option("server.address"), _request_headers())
 
 st.title("MarginX: check your data")
 if PILOT:
@@ -76,13 +83,15 @@ files: list[tuple[str, bytes]] = []
 if use_samples:
     files = [(name, (SAMPLES / name).read_bytes()) for name in SAMPLE_FILES]
 else:
-    uploads = st.file_uploader("Drop your sales and cost CSV files here", type=["csv"], accept_multiple_files=True,
-                               key=f"upload-{session}")
+    # The box comes first: the upload area isn't shown, so no file can be received, until it is ticked.
     confirmed = st.checkbox(ps.CONSENT_TEXT if PILOT else ps.MADE_UP_TEXT, key=f"confirm-{session}")
-    if ps.upload_allowed(False, bool(uploads), confirmed):
-        files = [(u.name, u.getvalue()) for u in uploads]
-    elif uploads:
-        st.info("Tick the box above to continue.")
+    if not confirmed:
+        st.info("Tick the box above to choose files.")
+    else:
+        uploads = st.file_uploader("Drop your sales and cost CSV files here", type=["csv"],
+                                   accept_multiple_files=True, key=f"upload-{session}")
+        if ps.upload_allowed(False, bool(uploads), confirmed):
+            files = [(u.name, u.getvalue()) for u in uploads]
 if not files:
     st.stop()
 

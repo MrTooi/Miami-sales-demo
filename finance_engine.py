@@ -11,7 +11,9 @@ _US_AMOUNT = re.compile(r"^[+-]?\$?[+-]?(\d+|\d{1,3}(,\d{3})+)(\.\d+)?$")
 
 def money(value):
     try:
-        if value is None or isinstance(value, bool):
+        if value is None or isinstance(value, (bool, float)):
+            # A float is already a binary approximation (0.1 + 0.2 != 0.3), so it is never
+            # turned into money; amounts must arrive as text, int or Decimal.
             raise ValueError("Missing/invalid money value")
         text = str(value).strip()
         if isinstance(value, str) and not _US_AMOUNT.match(text):

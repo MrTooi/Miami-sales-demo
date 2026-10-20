@@ -2,10 +2,16 @@
 
 A pilot shop's real files are used only on a team laptop, with the shop owner present:
 MarginX runs locally, reads files in memory, never saves them, and forgets everything when
-the session ends. Real files are allowed only when pilot mode is switched on AND the app is
-reachable from this computer alone; anywhere else (a shared or public deployment) MarginX
-stays made-up data only. Allowing real data at all still needs the owner's separate decision
-(D-003); this module only makes the sit-down setup safe when that decision is given.
+the session ends. Real files are allowed only when pilot mode is switched on, the app listens
+on a loopback address, AND the browser's request itself looks local (a loopback Host and no
+proxy or tunnel forwarding headers). Otherwise MarginX stays made-up data only.
+
+Limit, stated honestly: these checks catch ordinary deployments, proxies and tunnels, but code
+alone can't prove that nothing forwards traffic to the laptop. The pilot checklist therefore
+requires that no tunnel, proxy or remote-access tool runs during a visit.
+
+Allowing real data at all still needs the owner's separate decision (D-003); this module only
+makes the sit-down setup safe when that decision is given.
 """
 from __future__ import annotations
 
@@ -22,15 +28,37 @@ CONSENT_TEXT = (
 MADE_UP_TEXT = "These files are made-up (no real customer, invoice or bank data)."
 
 
-def pilot_mode(environ: Mapping[str, str], server_address: str | None) -> bool:
-    """True only when pilot mode is switched on and the app listens on this computer alone.
-
-    Both are required, so a shared or public deployment can never accept real files, even if
-    the switch were set there by mistake. An unset address (Streamlit's default listens on
-    every network address) does not count as local.
-    """
+def pilot_mode(environ: Mapping[str, str], server_address: str | None,
+               headers: Mapping[str, str] | None = None) -> bool:
+    """True only when pilot mode is switched on, the app listens on a loopback address, and the
+    current request looks local (see request_is_local). An unset address (Streamlit's default
+    listens on every network address) does not count."""
     switched_on = environ.get(PILOT_ENV, "").strip() == "1"
-    return switched_on and (server_address or "").strip().lower() in LOCAL_ADDRESSES
+    loopback = (server_address or "").strip().lower() in LOCAL_ADDRESSES
+    return switched_on and loopback and request_is_local(headers)
+
+
+# Headers that proxies, load balancers and tunnels add; a direct local browser sends none.
+FORWARDING_HEADERS = {"x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "forwarded", "x-real-ip",
+                      "cf-connecting-ip", "true-client-ip", "x-original-forwarded-for", "via"}
+
+
+def request_is_local(headers: Mapping[str, str] | None) -> bool:
+    """True only for a request with a loopback Host header and no forwarding headers.
+
+    Unknown headers (None) never count as local: pilot mode then stays off.
+    """
+    if headers is None:
+        return False
+    lowered = {k.lower(): v for k, v in headers.items()}
+    if lowered.keys() & FORWARDING_HEADERS:
+        return False
+    host = lowered.get("host", "").strip().lower()
+    if host.startswith("["):  # [::1]:8501
+        name = host[1:].split("]")[0]
+    else:
+        name = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    return name in LOCAL_ADDRESSES
 
 
 def upload_allowed(use_sample: bool, has_upload: bool, confirmed: bool) -> bool:
