@@ -275,6 +275,21 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
         report.jobs.append(JobResult(job, tuple(sorted(customers[job])), sales.get(job, ZERO), dict(amounts),
                                      invoice_lines.get(job, 0), sum(counts.values()), status, reasons))
 
+    # Job numbers that differ only in capitals, spaces or punctuation are kept apart, never merged,
+    # but their money may belong to one job, so none of them is complete until the owner says.
+    folded: dict[str, list[JobResult]] = defaultdict(list)
+    for job in report.jobs:
+        folded[_fold(job.job_id)].append(job)
+    for variants in folded.values():
+        if len(variants) > 1:
+            names = " and ".join(j.job_id for j in variants)
+            report.notes.append(f"Job numbers {names} look alike but were kept separate. If they are the same job, "
+                                "fix the job number where the data comes from.")
+            for job in variants:
+                job.reasons.append(f"Job numbers {names} look alike and may be one job.")
+                if job.status == "complete":
+                    job.status = "provisional"
+
     by_customer: dict[str, list[JobResult]] = defaultdict(list)
     shared_by_customer: dict[str, list[str]] = defaultdict(list)
     shared = []
@@ -330,12 +345,23 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
         report.notes.append(f"{report.unlinked_cost_lines} cost line(s) worth {format_money(report.unlinked_costs)} aren't "
                             "linked to a job, so they aren't in any job's figure. If some of them belong to "
                             "jobs, those jobs' figures are too high.")
-    # Job numbers that differ only in capitals or spaces are kept apart, never merged silently.
-    folded: dict[str, list[str]] = defaultdict(list)
-    for job in report.jobs:
-        folded[re.sub(r"\s+", "", job.job_id.lower())].append(job.job_id)
-    for variants in folded.values():
+    # Customer names that differ only in capitals, spaces or punctuation are likewise kept apart
+    # and held back from complete until the owner says whether they are one customer.
+    folded_customers: dict[str, list[CustomerResult]] = defaultdict(list)
+    for customer in report.customers:
+        folded_customers[_fold(customer.customer)].append(customer)
+    for variants in folded_customers.values():
         if len(variants) > 1:
-            report.notes.append(f"Job numbers {' and '.join(variants)} look alike but were kept separate. "
-                                "If they are the same job, fix the job number where the data comes from.")
+            names = " and ".join(f"'{c.customer}'" for c in variants)
+            report.notes.append(f"Customers {names} look alike but were kept separate. If they are the same "
+                                "customer, fix the name where the data comes from.")
+            for customer in variants:
+                customer.reasons.append(f"Customers {names} look alike and may be one customer.")
+                if customer.status == "complete":
+                    customer.status = "provisional"
     return report
+
+
+def _fold(name: str) -> str:
+    """A name with capitals, spaces and punctuation removed, to spot look-alikes ("J-1" / "j 1")."""
+    return re.sub(r"[^a-z0-9]+", "", name.lower())

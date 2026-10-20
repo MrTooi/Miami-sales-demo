@@ -559,7 +559,7 @@ class InvoiceIntakeTests(unittest.TestCase):
         r = self.result
         self.assertEqual(r.total_rows, len(r.accepted) + len(r.rejected))
         reasons = {item["row"]: " ".join(item["reasons"]) for item in r.rejected}
-        self.assertIn("Exact duplicate of row 6", reasons[7])
+        self.assertIn("Identical to row 6, so it is counted once", reasons[7])
         self.assertIn("doesn't match MM/DD/YYYY", reasons[8])
         self.assertIn("Customer is blank", reasons[10])
         self.assertIn("max 2 decimals", reasons[11])
@@ -659,7 +659,7 @@ class DuplicateTests(unittest.TestCase):
     def test_identical_rows_are_rejected_once(self):
         result = self.run_costs(b"Date,Payee,Amount\n10/01/2026,A,1.00\n10/01/2026,A,1.00\n")
         self.assertEqual(1, len(result.accepted))
-        self.assertIn("Exact duplicate of row 2", result.rejected[0]["reasons"][0])
+        self.assertIn("Identical to row 2, so it is counted once", result.rejected[0]["reasons"][0])
 
 
 class UploadGateTests(unittest.TestCase):

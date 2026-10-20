@@ -148,6 +148,8 @@ FEE_TYPES = {
 # Whole credit-memo types: allowed sales lines, but only with a negative amount (see intake).
 CREDIT_MEMO_TYPES = {"credit memo", "credit memos", "credit note", "credit notes"}
 INVOICE_LINE_TYPES = {"invoice", "invoices", "sale", "sales", "sales receipt", "sales receipts"} | CREDIT_MEMO_TYPES
+# Account parents that hold sales or income, never costs ("Income:Revenue").
+SALES_ACCOUNT_PARENTS = {"income", "revenue", "sales", "other income", "sales income", "operating income"}
 # Sales-document names that don't establish an incurred cost when used as a cost category.
 SALES_DOCUMENT_TYPES = INVOICE_LINE_TYPES | {"income", "revenue", "sales income", "estimate", "estimates"}
 # Whole cost types for card purchases: ordinary expenses, though they mention "credit"/"debit".
@@ -558,10 +560,16 @@ def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict
     for i, h in enumerate(headers):
         text = _norm(cells[i])
         if i == category:
-            if text in FEE_TYPES or text in CARD_CHARGE_TYPES:
+            # Read as an account path ("Parent:Category"): the category's own name decides, and
+            # a sales/income parent ("Income:Revenue") is never a cost.
+            name = cost_type_name(cells[i])
+            parents = {_norm(p) for p in cells[i].split(":")[:-1]}
+            if parents & SALES_ACCOUNT_PARENTS:
+                return cells[i].strip()
+            if name in FEE_TYPES or name in CARD_CHARGE_TYPES:
                 continue
-            if (text in CASH_MOVEMENT_TYPES or text in SALES_DOCUMENT_TYPES
-                    or set(text.split()) & (SUSPECT_COST_TYPE_WORDS | NON_POSTING_WORDS)):
+            if (name in CASH_MOVEMENT_TYPES or name in SALES_DOCUMENT_TYPES
+                    or set(name.split()) & (SUSPECT_COST_TYPE_WORDS | NON_POSTING_WORDS)):
                 return cells[i].strip()
         elif _norm(h) in TYPE_HEADERS and text not in allowed:
             return cells[i].strip() or "(blank)"
@@ -577,10 +585,11 @@ def _credit_memo(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
 
 
 def _summary_label(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]) -> str | None:
-    """The row's label when its description, memo or type says it is a subtotal or total."""
-    columns = [headers.index(mapping[f]) for f in ("description", "memo") if mapping.get(f) in headers]
+    """The row's label when its description, memo, type or cost category says it is a subtotal
+    or total (a category is read by its own name, so "Totals:Grand Total" counts too)."""
+    columns = [headers.index(mapping[f]) for f in ("description", "memo", "cost_type") if mapping.get(f) in headers]
     for i in [*columns, *(i for i, h in enumerate(headers) if _norm(h) in TYPE_HEADERS)]:
-        if _norm(cells[i]) in SUMMARY_LABELS:
+        if _norm(cells[i]) in SUMMARY_LABELS or cost_type_name(cells[i]) in SUMMARY_LABELS:
             return cells[i].strip()
     return None
 
@@ -757,6 +766,12 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             not_a_line += 1
             reasons.append(f"Row is labeled '{summary}': a summary of {_label(key, kind)}'s other lines, "
                            "not a line of its own; not counted again.")
+        elif summary and kind == "costs" and mapping.get("cost_type") in headers and \
+                cost_type_name(rec.cells[headers.index(mapping["cost_type"])]) in SUMMARY_LABELS:
+            # A cost categorized "Grand Total" with nothing to summarize: what it is can't be told,
+            # so it is never counted and money may be missing.
+            reasons.append(f"Category '{summary}' is a summary label, not a cost, so what this row is can't be "
+                           "told; not imported.")
         if number in candidates and subtotals[number]:
             not_a_line += 1
             reasons.append(f"Subtotal of {_label(candidates[number][0], kind)} (the owner said so); "
@@ -775,8 +790,10 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
         # identical cell for cell, including unmapped columns, is rejected rather than
         # double-counted.
         if rec.cells in seen_rows:
-            not_a_line += 1
-            reasons.append(f"Exact duplicate of row {seen_rows[rec.cells]}; not imported twice.")
+            # Counted once, but two real identical lines can't be told from an accidental copy,
+            # so money may be missing: this is not counted as "not a line".
+            reasons.append(f"Identical to row {seen_rows[rec.cells]}, so it is counted once. If both are real "
+                           "(e.g. two identical items), the total is low: add a line number where the data comes from.")
         else:
             seen_rows[rec.cells] = number
         if reasons:

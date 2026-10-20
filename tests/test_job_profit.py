@@ -139,10 +139,9 @@ class CompletenessTests(unittest.TestCase):
         self.assertIn("2 cost line(s) couldn't be imported and have no readable job number", " ".join(job.reasons))
 
     def test_rows_that_are_not_lines_do_not_hold_a_job_back(self):
-        # A duplicate row and a transfer row are rejected, but no money is missing.
+        # A transfer row is rejected, but no money is missing.
         report = self.report(b"Date,Vendor,Job,Type,Amount\n10/01/2026,Crew,J-1,Labor,10.00\n"
-                             b"10/01/2026,Crew,J-1,Labor,10.00\n10/01/2026,Paper Co,J-1,Materials,10.00\n"
-                             b"10/01/2026,Bank,J-1,Transfer,500.00\n")
+                             b"10/01/2026,Paper Co,J-1,Materials,10.00\n10/02/2026,Bank,J-1,Transfer,500.00\n")
         self.assertEqual(("complete", []), (report.jobs[0].status, report.jobs[0].reasons))
 
     def test_job_whose_only_lines_failed_keeps_its_customer_from_being_complete(self):
@@ -480,6 +479,64 @@ class CompletenessTests(unittest.TestCase):
         self.assertEqual("other", jp.cost_category("Job Costs:Rent"))
         self.assertEqual("fees_overhead", jp.cost_category("Overhead:Rent"))
         self.assertEqual("materials", jp.cost_category("Cost of Goods Sold:Materials"))
+
+    def test_account_paths_in_cost_categories(self):
+        for label in (b"Income:Revenue", b"Income:Sales", b"Sales:Signs"):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/01/2026,Paper Co,J-1," + label + b",40.00\n", self.SALES)
+                self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")  # never $10 Complete
+        report = self.report(self.LINKED + b"B-3,10/01/2026,Square,J-1,Operating Expenses:Payment processing fees,2.90\n",
+                             self.SALES)
+        self.assert_job(report, Decimal("100.00"), Decimal("47.10"), "complete")
+        self.assertEqual(Decimal("2.90"), report.jobs[0].costs["fees_overhead"])
+        report = self.report(self.LINKED + b"B-3,10/01/2026,Sign Co,J-1,Job Costs:Delivery,5.00\n", self.SALES)
+        self.assert_job(report, Decimal("100.00"), Decimal("45.00"), "complete")
+
+    def test_identical_lines_are_counted_once_but_keep_the_job_provisional(self):
+        report = self.report(b"Date,Vendor,Job,Type,Amount\n10/01/2026,Crew,J-1,Labor,20.00\n"
+                             b"10/01/2026,Crew,J-1,Labor,20.00\n10/02/2026,Paper Co,J-1,Materials,30.00\n",
+                             self.SALES)
+        self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")  # never $30, never Complete
+        report = self.report(self.LINKED, b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n"
+                                          b"I-1,10/01/2026,Bakery,J-1,100.00\n")
+        self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")
+        # Lines that differ in any column (here the bill number) are both real and count.
+        report = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                             b"B-2,10/01/2026,Crew,J-1,Labor,20.00\nB-3,10/02/2026,Paper Co,J-1,Materials,30.00\n",
+                             self.SALES)
+        self.assert_job(report, Decimal("100.00"), Decimal("30.00"), "complete")
+
+    def test_summary_rows_in_a_category_column_are_never_costs(self):
+        for label in (b"Grand Total", b"Subtotal", b"Totals:Grand Total"):
+            with self.subTest(label=label):
+                report = self.report(b"Bill,Date,Vendor,Job,Category,Line Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                                     b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n"
+                                     b"B-3,10/01/2026,Paper Co,J-1," + label + b",50.00\n", self.SALES)
+                # Never subtracted again ($0); its meaning is unconfirmed, so the job is provisional.
+                self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")
+        report = self.report(b"Bill,Date,Vendor,Job,Category,Line Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                             b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\nB-3,10/01/2026,Sign Co,J-1,Permits,5.00\n",
+                             self.SALES)
+        self.assert_job(report, Decimal("100.00"), Decimal("45.00"), "complete")
+
+    def test_look_alike_customers_and_jobs_are_never_complete(self):
+        costs = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                 b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\nB-3,10/01/2026,Crew,J-2,Labor,20.00\n"
+                 b"B-4,10/01/2026,Paper Co,J-2,Materials,30.00\n")
+        report = self.report(costs, b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n"
+                                    b"I-2,10/01/2026,bakery,J-2,150.00\n")
+        self.assertEqual(["complete", "complete"], [j.status for j in report.jobs])  # the jobs themselves are fine
+        self.assertEqual([("Bakery", Decimal("50.00"), "provisional"), ("bakery", Decimal("100.00"), "provisional")],
+                         [(c.customer, c.contribution, c.status) for c in report.customers])  # kept apart, never merged
+        self.assertIn("look alike", " ".join(report.notes))
+        report = self.report(costs.replace(b"J-2", b"j 1"), b"Invoice,Date,Customer,Job,Amount\n"
+                                                           b"I-1,10/01/2026,Bakery,J-1,100.00\nI-2,10/01/2026,Bakery,j 1,150.00\n")
+        self.assertEqual({"J-1": "provisional", "j 1": "provisional"}, {j.job_id: j.status for j in report.jobs})
+        self.assertEqual("provisional", report.customers[0].status)
+        # Distinct names stay complete.
+        report = self.report(costs, b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n"
+                                    b"I-2,10/01/2026,Gym,J-2,150.00\n")
+        self.assertEqual(["complete", "complete"], [c.status for c in report.customers])
 
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
