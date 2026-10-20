@@ -59,9 +59,14 @@ def _request_headers():
 
 
 PILOT = ps.pilot_mode(os.environ, st.get_option("server.address"), _request_headers())
+# The public demo link (margenx_demo.py, D-006): the made-up demo shop only, and no upload box at all.
+DEMO_ONLY = ps.demo_only(os.environ)
 
 ui.header(PILOT)
-if PILOT:
+if DEMO_ONLY:
+    st.info("**Online demo with a made-up sign shop.** Every name and number here is invented. This demo can't "
+            "take files: to see your own jobs, ask us about early access.")
+elif PILOT:
     st.warning(
         "**Pilot session on this laptop.** A pilot shop's own files may be used only with the shop owner present "
         "and agreeing below. Files are read in memory only, never saved, and forgotten when you press "
@@ -90,7 +95,7 @@ def _release_uploads() -> bool:
 
 
 controls, end_col = st.columns([3, 1.5])
-if end_col.button("End session and clear everything", width="stretch"):
+if not DEMO_ONLY and end_col.button("End session and clear everything", width="stretch"):
     released = _release_uploads()
     st.session_state.clear()
     st.session_state["session_number"] = session + 1
@@ -107,9 +112,11 @@ elif ended:
                "from memory. Close this browser tab now and stop MargenX (Ctrl+C) to finish clearing.")
 st.session_state["session_number"] = session
 
-use_samples = controls.toggle("Try it with the made-up sample files", value=not PILOT, key=f"samples-{session}")
 files: list[tuple[str, bytes]] = []
-if use_samples:
+if DEMO_ONLY:
+    # No toggle, no choice of files and no upload box: only the clean demo shop can be shown.
+    files = [(name, (SAMPLES / name).read_bytes()) for name in DEMO_FILES]
+elif controls.toggle("Try it with the made-up sample files", value=not PILOT, key=f"samples-{session}"):
     sample_set = controls.radio("Which made-up files?", list(SAMPLE_SET_LABELS),
                                 index=list(SAMPLE_SET_LABELS).index(DEFAULT_SAMPLE_SET),
                                 format_func=SAMPLE_SET_LABELS.get, horizontal=True, key=f"sampleset-{session}")

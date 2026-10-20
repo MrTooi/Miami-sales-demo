@@ -18,6 +18,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 PILOT_ENV = "MARGINX_PILOT"
+# Set by margenx_demo.py, the entry point for the public demo link (D-006): only the made-up demo
+# shop is shown, no file can be uploaded, and pilot mode can't be switched on.
+DEMO_ENV = "MARGENX_DEMO_ONLY"
 LOCAL_ADDRESSES = {"localhost", "127.0.0.1", "::1"}
 
 CONSENT_TEXT = (
@@ -34,9 +37,16 @@ def pilot_mode(environ: Mapping[str, str], server_address: str | None,
     """True only when pilot mode is switched on, the app listens on a loopback address, and the
     current request looks local (see request_is_local). An unset address (Streamlit's default
     listens on every network address) does not count."""
+    if demo_only(environ):
+        return False
     switched_on = environ.get(PILOT_ENV, "").strip() == "1"
     loopback = (server_address or "").strip().lower() in LOCAL_ADDRESSES
     return switched_on and loopback and request_is_local(headers)
+
+
+def demo_only(environ: Mapping[str, str]) -> bool:
+    """True for the public demo link: the made-up demo shop only, with no way to upload a file."""
+    return environ.get(DEMO_ENV, "").strip() == "1"
 
 
 # Headers that proxies, load balancers and tunnels add; a direct local browser sends none.

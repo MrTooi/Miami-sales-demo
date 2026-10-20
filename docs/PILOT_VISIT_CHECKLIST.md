@@ -1,6 +1,6 @@
 # MargenX pilot visit checklist (sit-down pilot)
 
-**Use this only after the owner has approved real data for a named pilot shop in a written decision (D-006 or later).** Until then, use the made-up sample files only. Merging step 3 doesn't approve real data by itself (D-003).
+**Use this only after the owner has approved real data for a named pilot shop in a written decision (D-007 or later; D-006 is the public demo link, which takes no files).** Until then, use the made-up sample files only. Merging step 3 doesn't approve real data by itself (D-003).
 
 How the pilot works: Alex or Abrey visits the shop and runs MargenX on a team laptop, with the shop owner present. The shop's files are read in memory only. They are never saved, uploaded or kept after the session.
 

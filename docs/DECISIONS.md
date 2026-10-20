@@ -113,3 +113,21 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
   - Some label variants stay unhandled until real exports are tested. This is acceptable only because uncertain rows fail closed and no real data is used.
   - The follow-up list must be carried into real-export testing, not forgotten.
 - Evidence / links: PR #102 manual review comments; PR #100.
+
+### D-006 — Public demo link: the made-up demo shop only, no uploads
+- Date: 2026-10-20
+- Status: Accepted (in force once the PR adding `margenx_demo.py` is merged with the owner's approval)
+- Decided by: Human owner (MrTooi), who chose "b just a link we can send to abrey and he can open" in a Claude Code session on 2026-10-20, when offered a demo-only website link.
+- Context: Abrey talks to Miami shop owners and needs something real to show. MargenX ran only on the owner's laptop.
+- Decision:
+  1. A public demo link may run `margenx_demo.py` only. It shows the made-up demo sign shop, with no upload box, no file choice and no pilot mode (`pilot_safety.DEMO_ENV`), and says plainly that every name and number is invented.
+  2. The owner deploys it with their own accounts (Streamlit Community Cloud, steps in `docs/DEMO_LINK.md`). Claude Code never deploys.
+  3. No real shop data, sign-up forms, analytics or visitor-data collection on the link without a new owner decision.
+- Not changed:
+  - Real customer data still needs step 3b and a separate owner decision for a named pilot shop (D-007 or later), and is used only in the sit-down pilot on the team laptop.
+  - Merging still needs the owner's explicit approval for each PR.
+  - Every finance, security and evidence rule in `AGENTS.md`.
+- Consequences / risks:
+  - Anyone with the link can see the made-up demo. Acceptable: it holds no real data and accepts no files.
+  - Deploying the wrong file (`app.py` or `marginx_pilot.py`) would put an upload box online. `docs/DEMO_LINK.md` names the only allowed file, and the owner checks for "no upload box" after deploying.
+- Evidence / links: `docs/DEMO_LINK.md`; `tests/test_demo_link.py`.
