@@ -654,6 +654,20 @@ class CompletenessTests(unittest.TestCase):
                 report = self.report(self.LINKED + b"B-3,10/01/2026,Sign Co,J-1," + label + b",40.00\n", self.SALES)
                 self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")
 
+    def test_inventory_anywhere_in_the_account_path_is_not_a_job_cost(self):
+        for label in (b"Inventory:Materials", b"Stock:Materials", b"Inventory"):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/01/2026,Paper Co,J-1," + label + b",40.00\n", self.SALES)
+                self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")  # never $10 Complete
+                self.assertEqual(Decimal("50.00"), report.jobs[0].total_costs)
+        for label, materials in ((b"Cost of Goods Sold:Inventory", Decimal("30.00")),
+                                 (b"Cost of Goods Sold:Materials", Decimal("70.00")),
+                                 (b"Cost of Goods Sold:Inventory:Materials", Decimal("70.00"))):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/01/2026,Paper Co,J-1," + label + b",40.00\n", self.SALES)
+                self.assert_job(report, Decimal("100.00"), Decimal("10.00"), "complete")
+                self.assertEqual(materials, report.jobs[0].costs["materials"])
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))

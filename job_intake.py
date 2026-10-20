@@ -605,9 +605,12 @@ def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict
                 return cells[i].strip()
             if name in SALES_DOCUMENT_TYPES:
                 return cells[i].strip()
-            # Bare "Inventory" may be stock still on the shelf (an asset), not used on a job: it
-            # counts only under a cost account ("Cost of Goods Sold:Inventory").
-            if name in INVENTORY_TYPES and not any(set(part.split()) & COST_PARENT_WORDS for part in parts[:-1]):
+            # "Inventory" anywhere in the path may be stock still on the shelf (an asset), not used on
+            # a job ("Inventory", "Inventory:Materials"): it counts only when another part of the path
+            # is a cost account ("Cost of Goods Sold:Inventory").
+            inventory = [k for k, part in enumerate(parts) if part in INVENTORY_TYPES]
+            if inventory and not any(set(part.split()) & COST_PARENT_WORDS
+                                     for k, part in enumerate(parts) if k not in inventory):
                 return cells[i].strip()
         elif _norm(h) in TYPE_HEADERS and text not in allowed:
             return cells[i].strip() or "(blank)"
