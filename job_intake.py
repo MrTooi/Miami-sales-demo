@@ -932,7 +932,7 @@ def _layout_rows(headers: list[str], records: list[Record], mapping: dict[str, s
     """Rows of a report's layout that are not a sale or cost, by row number, with the reason.
 
     A row is skipped only with proof that it holds no line of its own:
-    - a total row (see _total_row) whose amount equals the sum of the rows directly above it.
+    - a total row (see _total_row) whose amount equals the sum of one or more rows directly above it.
       "Total for X" needs a heading "X" above it and must equal exactly the rows under that
       heading; a plain "Total" may go back to the start of the file or to a heading or total row.
     - a heading: a row whose only filled cell is text (not a number or date) in a column nobody
@@ -948,11 +948,12 @@ def _layout_rows(headers: list[str], records: list[Record], mapping: dict[str, s
     chosen = {headers.index(h) for h in mapping.values() if h in headers}
     layout: dict[int, str] = {}
     running = Decimal(0)  # the sum of every row's amount so far (layout rows aren't added)
-    # The running sum at each place a total may start from: the file's start, and just after
-    # each heading or total row. Cleared by a row whose amount can't be read, since a total
-    # spanning that row can't be checked.
-    starts = {running}
-    headings: dict[str, tuple[int, Decimal]] = {}  # open heading text -> (row, running sum there)
+    seen = 0  # rows counted so far: a total must add up at least one row, so an empty one proves nothing
+    # Where a total may start from: the file's start, and just after each heading or total row, as
+    # running sum -> the fewest rows seen at a start with that sum. Cleared by a row whose amount
+    # can't be read, since a total spanning that row can't be checked.
+    starts = {running: seen}
+    headings: dict[str, tuple[int, Decimal, int]] = {}  # open heading text -> (row, running sum, rows seen)
     for position, rec in enumerate(records):
         cells = rec.cells
         total = _total_row(cells, headers, mapping)
@@ -961,11 +962,15 @@ def _layout_rows(headers: list[str], records: list[Record], mapping: dict[str, s
             # "Total for X" is proven only by the rows under its own heading "X"; a plain "Total" by
             # the rows back to the file's start or to any heading or total row.
             heading = headings.pop(group, None) if group else None
-            if (heading is not None and running - heading[1] == amount) if group else (running - amount in starts):
+            if group:
+                proven = heading is not None and running - heading[1] == amount and seen > heading[2]
+            else:
+                proven = starts.get(running - amount, seen) < seen
+            if proven:
                 layout[rec.row] = f"A total row ('{label}'): it equals the rows above it, which are counted instead."
                 if heading:
                     layout[heading[0]] = f"A heading ('{group}'), closed by the total row on row {rec.row}."
-                starts.add(running)
+                starts.setdefault(running, seen)
                 continue
         filled = [(i, c.strip()) for i, c in enumerate(cells) if c.strip()]
         # A heading or footer is one cell of text in a column nobody chose (in a report, the column
@@ -976,9 +981,10 @@ def _layout_rows(headers: list[str], records: list[Record], mapping: dict[str, s
             if FOOTER_ROW.match(text) and position == len(records) - 1:
                 layout[rec.row] = f"The report's footer ('{text}'), not a sale or cost."
             else:
-                headings[text] = (rec.row, running)
-                starts.add(running)
+                headings[text] = (rec.row, running, seen)
+                starts.setdefault(running, seen)
             continue
+        seen += 1
         try:
             if len(cells) != len(headers):
                 raise ValueError("a row of the wrong width")

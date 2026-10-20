@@ -384,6 +384,19 @@ class ReportLayoutTests(unittest.TestCase):
             self.assertTrue(total["money_missing"])
             self.assertIn("Looks like a total row", " ".join(total["reasons"]))
 
+    def test_a_total_must_add_up_at_least_one_row(self):
+        # A heading with nothing under it, closed by a zero total, proves nothing: "INV-7" alone, even
+        # in a column nobody chose, may be an incomplete record. Both rows are rejected, money possibly missing.
+        report = ["(no name, column A)", "Invoice", "Date", "Customer", "Job", "Amount"]
+        mapping = ji.suggest_mapping(report, "invoices")
+        rows = [("INV-7", "", "", "", "", ""), ("Total for INV-7", "", "", "", "", "0.00")]
+        result = ji.intake(report, [ji.Record(n, r) for n, r in enumerate(rows, start=2)], mapping, "invoices", "MM/DD/YYYY")
+        self.assertEqual(([], [2, 3]), (result.skipped, [r["row"] for r in result.rejected]))
+        self.assertTrue(all(r["money_missing"] for r in result.rejected))
+        # A plain zero "Total" with no rows above it is rejected too.
+        result = ji.intake(report, [ji.Record(2, ("Total", "", "", "", "", "0.00"))], mapping, "invoices", "MM/DD/YYYY")
+        self.assertEqual(([], [2]), (result.skipped, [r["row"] for r in result.rejected]))
+
     def test_a_number_or_date_is_never_a_heading_even_when_a_total_closes_it(self):
         # "500.00" in the invoice column may be a misplaced amount; a zero "Total for 500.00" mustn't hide it.
         headers = ["Invoice", "Date", "Customer", "Job", "Amount"]
