@@ -79,6 +79,21 @@ class SafetyTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
         self.assertIn("&lt;b&gt;Banner&lt;/b&gt;", html)
 
+    def test_a_net_credit_is_added_back_not_shown_as_a_double_negative(self):
+        # Intake rejects negative cost lines today, so this is built by hand: the display must still
+        # never show "−-$10" if a category ever nets to a credit.
+        from decimal import Decimal
+        report = report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\n",
+                             b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1)
+        report.jobs[0].costs["materials"] = Decimal("-10.00")
+        html = render(report)
+        self.assertNotIn("−-", html)
+        # $100 sold − $20 labor + $10 materials credit = $90 left: the breakdown adds up.
+        self.assertIn('<td>Sold for</td><td class="r">$100</td>', html)
+        self.assertIn('<td>Labor</td><td class="r">−$20</td>', html)
+        self.assertIn('<td>Materials (credit)</td><td class="r">+$10</td>', html)
+        self.assertIn('<td>Left after job costs</td><td class="r">$90</td>', html)
+
     def test_styles_make_no_outside_requests(self):
         self.assertNotIn("http", ui._CSS)
         self.assertNotIn("@import", ui._CSS)

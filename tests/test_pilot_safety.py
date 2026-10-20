@@ -131,8 +131,11 @@ class PilotEntryPointTests(unittest.TestCase):
             at.run()
         self.assertFalse(at.exception, at.exception)
         page = " ".join(m.value for m in at.markdown)
-        self.assertIn("mx-brand", page)  # the MarginX header, not the Ledger demo
-        self.assertNotIn("LEDGER", page)
+        # The MarginX header (product name and tagline), not the Ledger demo, in any capitalisation.
+        import marginx_ui as ui
+        self.assertIn(f"{ui.BRAND[:-1]}<b>{ui.BRAND[-1]}</b>", page)
+        self.assertIn(ui.TAGLINE, page)
+        self.assertNotIn("ledger", page.lower())
         self.assertEqual([], [t.value for t in at.title])
 
 

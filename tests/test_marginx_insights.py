@@ -149,6 +149,20 @@ class AttentionTests(unittest.TestCase):
         self.assertIn("Of customers with a figure, A is the biggest, but keeps only 10%", titles)
         self.assertFalse(any("your biggest customer" in t for t in titles))
 
+    def test_thin_customer_gap_is_measured_before_rounding(self):
+        def titles(a_materials: str, b_materials: str):
+            # A: $1,000 sales, $300 labor. B: $500 sales, $50 labor. A is the biggest customer.
+            return [i.title for i in mi.attention(report_from(
+                b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,1000.00\nI-2,10/01/2026,B,J-2,500.00\n",
+                b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,300.00\n"
+                b"B-2,10/01/2026,Paper,J-1,Materials," + a_materials.encode() + b"\n"
+                b"B-3,10/01/2026,Crew,J-2,Labor,50.00\nB-4,10/01/2026,Paper,J-2,Materials," + b_materials.encode()
+                + b"\n"))]
+        # 35.4% vs 49.6% overall: shown as 35% and 50%, but the real gap is 14.2 points, under 15.
+        self.assertFalse(any("biggest" in t for t in titles("346.00", "60.00")))
+        # 35% vs 50% overall: exactly 15 points, flagged.
+        self.assertIn("A is your biggest customer, but keeps only 35%", titles("350.00", "50.00"))
+
     def test_no_thin_customer_finding_when_margins_are_close(self):
         report = report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,1000.00\nI-2,10/01/2026,B,J-2,500.00\n",
                              b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,300.00\n"

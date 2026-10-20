@@ -295,7 +295,9 @@ def _jobs(report: ProfitReport, summary: Summary) -> None:
                       if share is not None else "")
         dot = "loss" if j.contribution is not None and j.contribution < 0 else j.status
         lines = [f'<tr><td>Sold for</td><td class="r">{_money(j.sales)}</td></tr>'] if j.invoice_lines else []
-        lines += [f'<tr><td>{escape(CATEGORY_LABELS[c])}</td><td class="r">−{_money(j.costs[c])}</td></tr>'
+        # A cost is subtracted; a net credit (a refund from a supplier) is added back, never shown as "−-$20".
+        lines += [f'<tr><td>{escape(CATEGORY_LABELS[c])}{"" if j.costs[c] > 0 else " (credit)"}</td>'
+                  f'<td class="r">{"−" if j.costs[c] > 0 else "+"}{_money(abs(j.costs[c]))}</td></tr>'
                   for c in CATEGORIES if j.costs[c]]
         if j.contribution is not None:
             lines.append(f'<tr class="tot"><td>Left after job costs</td><td class="r">{amount}</td></tr>')

@@ -161,11 +161,13 @@ def _thin_biggest_customer(report: ProfitReport) -> Insight | None:
     if len(counted) < 2:
         return None
     total_sales = sum((c.sales for c in counted), ZERO)
-    overall = percent(sum((c.contribution for c in counted), ZERO), total_sales)
     biggest = max(counted, key=lambda c: (c.sales, c.customer))
-    share = percent(biggest.contribution, biggest.sales)
-    if overall is None or share is None or Decimal(overall - share) < THIN_GAP_POINTS:
+    # The gap is measured on exact shares; only the percentages shown are rounded.
+    gap_points = (sum((c.contribution for c in counted), ZERO) / total_sales
+                  - biggest.contribution / biggest.sales) * 100
+    if gap_points < THIN_GAP_POINTS:
         return None
+    share = percent(biggest.contribution, biggest.sales)
     all_sales_counted = (not report.unlinked_sales_lines
                          and all(j.contribution is not None and len(j.customers) == 1 for j in report.jobs))
     # The comparison uses a customer whose figures are complete, so it is never flattered by missing costs.
