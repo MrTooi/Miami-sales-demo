@@ -154,6 +154,16 @@ CARD_CHARGE_TYPES = {
     "credit card charge", "credit card charges", "credit card expense", "credit card purchase", "credit card",
     "debit card charge", "debit card purchase", "debit card",
 }
+# Whole transaction types that are posted costs. In a costs file, a "Type"-style column that is
+# not the cost category must hold one of these (or a fee, card charge or known cash movement):
+# anything else, such as an estimate or a purchase order, is not an incurred cost.
+COST_LINE_TYPES = {
+    "bill", "bills", "vendor bill", "expense", "expenses", "check", "checks", "cheque", "cheques", "purchase",
+    "purchases", "cash expense", "cash purchase",
+}
+# Words that make any cost type a document that isn't a posted cost (an estimate, a quote, an order).
+NON_POSTING_WORDS = {"estimate", "estimates", "quote", "quotes", "quotation", "proposal", "po", "order", "orders",
+                     "draft"}
 # Words that, in a cost file's type, mean money moving, a bank or a credit. Such a type must be
 # exactly a known cash movement, fee or card charge; otherwise it is never guessed at.
 SUSPECT_COST_TYPE_WORDS = ROW_CASH_WORDS | {"credit", "credits", "bank", "ach", "wire", "refund", "refunds",
@@ -530,7 +540,11 @@ def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict
 
     - sales file: a "Type"-style column holds something other than a recognized sale type or a
       known cash movement (e.g. "Payment processing fees", "Bank Credit (ACH)", "Estimate");
-    - costs file: a type mentions money moving, a bank or a credit but isn't exactly a known
+    - costs file, transaction-type column (a "Type"-style column that isn't the cost category):
+      anything other than a posted cost (Bill, Expense, Check...), fee, card charge or known
+      cash movement (e.g. "Estimate", "Purchase Order");
+    - costs file, cost category: any real category is fine, unless it names an estimate, quote
+      or order, or mentions money moving, a bank or a credit without being exactly a known
       cash movement, fee or card charge (e.g. "Payout net of fees", "Vendor Credit").
     """
     if kind == "invoices":
@@ -539,11 +553,16 @@ def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict
             if text and text not in INVOICE_LINE_TYPES and text not in CASH_MOVEMENT_TYPES:
                 return cells[i].strip()
         return None
-    for i in _type_columns(headers, mapping):
+    known = CASH_MOVEMENT_TYPES | FEE_TYPES | CARD_CHARGE_TYPES
+    category = headers.index(mapping["cost_type"]) if mapping.get("cost_type") in headers else None
+    for i, h in enumerate(headers):
         text = _norm(cells[i])
-        if text in CASH_MOVEMENT_TYPES or text in FEE_TYPES or text in CARD_CHARGE_TYPES:
-            continue
-        if set(text.split()) & SUSPECT_COST_TYPE_WORDS:
+        if i == category:
+            if text in known:
+                continue
+            if set(text.split()) & (SUSPECT_COST_TYPE_WORDS | NON_POSTING_WORDS):
+                return cells[i].strip()
+        elif _norm(h) in TYPE_HEADERS and text and text not in known and text not in COST_LINE_TYPES:
             return cells[i].strip()
     return None
 
@@ -713,8 +732,9 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
                            "Credit Memo), so it isn't counted as a sale. If it is one, change its type where the "
                            "data comes from.")
         elif unrecognized:
-            reasons.append(f"Type '{unrecognized}' mentions money moving, a bank or a credit but isn't a known "
-                           "payment, fee or card charge, so what it is can't be told; not imported.")
+            reasons.append(f"Type '{unrecognized}' isn't a recognized posted cost (a bill, expense, check, card "
+                           "charge or fee): it may be money moving, a credit, an estimate or an order, so it "
+                           "isn't imported.")
         memo = _credit_memo(rec.cells, types)
         if memo and amount is not None and amount > 0:
             # A credit lowers what was billed; a positive one would raise it. Which sign is

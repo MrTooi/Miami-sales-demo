@@ -244,7 +244,7 @@ class MappingTests(unittest.TestCase):
         result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY", "line")
         self.assertEqual([2, 6], [r["row"] for r in result.accepted])  # the two fees are costs
         self.assertEqual([(3, False), (4, True), (5, True)], [(r["row"], r["money_missing"]) for r in result.rejected])
-        self.assertIn("isn't a known payment, fee or card charge", " ".join(result.rejected[1]["reasons"]))
+        self.assertIn("isn't a recognized posted cost", " ".join(result.rejected[1]["reasons"]))
         headers, rows = ji.read_csv(b"Invoice,Date,Customer,Type,Amount\nI-1,10/31/2026,Demo,Invoice,100.00\n"
                                     b"I-2,10/31/2026,Square,Payout net of fees,40.00\n")
         result = ji.intake(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")

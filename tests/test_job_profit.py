@@ -359,6 +359,31 @@ class CompletenessTests(unittest.TestCase):
                                     b"B-4,10/01/2026,Bank,J-1,Bank service charges,1.00\n", invoices)
         self.assertEqual((Decimal("56.00"), "complete"), (report.jobs[0].total_costs, report.jobs[0].status))
 
+    def test_estimates_and_purchase_orders_are_never_costs(self):
+        invoices = b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n"
+        # A transaction-type column next to the cost category.
+        base = (b"Bill,Date,Vendor,Job,Transaction Type,Category,Amount\n"
+                b"B-1,10/01/2026,Crew,J-1,Bill,Labor,20.00\nB-2,10/01/2026,Paper Co,J-1,Expense,Materials,30.00\n")
+        for txn in (b"Estimate", b"Purchase Order", b"Quote", b"Something else"):
+            with self.subTest(txn=txn):
+                report = self.report(base + b"B-3,10/01/2026,Paper Co,J-1," + txn + b",Materials,40.00\n", invoices)
+                job = report.jobs[0]
+                self.assertEqual((Decimal("50.00"), "provisional"), (job.contribution, job.status))
+                self.assertEqual("provisional", report.customers[0].status)
+        report = self.report(base + b"B-3,10/01/2026,Sign Co,J-1,Check,Delivery,5.00\n", invoices)
+        self.assertEqual((Decimal("45.00"), "complete"), (report.jobs[0].contribution, report.jobs[0].status))
+        # Only a cost category column: any real category counts, but not an estimate or order.
+        cat = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+               b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n")
+        for category in (b"Estimate", b"Purchase order", b"Materials quote"):
+            with self.subTest(category=category):
+                report = self.report(cat + b"B-3,10/01/2026,Paper Co,J-1," + category + b",40.00\n", invoices)
+                self.assertEqual((Decimal("50.00"), "provisional"), (report.jobs[0].contribution, report.jobs[0].status))
+        for category in (b"Delivery", b"Permits", b"Equipment rental"):
+            with self.subTest(category=category):
+                report = self.report(cat + b"B-3,10/01/2026,Sign Co,J-1," + category + b",5.00\n", invoices)
+                self.assertEqual((Decimal("45.00"), "complete"), (report.jobs[0].contribution, report.jobs[0].status))
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))
