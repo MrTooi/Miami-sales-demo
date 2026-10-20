@@ -26,7 +26,7 @@ apply_theme()
 # The older Ledger demo has no pilot consent and keeps imports in a SQLite file, so it is
 # switched off entirely whenever pilot mode is set (pilot sessions use marginx_pilot.py).
 if os.environ.get(PILOT_ENV, "").strip() == "1":
-    st.error("The Ledger demo is turned off during pilot sessions. Start MarginX with marginx_pilot.py "
+    st.error("The Ledger demo is turned off during pilot sessions. Start MargenX with marginx_pilot.py "
              "(see docs/PILOT_VISIT_CHECKLIST.md).")
     st.stop()
 

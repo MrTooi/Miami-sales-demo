@@ -1,4 +1,4 @@
-# MarginX safety settings (step 3a). Apply everywhere, pilot laptop included.
+# MargenX safety settings (step 3a). Apply everywhere, pilot laptop included.
 [browser]
 # Send no usage statistics anywhere.
 gatherUsageStats = false
@@ -19,7 +19,7 @@ maxUploadSize = 5
 disconnectedSessionTTL = 10
 
 [theme]
-# MarginX's light, brand-green look (matches the website). The older Ledger demo restyles itself.
+# MargenX's light, brand-green look (matches the website). The older Ledger demo restyles itself.
 base = "light"
 primaryColor = "#0F7A55"
 backgroundColor = "#F4FBF7"

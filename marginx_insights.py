@@ -1,4 +1,4 @@
-"""Plain-language summary of a MarginX profit report, for the results screen.
+"""Plain-language summary of a MargenX profit report, for the results screen.
 
 Turns job_profit.ProfitReport into the headline numbers and a short "what needs your
 attention" list. Deterministic and exact: it only restates figures the report already
@@ -209,7 +209,7 @@ def attention(report: ProfitReport) -> list[Insight]:
     for job in possible:
         why = " ".join(job.reasons) if job.reasons else "Some of its records are missing."
         items.append(Insight("warn", f"{job_name(job)} may have lost {money(-job.contribution)}",
-                             f"The rows MarginX could read show sold for {money(job.sales)}, cost "
+                             f"The rows MargenX could read show sold for {money(job.sales)}, cost "
                              f"{money(job.total_costs)}. Not confirmed: {why}"))
     # Complete jobs that made money but kept less than half the usual margin.
     if usual is not None and usual > 0:

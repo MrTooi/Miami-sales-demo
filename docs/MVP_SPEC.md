@@ -1,8 +1,8 @@
-# MarginX pilot MVP: 1-page spec
+# MargenX pilot MVP: 1-page spec
 
 **Status:** draft for review (#92). **Scope source:** D-003 in `docs/DECISIONS.md`.
 
-The owner renamed the product from Ledger to **MarginX** on 2026-10-18. Code and other docs still say Ledger until a separate rename PR lands. Market notes come from `docs/research/MIAMI_SHOP_RESEARCH.md` (PR #95), which is desk research only, not customer evidence.
+The owner renamed the product from Ledger to **MarginX** on 2026-10-18, and settled the spelling as **MargenX** (matching the brand website) on 2026-10-20. Code and other docs still say Ledger until a separate rename PR lands. Market notes come from `docs/research/MIAMI_SHOP_RESEARCH.md` (PR #95), which is desk research only, not customer evidence.
 
 ## Who it's for
 - **Customers:** owners of small, job-based print, sign and apparel-printing shops in Miami-Dade, roughly 2–15 people.
@@ -61,12 +61,12 @@ None of these has been measured yet; they are targets, not results. Record actua
    - This is a **new** job/customer-keyed calculation on exact Decimal amounts.
    - `finance_engine.summarize` is a period-total helper with no job or customer grouping, not an existing job-profit engine.
    - Linking the two files needs only what is required for profit. Excel and saved mappings wait for step 4.
-3. **Pilot data-safety minimums** (`LAUNCH_RISK_REGISTER.md`). After this, and only with the owner's explicit approval of real data, 1–2 pilot shops can use MarginX on their own files.
+3. **Pilot data-safety minimums** (`LAUNCH_RISK_REGISTER.md`). After this, and only with the owner's explicit approval of real data, 1–2 pilot shops can use MargenX on their own files.
 4. **Excel (.xlsx), more file combinations and saved per-shop mappings**, plus coverage and provenance rules.
 5. **"Where you're losing money" list.**
 6. **Weekly summary.**
 
-**Order changed on 2026-10-19 by the owner:** the safety minimums moved ahead of the extra features, so a real pilot can start right after profit per job, and pilot feedback shapes steps 4–6. Until step 3 is done and the owner approves real data, MarginX is used with **made-up files only**; anonymized real exports are not allowed either.
+**Order changed on 2026-10-19 by the owner:** the safety minimums moved ahead of the extra features, so a real pilot can start right after profit per job, and pilot feedback shapes steps 4–6. Until step 3 is done and the owner approves real data, MargenX is used with **made-up files only**; anonymized real exports are not allowed either.
 
 ## Out of scope for the pilot
 - Live QuickBooks/Square/bank connections (they need credentials and a separate owner decision).

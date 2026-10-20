@@ -11,7 +11,7 @@ import pilot_safety as ps
 from finance_engine import money
 
 ROOT = Path(__file__).resolve().parents[1]
-PAGE = str(ROOT / "pages" / "1_MarginX_Import.py")
+PAGE = str(ROOT / "pages" / "1_MargenX_Import.py")
 CONFIG = Path(__file__).resolve().parents[1] / ".streamlit" / "config.toml"
 
 
@@ -125,15 +125,17 @@ class PilotEntryPointTests(unittest.TestCase):
     def test_the_pilot_entry_point_opens_only_marginx(self):
         source = (ROOT / "marginx_pilot.py").read_text(encoding="utf-8")
         self.assertEqual(1, source.count("st.Page("))
-        self.assertIn('"pages/1_MarginX_Import.py"', source)
+        self.assertIn('"pages/1_MargenX_Import.py"', source)
         with mock.patch.dict("os.environ", {"MARGINX_PILOT": "0"}):
             at = AppTest.from_file(str(ROOT / "marginx_pilot.py"), default_timeout=30)
             at.run()
         self.assertFalse(at.exception, at.exception)
         page = " ".join(m.value for m in at.markdown)
-        # The MarginX header (product name and tagline), not the Ledger demo, in any capitalisation.
+        # The MargenX header (product name and tagline), not the Ledger demo, in any capitalisation.
         import marginx_ui as ui
-        self.assertIn(f"{ui.BRAND[:-1]}<b>{ui.BRAND[-1]}</b>", page)
+        self.assertEqual("MargenX", ui.BRAND)  # the owner's spelling (2026-10-20)
+        self.assertIn("Margen<b>X</b>", page)
+        self.assertNotIn("marginx", page.lower())
         self.assertIn(ui.TAGLINE, page)
         self.assertNotIn("ledger", page.lower())
         self.assertEqual([], [t.value for t in at.title])
@@ -174,7 +176,7 @@ class SafeSettingsTests(unittest.TestCase):
 
     def test_marginx_code_never_writes_files_or_logs_contents(self):
         root = Path(__file__).resolve().parents[1]
-        for name in ("job_intake.py", "job_profit.py", "pilot_safety.py", "pages/1_MarginX_Import.py", "marginx_pilot.py"):
+        for name in ("job_intake.py", "job_profit.py", "pilot_safety.py", "pages/1_MargenX_Import.py", "marginx_pilot.py"):
             source = (root / name).read_text(encoding="utf-8")
             # A guard against obvious regressions, not proof: app.py's demo storage is covered by LegacyAppTests.
             for forbidden in ("open(", "write_text", "write_bytes", "to_csv", "sqlite", "logging", "print("):
@@ -223,7 +225,7 @@ class PilotPageTests(unittest.TestCase):
         # AppTest has no real upload storage, so the deletion can't be confirmed here: the page must
         # then say so instead of claiming it (the confirmed path is tested in UploadReleaseTests).
         self.assertTrue(any("couldn't confirm the uploaded files were deleted" in w.value for w in at.warning))
-        self.assertFalse(any("removed from MarginX's upload storage" in s.value for s in at.success))
+        self.assertFalse(any("removed from MargenX's upload storage" in s.value for s in at.success))
         self.assertTrue(at.toggle[0].value)  # back to the samples: the previous answers are gone
         self.assertEqual(1, at.session_state["session_number"])
 

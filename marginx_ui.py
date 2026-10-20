@@ -1,4 +1,4 @@
-"""MarginX look and feel: brand styles and the HTML for the results screen.
+"""MargenX look and feel: brand styles and the HTML for the results screen.
 
 Light, calm and plain-spoken, matching the website: mint background, white cards, dark-green
 accents. No web fonts or other outside requests: the page works offline, as the pilot promises.
@@ -19,7 +19,7 @@ import streamlit as st
 from job_profit import CATEGORIES, CATEGORY_LABELS, ProfitReport
 from marginx_insights import Insight, Summary, money, percent, pricing
 
-BRAND = "MarginX"  # the product name, in one place
+BRAND = "MargenX"  # the product name, in one place
 TAGLINE = "Profit per job for print, sign and apparel shops"
 
 _CSS = """

@@ -1,7 +1,7 @@
-# Miami print/service shops: how they run, and what MarginX needs
+# Miami print/service shops: how they run, and what MargenX needs
 
 - **Date:** 2026-10-18. **Author:** Claude Code, at the owner's request.
-- **Product name:** the owner renamed Ledger to **MarginX** on 2026-10-18. The repo still says "Ledger" until a rename PR lands.
+- **Product name:** the owner renamed Ledger to **MarginX** on 2026-10-18, and settled the spelling as **MargenX** (matching the brand website) on 2026-10-20. The repo still says "Ledger" until a rename PR lands.
 - **Evidence level:** desk research only (vendor pages, community forums, Census, law-firm summaries). That is level 7–10 on the evidence hierarchy in `.github/copilot-instructions.md`. **None of this is customer evidence.** Every item marked *inference* or *verify* must be checked with real shops before we rely on it.
 
 ## 1. The market around us (observed)
@@ -21,7 +21,7 @@
   - The Attorney General must be notified at **500+** affected residents, and credit bureaus at **1,000+**.
   - There are vendor (third-party agent) duties. Secondary sources mention a 10-day notice from vendor to business. **Verify** this against the statute; the 2024 amendments are not reviewed here.
   - Sources: [Colodny Fass](https://colodnyfass.com/blog/florida-information-protection-act-of-2014-explained-data-breach-notification-and-protection-requirements-for-certain-entities), [Ashurst Perkins Coie](https://www.ashurstperkinscoie.com/en/insights/security-breach-notification-chart---florida/)
-- *Inference:* MarginX would be the shop's vendor. Before any real data:
+- *Inference:* MargenX would be the shop's vendor. Before any real data:
   - a short written data agreement with the pilot shop;
   - collect the minimum (no card numbers, SSNs or bank logins);
   - delete on request;
@@ -38,7 +38,7 @@
 - **Graphics of the Americas**, a printing trade show associated with the Florida association. Location and dates: **verify**. [piworld](https://piworld.com/article/graphics-americas-printing-trade-show-registration-now-open/2)
 - *Inference:* **bookkeepers and accountants** who serve small shops are a likely channel, because they already produce the exports. Not researched; **verify**.
 
-## 5. What MarginX must handle (the checklist)
+## 5. What MargenX must handle (the checklist)
 
 **Getting data in**
 - [ ] Upload **CSV and Excel (.xlsx)**, because QBO exports to Excel. No logins to their systems in the pilot.

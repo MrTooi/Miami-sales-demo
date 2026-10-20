@@ -1,4 +1,4 @@
-"""MarginX step 2: direct job contribution by job and by customer.
+"""MargenX step 2: direct job contribution by job and by customer.
 
 Input is what step 1 accepted: invoice lines and cost lines (job_intake.intake), linked by
 job number. Every result is labeled "direct job contribution": sales billed on the job's

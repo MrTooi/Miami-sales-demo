@@ -174,7 +174,7 @@ class AttentionTests(unittest.TestCase):
         self.assertEqual((0, 1, 1), (summary.losing_jobs, summary.possible_losses, summary.rejected_sales_lines))
         items = mi.attention(report)
         self.assertEqual([("warn", "Job J-1 may have lost $20")], [(i.level, i.title) for i in items])
-        self.assertEqual("The rows MarginX could read show sold for $100, cost $120. Not confirmed: 1 of its sales "
+        self.assertEqual("The rows MargenX could read show sold for $100, cost $120. Not confirmed: 1 of its sales "
                          "lines couldn't be imported (see 'Rows that couldn't be used' under Your files).", items[0].detail)
         self.assertIsNone(summary.after_unlinked_costs)
 
