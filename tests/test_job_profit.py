@@ -596,6 +596,25 @@ class CompletenessTests(unittest.TestCase):
                                           b"I-2,10/01/2026,Bakery,J-1,Credit Memo,-20.00\n")
         self.assert_job(report, Decimal("80.00"), Decimal("30.00"), "complete")
 
+    def test_revenue_balance_sheet_and_order_accounts_are_never_costs(self):
+        for label in (b"Product Sales", b"Sales Revenue", b"Income:Product Sales", b"Sales Discounts",
+                      b"Inventory Asset", b"Sales Tax Payable", b"Accounts Payable", b"Undeposited Funds",
+                      b"Prepaid Expenses", b"Purchase Order:Materials", b"Estimate:Labor"):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/01/2026,Paper Co,J-1," + label + b",40.00\n", self.SALES)
+                self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")  # never $10 Complete
+                self.assertEqual(Decimal("50.00"), report.jobs[0].total_costs)
+        for label in (b"Cost of Goods Sold:Materials", b"Equipment rental", b"Sales commissions",
+                      b"Sales tax expense", b"Cost of sales", b"Inventory"):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/01/2026,Paper Co,J-1," + label + b",40.00\n", self.SALES)
+                self.assertEqual(Decimal("90.00"), report.jobs[0].total_costs)  # a real cost, subtracted
+
+    def test_descriptions_are_text_not_account_paths(self):
+        report = self.report(self.LINKED, b"Invoice,Date,Customer,Job,Description,Line Amount\n"
+                                          b"I-1,10/01/2026,Bakery,J-1,Signs,60.00\nI-1,10/01/2026,Bakery,J-1,Service: Total,40.00\n")
+        self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "complete")  # "Service: Total" is a real line
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))

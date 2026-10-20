@@ -150,12 +150,25 @@ CREDIT_MEMO_TYPES = {"credit memo", "credit memos", "credit note", "credit notes
 INVOICE_LINE_TYPES = {"invoice", "invoices", "sale", "sales", "sales receipt", "sales receipts"} | CREDIT_MEMO_TYPES
 # Account parents that hold sales or income, never costs ("Income:Revenue").
 SALES_ACCOUNT_PARENTS = {"income", "revenue", "sales", "other income", "sales income", "operating income"}
+# Words that make an account name an expense even when it mentions sales, revenue or income
+# ("Sales commissions", "Income tax", "Cost of sales", "Sales tax expense").
+EXPENSE_ACCOUNT_WORDS = {"tax", "taxes", "expense", "expenses", "cost", "costs", "commission", "commissions",
+                         "marketing", "promotion", "promotions", "travel", "salaries", "wages"}
+# Words of balance-sheet accounts: buying stock, owing money or holding cash is not spending it
+# on a job ("Inventory Asset", "Sales Tax Payable", "Accounts Payable", "Undeposited Funds").
+BALANCE_SHEET_WORDS = {"asset", "assets", "payable", "payables", "receivable", "receivables", "undeposited",
+                       "liability", "liabilities", "equity", "loan", "loans", "prepaid", "accrued", "deferred",
+                       "accumulated"}
+
+
 def _is_income_account(name: str) -> bool:
-    """An income account name ("Sales of Product Income", "Services Income", "Revenue", "Sales"),
-    never a cost. "Income tax" is an expense, and words like "sales" inside an expense name
-    ("Sales commissions") don't count."""
+    """An income account name ("Sales of Product Income", "Product Sales", "Sales Revenue",
+    "Services Income"), never a cost; names with an expense word ("Sales commissions", "Income
+    tax", "Cost of sales") are expenses."""
     words = set(name.split())
-    return name in SALES_ACCOUNT_PARENTS or ("income" in words and not words & {"tax", "taxes", "expense", "expenses"})
+    if name in SALES_ACCOUNT_PARENTS:
+        return True
+    return bool(words & {"income", "revenue", "revenues", "sales"}) and not words & EXPENSE_ACCOUNT_WORDS
 
 
 # Sales-document names that don't establish an incurred cost when used as a cost category.
@@ -571,7 +584,11 @@ def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict
             # Read as an account path ("Parent:Category"): the category's own name decides, and
             # a sales/income parent ("Income:Revenue") is never a cost.
             name = cost_type_name(cells[i])
-            if any(_is_income_account(_norm(part)) for part in cells[i].split(":")):
+            parts = [_norm(part) for part in cells[i].split(":")]
+            # Every part of the path is checked: an income or balance-sheet account, or an
+            # estimate/order, anywhere in it ("Purchase Order:Materials") is never a cost.
+            if any(_is_income_account(part) or set(part.split()) & (BALANCE_SHEET_WORDS | NON_POSTING_WORDS)
+                   for part in parts):
                 return cells[i].strip()
             if name in FEE_TYPES or name in CARD_CHARGE_TYPES:
                 continue
@@ -595,8 +612,11 @@ def _summary_label(cells: tuple[str, ...], headers: list[str], mapping: dict[str
     """The row's label when its description, memo, type or cost category says it is a subtotal
     or total (a category is read by its own name, so "Totals:Grand Total" counts too)."""
     columns = [headers.index(mapping[f]) for f in ("description", "memo", "cost_type") if mapping.get(f) in headers]
+    category = headers.index(mapping["cost_type"]) if mapping.get("cost_type") in headers else None
     for i in [*columns, *(i for i, h in enumerate(headers) if _norm(h) in TYPE_HEADERS)]:
-        if _norm(cells[i]) in SUMMARY_LABELS or cost_type_name(cells[i]) in SUMMARY_LABELS:
+        # Only the cost category is an account path; "Service: Total" in a description is text.
+        name = cost_type_name(cells[i]) if i == category else _norm(cells[i])
+        if name in SUMMARY_LABELS:
             return cells[i].strip()
     return None
 
