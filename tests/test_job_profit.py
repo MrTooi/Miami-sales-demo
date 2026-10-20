@@ -384,6 +384,50 @@ class CompletenessTests(unittest.TestCase):
                 report = self.report(cat + b"B-3,10/01/2026,Sign Co,J-1," + category + b",5.00\n", invoices)
                 self.assertEqual((Decimal("45.00"), "complete"), (report.jobs[0].contribution, report.jobs[0].status))
 
+    def test_blank_transaction_types_are_unresolved(self):
+        invoices = b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n"
+        report = self.report(b"Bill,Date,Vendor,Job,Transaction Type,Category,Amount\n"
+                             b"B-1,10/01/2026,Crew,J-1,,Labor,20.00\nB-2,10/01/2026,Paper Co,J-1,,Materials,30.00\n",
+                             invoices)
+        # No row is a posted cost, so no cost lines were imported and no figure is shown at all.
+        self.assertFalse(report.available)
+        self.assertEqual([], report.jobs)
+        self.assertIn("No cost lines were imported", " ".join(report.reasons))
+        report = self.report(b"Bill,Date,Vendor,Job,Transaction Type,Category,Amount\n"
+                             b"B-1,10/01/2026,Crew,J-1,Bill,Labor,20.00\nB-2,10/01/2026,Paper Co,J-1,Bill,Materials,30.00\n"
+                             b"B-3,10/01/2026,Ink Co,J-1,,Materials,40.00\n", invoices)
+        self.assertEqual((Decimal("50.00"), "provisional"), (report.jobs[0].contribution, report.jobs[0].status))
+        self.assertEqual("provisional", report.customers[0].status)
+        report = self.report(b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                             b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n",
+                             b"Invoice,Date,Customer,Job,Type,Amount\nI-1,10/01/2026,Bakery,J-1,Invoice,100.00\n"
+                             b"I-2,10/01/2026,Bakery,J-1,,40.00\n")
+        self.assertEqual((Decimal("100.00"), "provisional"), (report.jobs[0].sales, report.jobs[0].status))
+        # A file with only a cost category column may leave it blank: that is just an untyped cost.
+        report = self.report(b"Bill,Date,Vendor,Job,Category,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                             b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\nB-3,10/01/2026,Ink Co,J-1,,5.00\n", invoices)
+        self.assertEqual(Decimal("55.00"), report.jobs[0].total_costs)
+
+    def test_conflicting_type_columns_are_unresolved(self):
+        costs = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                 b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n")
+        report = self.report(costs, b"Invoice,Date,Customer,Job,Type,Transaction Type,Amount\n"
+                                    b"I-1,10/01/2026,Bakery,J-1,Invoice,Invoice,100.00\n"
+                                    b"I-2,10/01/2026,Bakery,J-1,Invoice,Payment,40.00\n")
+        self.assertEqual((Decimal("100.00"), "provisional"), (report.jobs[0].sales, report.jobs[0].status))
+        self.assertEqual("provisional", report.customers[0].status)
+        # Both columns saying payment is plainly a payment: left out, nothing missing.
+        report = self.report(costs, b"Invoice,Date,Customer,Job,Type,Transaction Type,Amount\n"
+                                    b"I-1,10/01/2026,Bakery,J-1,Invoice,Invoice,100.00\n"
+                                    b"I-2,10/01/2026,Bakery,J-1,Payment,Payment,40.00\n")
+        self.assertEqual("complete", report.jobs[0].status)
+        # Costs file: a "Payment" transaction on a "Materials" category row is unresolved.
+        report = self.report(b"Bill,Date,Vendor,Job,Transaction Type,Category,Amount\n"
+                             b"B-1,10/01/2026,Crew,J-1,Bill,Labor,20.00\nB-2,10/01/2026,Paper Co,J-1,Bill,Materials,30.00\n"
+                             b"B-3,10/01/2026,Paper Co,J-1,Payment,Materials,40.00\n",
+                             b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Bakery,J-1,100.00\n")
+        self.assertEqual((Decimal("50.00"), "provisional"), (report.jobs[0].contribution, report.jobs[0].status))
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))

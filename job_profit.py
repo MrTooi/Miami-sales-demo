@@ -160,7 +160,7 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
         if "job_id" not in result.mapped_fields:
             report.reasons.append(f"The {what} file has no job number column, so its lines can't be matched to jobs.")
         elif not result.accepted:
-            report.reasons.append(f"No {what} lines were imported.")
+            report.reasons.append(f"No {'sales' if what == 'sales' else 'cost'} lines were imported.")
     if report.reasons:
         return report
     report.available = True

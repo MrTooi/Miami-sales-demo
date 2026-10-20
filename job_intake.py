@@ -526,44 +526,41 @@ def _type_columns(headers: list[str], mapping: dict[str, str | None]) -> list[in
 
 
 def _cash_movement_type(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
-    """The row's type text when the whole type is a known cash movement ("Payment", "Transfer",
-    "Bill Payment (Check)", "Bank Credit"): money moving, not a line."""
-    for i in type_columns:
-        if _norm(cells[i]) in CASH_MOVEMENT_TYPES:
-            return cells[i].strip()
+    """The row's type text when it is plainly money moving, not a line: at least one type column is
+    exactly a known cash movement ("Payment", "Transfer", "Bill Payment (Check)", "Bank Credit")
+    and every other non-blank type column agrees. A row whose columns disagree ("Invoice" and
+    "Payment") is not a cash movement here; _unrecognized_type rejects it as unresolved."""
+    values = [_norm(cells[i]) for i in type_columns]
+    filled = [v for v in values if v]
+    if filled and all(v in CASH_MOVEMENT_TYPES for v in filled):
+        return next(cells[i].strip() for i in type_columns if _norm(cells[i]))
     return None
 
 
 def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None],
                        kind: str) -> str | None:
-    """The row's type text when it can't be trusted as a line, failing closed:
+    """The row's type text (or "(blank)") when it can't be trusted as a line, failing closed.
+    Called only for rows that aren't plainly a cash movement, so any cash-movement value found
+    here conflicts with another type column ("Invoice" + "Payment") and is unresolved.
 
-    - sales file: a "Type"-style column holds something other than a recognized sale type or a
-      known cash movement (e.g. "Payment processing fees", "Bank Credit (ACH)", "Estimate");
+    - sales file, any "Type"-style column: must be a recognized sale type; blank is unresolved;
     - costs file, transaction-type column (a "Type"-style column that isn't the cost category):
-      anything other than a posted cost (Bill, Expense, Check...), fee, card charge or known
-      cash movement (e.g. "Estimate", "Purchase Order");
-    - costs file, cost category: any real category is fine, unless it names an estimate, quote
-      or order, or mentions money moving, a bank or a credit without being exactly a known
-      cash movement, fee or card charge (e.g. "Payout net of fees", "Vendor Credit").
+      must be a posted cost (Bill, Expense, Check...), fee or card charge; blank is unresolved;
+    - costs file, cost category: any real category or a blank is fine, unless it names an
+      estimate, quote or order, is a cash movement, or mentions money moving, a bank or a credit
+      without being exactly a known fee or card charge.
     """
-    if kind == "invoices":
-        for i, h in enumerate(headers):
-            text = _norm(cells[i]) if _norm(h) in TYPE_HEADERS else ""
-            if text and text not in INVOICE_LINE_TYPES and text not in CASH_MOVEMENT_TYPES:
-                return cells[i].strip()
-        return None
-    known = CASH_MOVEMENT_TYPES | FEE_TYPES | CARD_CHARGE_TYPES
-    category = headers.index(mapping["cost_type"]) if mapping.get("cost_type") in headers else None
+    category = headers.index(mapping["cost_type"]) if kind == "costs" and mapping.get("cost_type") in headers else None
+    allowed = INVOICE_LINE_TYPES if kind == "invoices" else COST_LINE_TYPES | FEE_TYPES | CARD_CHARGE_TYPES
     for i, h in enumerate(headers):
         text = _norm(cells[i])
         if i == category:
-            if text in known:
+            if text in FEE_TYPES or text in CARD_CHARGE_TYPES:
                 continue
-            if set(text.split()) & (SUSPECT_COST_TYPE_WORDS | NON_POSTING_WORDS):
+            if text in CASH_MOVEMENT_TYPES or set(text.split()) & (SUSPECT_COST_TYPE_WORDS | NON_POSTING_WORDS):
                 return cells[i].strip()
-        elif _norm(h) in TYPE_HEADERS and text and text not in known and text not in COST_LINE_TYPES:
-            return cells[i].strip()
+        elif _norm(h) in TYPE_HEADERS and text not in allowed:
+            return cells[i].strip() or "(blank)"
     return None
 
 
@@ -726,15 +723,19 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             reasons.append(f"Type '{movement}' is a payment, transfer or deposit (money moving), not a {what}; "
                            "not imported.")
         unrecognized = None if movement else _unrecognized_type(rec.cells, headers, mapping, kind)
-        if unrecognized and kind == "invoices":
+        if unrecognized == "(blank)":
             # Real money may be missing here, so this is not counted as "not a line".
+            what = "sale" if kind == "invoices" else "posted cost"
+            reasons.append(f"The transaction type is blank, so whether this row is a {what} can't be told; "
+                           "not imported. Fill in its type where the data comes from.")
+        elif unrecognized and kind == "invoices":
             reasons.append(f"Type '{unrecognized}' isn't a sale type MarginX recognizes (Invoice, Sales Receipt, "
-                           "Credit Memo), so it isn't counted as a sale. If it is one, change its type where the "
-                           "data comes from.")
+                           "Credit Memo), or the row's type columns disagree, so it isn't counted as a sale. If it "
+                           "is one, fix its type where the data comes from.")
         elif unrecognized:
             reasons.append(f"Type '{unrecognized}' isn't a recognized posted cost (a bill, expense, check, card "
-                           "charge or fee): it may be money moving, a credit, an estimate or an order, so it "
-                           "isn't imported.")
+                           "charge or fee), or the row's type columns disagree: it may be money moving, a credit, "
+                           "an estimate or an order, so it isn't imported.")
         memo = _credit_memo(rec.cells, types)
         if memo and amount is not None and amount > 0:
             # A credit lowers what was billed; a positive one would raise it. Which sign is
