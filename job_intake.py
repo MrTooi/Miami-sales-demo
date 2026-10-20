@@ -178,9 +178,10 @@ def _is_income_account(name: str) -> bool:
 # Sales-document names that don't establish an incurred cost when used as a cost category.
 SALES_DOCUMENT_TYPES = INVOICE_LINE_TYPES | {"income", "revenue", "sales income", "estimate", "estimates"}
 # Whole cost types for card purchases: ordinary expenses, though they mention "credit"/"debit".
+# A bare "Credit Card" or "Debit Card" is the card's account (a balance), not a purchase.
 CARD_CHARGE_TYPES = {
-    "credit card charge", "credit card charges", "credit card expense", "credit card purchase", "credit card",
-    "debit card charge", "debit card purchase", "debit card",
+    "credit card charge", "credit card charges", "credit card expense", "credit card purchase",
+    "debit card charge", "debit card purchase",
 }
 # Whole transaction types that are posted costs. In a costs file, a "Type"-style column that is
 # not the cost category must hold one of these (or a fee, card charge or known cash movement):

@@ -668,6 +668,17 @@ class CompletenessTests(unittest.TestCase):
                 self.assert_job(report, Decimal("100.00"), Decimal("10.00"), "complete")
                 self.assertEqual(materials, report.jobs[0].costs["materials"])
 
+    def test_a_bare_card_account_is_not_a_job_cost(self):
+        for label in (b"Credit Card", b"Debit Card", b"Liabilities:Credit Card"):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/01/2026,Sign Co,J-1," + label + b",40.00\n", self.SALES)
+                self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")  # never $10 Complete
+                self.assertEqual(Decimal("50.00"), report.jobs[0].total_costs)
+        for label in (b"Credit Card Purchase", b"Credit Card Charge", b"Credit Card Expense"):
+            with self.subTest(label=label):
+                report = self.report(self.LINKED + b"B-3,10/01/2026,Sign Co,J-1," + label + b",40.00\n", self.SALES)
+                self.assert_job(report, Decimal("100.00"), Decimal("10.00"), "complete")
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))
