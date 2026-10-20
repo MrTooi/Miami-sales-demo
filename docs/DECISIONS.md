@@ -120,7 +120,7 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
 - Decided by: Human owner (MrTooi), who chose "b just a link we can send to abrey and he can open" in a Claude Code session on 2026-10-20, when offered a demo-only website link.
 - Context: Abrey talks to Miami shop owners and needs something real to show. MargenX ran only on the owner's laptop.
 - Decision:
-  1. A public demo link may run `margenx_demo.py` only. It shows the made-up demo sign shop, with no upload box, no file choice and no pilot mode (`pilot_safety.DEMO_ENV`), and says plainly that every name and number is invented.
+  1. A public demo link may run `margenx_demo.py` only. It shows the made-up demo sign shop, with no upload box, no file choice and no pilot mode (`pilot_safety.DEMO_ENTRY`: decided by the running app's own main script, so no other entry point is affected), and says plainly that every name and number is invented.
   2. The owner deploys it with their own accounts (Streamlit Community Cloud, steps in `docs/DEMO_LINK.md`). Claude Code never deploys.
   3. No real shop data, sign-up forms, analytics or visitor-data collection on the link without a new owner decision.
 - Not changed:

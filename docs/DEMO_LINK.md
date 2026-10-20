@@ -35,4 +35,7 @@ Claude Code never deploys. These steps use your own accounts.
 - Only ever deploy `margenx_demo.py`. Real shop files are used only in the sit-down pilot on the
   team laptop (`marginx_pilot.py`, `docs/PILOT_VISIT_CHECKLIST.md`), after the owner's separate
   real-data decision.
-- Don't add sign-up forms, analytics or anything that collects visitors' data without a new owner decision.
+- Don't add our own sign-up forms, analytics or anything that collects visitors' data without a new owner decision.
+- MargenX itself sends no usage statistics (`gatherUsageStats = false` in `.streamlit/config.toml`). The hosting
+  service keeps its own logs and shows the owner basic viewer counts; that is outside the app's control and is
+  covered by Streamlit's own privacy policy. Read it before publishing if that matters to you.
