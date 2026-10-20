@@ -679,6 +679,18 @@ class CompletenessTests(unittest.TestCase):
                 report = self.report(self.LINKED + b"B-3,10/01/2026,Sign Co,J-1," + label + b",40.00\n", self.SALES)
                 self.assert_job(report, Decimal("100.00"), Decimal("10.00"), "complete")
 
+    def test_unlinked_overhead_and_unlinked_job_costs_get_separate_notes(self):
+        report = self.report(self.LINKED + b"B-3,10/31/2026,Landlord,,Rent,2000.00\n"
+                             b"B-4,10/02/2026,Paper Co,,Materials,40.00\nB-5,10/03/2026,Ink Co,,Delivery,15.00\n",
+                             self.SALES)
+        notes = " ".join(report.notes)
+        self.assertIn("1 overhead or fee line(s) worth $2,000.00 (such as rent) aren't linked to a job", notes)
+        self.assertIn("2 cost line(s) worth $55.00 aren't linked to a job", notes)
+        self.assertEqual((Decimal("2055.00"), 3), (report.unlinked_costs, report.unlinked_cost_lines))
+        # The non-overhead ones may belong to the job, so it stays provisional; the figure is unchanged.
+        self.assert_job(report, Decimal("100.00"), Decimal("50.00"), "provisional")
+        self.assertIn("2 cost line(s) worth $55.00 have no job number", " ".join(report.jobs[0].reasons))
+
     def test_money_is_never_shown_rounded(self):
         self.assertEqual("$1,250.50", jp.format_money(Decimal("1250.5")))
         self.assertEqual("-$45.00", jp.format_money(Decimal("-45.00")))
