@@ -311,10 +311,10 @@ def read_file(name: str, data: bytes) -> tuple[list[str], list[Record], list[str
     if start:
         titles = " / ".join(next(c.strip() for c in cells if c.strip()) for _, cells in table[:start])
         notes.append(f"Skipped {start} title line{'s' if start != 1 else ''} above the column names: {titles}.")
-    headers = [h.strip() for h in table[start][1]]
-    while headers and not headers[-1]:  # empty trailing columns (common in Excel)
+    headers = list(table[start][1])  # kept exactly as written, as read_csv does
+    while headers and not headers[-1].strip():  # empty trailing columns (common in Excel)
         headers.pop()
-    unnamed = [i for i, h in enumerate(headers) if not h]
+    unnamed = [i for i, h in enumerate(headers) if not h.strip()]
     if unnamed and start:
         # Reports leave some column names blank (for example the column holding customer names
         # and "Total for" rows). It gets a placeholder so it can still be chosen by hand.
@@ -882,8 +882,10 @@ def _summary_label(cells: tuple[str, ...], headers: list[str], mapping: dict[str
 
 # A report's total row says "TOTAL", "Total", or "Total for Coastal Bakery" in its first filled cell.
 TOTAL_ROW = re.compile(r"(?i)^total(?:\s+for\s+(?P<group>.+?))?:?$")
-# The footer accounting reports end with, such as "Accrual basis Tuesday, October 20, 2026 10:00 AM".
-FOOTER_ROW = re.compile(r"(?i)^(?:accrual|cash)\s+basis\b")
+# The footer accounting reports end with, in full: "Accrual basis Tuesday, October 20, 2026 10:00 AM
+# GMT-04:00" (time and time zone optional). Anything else after "Accrual basis" is not a footer.
+FOOTER_ROW = re.compile(r"(?i)^(?:accrual|cash) basis (?:mon|tues|wednes|thurs|fri|satur|sun)day,? [a-z]+ \d{1,2},? "
+                        r"\d{4}(?: \d{1,2}:\d{2}(?::\d{2})?(?: ?[ap]m)?)?(?: (?:gmt|utc)[+-]\d{1,2}(?::?\d{2})?)?$")
 
 
 def _total_row(cells: tuple[str, ...], headers: list[str], mapping: dict[str, str | None]):
@@ -918,15 +920,17 @@ def _layout_rows(headers: list[str], records: list[Record], mapping: dict[str, s
     - a total row (see _total_row) whose amount equals the sum of the rows directly above it.
       "Total for X" needs a heading "X" above it and must equal exactly the rows under that
       heading; a plain "Total" may go back to the start of the file or to a heading or total row.
-    - a heading: a row with one filled cell, not a number or date, and no amount, closed by such
-      a "Total for <its text>". One that is never closed is rejected, not skipped.
-    - the report's footer ("Accrual basis ..." or "Cash basis ..."), alone on the file's last row.
+    - a heading: a row whose only filled cell is text (not a number or date) in a column nobody
+      chose, closed by such a "Total for <its text>". One that is never closed is rejected.
+    - the report's footer, in full ("Accrual basis Tuesday, October 20, 2026 10:00 AM"), alone
+      in a column nobody chose on the file's last row.
     Every other row, including one that only looks like a total or heading, is checked as usual,
     so anything unclear is rejected and counted as possibly missing money, never skipped.
     """
     if mapping.get("amount") not in headers:
         return {}
     amount_at = headers.index(mapping["amount"])
+    chosen = {headers.index(h) for h in mapping.values() if h in headers}
     layout: dict[int, str] = {}
     running = Decimal(0)  # the sum of every row's amount so far (layout rows aren't added)
     # The running sum at each place a total may start from: the file's start, and just after
@@ -948,13 +952,16 @@ def _layout_rows(headers: list[str], records: list[Record], mapping: dict[str, s
                     layout[heading[0]] = f"A heading ('{group}'), closed by the total row on row {rec.row}."
                 starts.add(running)
                 continue
-        filled = [c.strip() for c in cells if c.strip()]
-        if len(cells) == len(headers) and len(filled) == 1 and not cells[amount_at].strip() \
-                and not _looks_like_data(filled[0]):
-            if FOOTER_ROW.match(filled[0]) and position == len(records) - 1:
-                layout[rec.row] = f"The report's footer ('{filled[0]}'), not a sale or cost."
+        filled = [(i, c.strip()) for i, c in enumerate(cells) if c.strip()]
+        # A heading or footer is one cell of text in a column nobody chose (in a report, the column
+        # with no name): text in an invoice, customer or other chosen column may be part of a record.
+        if len(cells) == len(headers) and len(filled) == 1 and filled[0][0] not in chosen \
+                and not _looks_like_data(filled[0][1]):
+            text = filled[0][1]
+            if FOOTER_ROW.match(text) and position == len(records) - 1:
+                layout[rec.row] = f"The report's footer ('{text}'), not a sale or cost."
             else:
-                headings[filled[0]] = (rec.row, running)
+                headings[text] = (rec.row, running)
                 starts.add(running)
             continue
         try:

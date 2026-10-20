@@ -368,15 +368,38 @@ class ReportLayoutTests(unittest.TestCase):
             self.assertIn(2, [r["row"] for r in result.rejected], lone)
             self.assertTrue(next(r for r in result.rejected if r["row"] == 2)["money_missing"], lone)
 
-    def test_a_footer_is_skipped_only_on_the_last_row(self):
-        headers = ["Invoice", "Date", "Customer", "Job", "Amount"]
-        line = ("INV-1", "10/02/2026", "Bakery (fictional)", "J-1", "100.00")
-        footer = ("Cash basis Tuesday, October 20, 2026", "", "", "", "")
+    def test_a_footer_is_skipped_only_in_full_on_the_last_row_in_a_column_nobody_chose(self):
+        headers = ["Group", "Invoice", "Date", "Customer", "Job", "Amount"]
         mapping = ji.suggest_mapping(headers, "invoices")
+        line = ("", "INV-1", "10/02/2026", "Bakery (fictional)", "J-1", "100.00")
+        footer = ("Cash basis Tuesday, October 20, 2026 02:15 PM GMT-04:00", "", "", "", "", "")
         last = ji.intake(headers, [ji.Record(2, line), ji.Record(3, footer)], mapping, "invoices", "MM/DD/YYYY")
         self.assertEqual(([3], []), ([r["row"] for r in last.skipped], last.rejected))
-        middle = ji.intake(headers, [ji.Record(2, footer), ji.Record(3, line)], mapping, "invoices", "MM/DD/YYYY")
-        self.assertEqual(([], [2]), ([r["row"] for r in middle.skipped], [r["row"] for r in middle.rejected]))
+        not_footers = {
+            "not on the last row": [footer, line],
+            "a note that only starts like one": [line, ("Cash basis adjustment owed 500.00", "", "", "", "", "")],
+            "a footer with more after it": [line, ("Accrual basis Tuesday, October 20, 2026 INV-9 unpaid", "", "", "", "", "")],
+            "in a chosen column": [line, ("", footer[0], "", "", "", "")],
+        }
+        for what, rows in not_footers.items():
+            records = [ji.Record(n, r) for n, r in enumerate(rows, start=2)]
+            result = ji.intake(headers, records, mapping, "invoices", "MM/DD/YYYY")
+            self.assertEqual([], result.skipped, what)
+            self.assertEqual(1, len(result.rejected), what)
+            self.assertTrue(result.rejected[0]["money_missing"], what)
+
+    def test_text_in_a_chosen_column_is_never_a_heading(self):
+        # "INV-7" alone is an incomplete invoice, not a heading, even if a zero "Total for INV-7" follows.
+        for headers, row in ((["Invoice", "Date", "Customer", "Job", "Amount"], ("INV-7", "", "", "", "")),
+                             (["Vendor", "Bill", "Date", "Job", "Type", "Amount"], ("", "B-7", "", "", "", "")),
+                             (["Vendor", "Bill", "Date", "Job", "Type", "Amount"], ("Supply Co (fictional)", "", "", "", "", ""))):
+            kind = ji.detect_kind(headers)
+            text = next(c for c in row if c)
+            total = tuple(f"Total for {text}" if i == 0 else ("0.00" if h == "Amount" else "") for i, h in enumerate(headers))
+            records = [ji.Record(2, row), ji.Record(3, total)]
+            result = ji.intake(headers, records, ji.suggest_mapping(headers, kind), kind, "MM/DD/YYYY")
+            self.assertNotIn(2, [r["row"] for r in result.skipped], text)
+            self.assertTrue(next(r for r in result.rejected if r["row"] == 2)["money_missing"], text)
 
     def test_a_row_whose_amount_cant_be_read_stops_totals_from_spanning_it(self):
         headers = ["Invoice", "Date", "Customer", "Job", "Amount"]
@@ -411,6 +434,9 @@ class ReportLayoutTests(unittest.TestCase):
         data = b"Invoice,Date,Customer,Job,Amount\nINV-1,10/02/2026,Bakery (fictional),J-1,100.00\n"
         self.assertEqual(ji.read_csv(data), ji.read_file("sales.csv", data)[:2])
         self.assertEqual([], ji.read_file("sales.csv", data)[2])
+        # Column names are kept exactly as written, spaces included, as read_csv does.
+        spaced = b" Invoice ,Date,Customer,Job,Amount\nINV-1,10/02/2026,Bakery (fictional),J-1,100.00\n"
+        self.assertEqual(ji.read_csv(spaced), ji.read_file("sales.csv", spaced)[:2])
         # A plain file whose first line has a blank column name is still refused.
         with self.assertRaisesRegex(ji.IntakeError, "no header name"):
             ji.read_file("sales.csv", b"Invoice,,Amount\nINV-1,x,1.00\n")
