@@ -13,7 +13,10 @@
 - **Claude Code:** builds, tests and writes the reviews' fix lists. **ChatGPT:** independent review (D-004).
 
 ## How work is done
-Branch → tests (`~/.venvs/miami-sales-demo/bin/python -m unittest discover -s tests` on the Mac; Python 3.11) → PR → automated ChatGPT screening → **manual ChatGPT review** for finance/security changes (the owner pastes Claude's message into ChatGPT, then pastes the verdict back; Claude records it as a PR comment) → owner merges. Low-risk changes (for example the #109 rename, text only) can rely on the automated review (D-004). **D-005:** for MargenX import/label PRs while the data is fictional, manual reviews pass unless a defect can show a wrong figure as Complete for a common, realistic export layout; narrower cases go to `docs/MARGINX_REAL_EXPORT_FOLLOWUPS.md`.
+Branch → tests (`~/.venvs/miami-sales-demo/bin/python -m unittest discover -s tests` on the Mac; Python 3.11) → PR → automated ChatGPT screening → **manual independent review** where D-004 requires it → owner merges. Unchanged from **D-004 item 4** (`docs/DECISIONS.md`), restated here, not changed:
+- **High-risk changes** (finance logic, security/auth/tenant boundaries, readiness gates/evals/workflows, deployment, customer data): the automated review is **screening only**. A separate manual independent review (ChatGPT with full repository and CI access, or the owner) is required. In practice the owner pastes Claude's message into ChatGPT, then pastes the verdict back, and Claude records it as a PR comment.
+- **Low-risk changes** (docs, copy, UI wording, tests-only, tooling outside the high-risk areas): a qualifying automated review counts as the ChatGPT independent review. The #109 rename (text only) was treated this way.
+- The owner may ask for a manual review at any time, and every merge needs the owner's explicit approval. **D-005:** for MargenX import/label PRs while the data is fictional, manual reviews pass unless a defect can show a wrong figure as Complete for a common, realistic export layout; narrower cases go to `docs/MARGINX_REAL_EXPORT_FOLLOWUPS.md`.
 - `gh` works on the owner's Mac (used throughout 2026-10-20).
 - **Merging needs an up-to-date branch:** `main` has a GitHub *ruleset* (not classic branch protection, so `branches/main/protection` returns 404) that refuses a PR branch that is behind `main`. Run `gh pr update-branch <n>`, wait for CI and the automated review, then `gh pr merge <n> --merge --match-head-commit <sha>`. Never use `--admin`.
 
@@ -30,7 +33,7 @@ Branch → tests (`~/.venvs/miami-sales-demo/bin/python -m unittest discover -s 
 | **Rename to MargenX:** header, tab title, page address (`/MargenX_Import`), consent text, messages, shop-facing docs | many files (text only) | Merged (#109). Automated review PASS. |
 
 ### What the redesign shows (#108)
-The rule behind it: **a number that is incomplete says so, or isn't shown.**
+As implemented and tested in #108 (regression tests in `tests/test_marginx_ui.py`, `tests/test_marginx_insights.py`, `tests/test_marginx_import_page.py`), and reviewed in the ChatGPT manual review round 2. This summary is not itself evidence. The rule behind it: **a number that is incomplete says so, or isn't shown.**
 - **Headline cards** say which jobs they cover ("From 3 of 7 jobs" / "From all 8 jobs") and disclose sales with no job number and rows that couldn't be read.
 - **Jobs losing money** counts only jobs with complete costs. A job that needs a check and shows a loss so far reads "**may have** lost $X", with its real reason.
 - **After overhead:** "After $X of costs not tied to any job, these files leave $Y" appears only when every sale is in the job total and no row was rejected. Otherwise it is withheld, and the page says what's left out. Overhead (rent, fees) is kept apart from costs with no job number.
