@@ -94,6 +94,23 @@ class SafetyTests(unittest.TestCase):
         self.assertIn('<td>Materials (credit)</td><td class="r">+$10</td>', html)
         self.assertIn('<td>Left after job costs</td><td class="r">$90</td>', html)
 
+    def test_job_ids_and_reasons_from_a_file_are_escaped(self):
+        # Labor only, so the job needs a check: its ID appears in the attention list and the breakdown.
+        html = render(report_from(
+            b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,<i>J-1</i>,100.00\n",
+            b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,<i>J-1</i>,Labor,20.00\n"))
+        self.assertNotIn("<i>J-1</i>", html)
+        self.assertIn("Job &lt;i&gt;J-1&lt;/i&gt; needs a check", html)  # attention list
+        self.assertIn("· &lt;i&gt;J-1&lt;/i&gt;</small>", html)  # job list
+        self.assertIn('<div class="why">No materials or outsourced work recorded.', html)  # reasons, escaped text
+
+    def test_usual_margin_is_described_as_a_share_of_sales_not_an_average(self):
+        html = render(report_from((SAMPLES / "demo_sign_shop_invoices.csv").read_bytes(),
+                                  (SAMPLES / "demo_sign_shop_costs.csv").read_bytes()))
+        self.assertIn("Your usual margin (30%) is the share of sales you kept across all your jobs with "
+                      "complete costs, added together.", html)
+        self.assertNotIn("average", html)
+
     def test_styles_make_no_outside_requests(self):
         self.assertNotIn("http", ui._CSS)
         self.assertNotIn("@import", ui._CSS)

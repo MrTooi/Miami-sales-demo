@@ -165,8 +165,8 @@ def results(report: ProfitReport, summary: Summary, items: list[Insight], period
                        for i in items)
         foot = ""
         if summary.usual_margin is not None and any("usual" in i.detail for i in items):
-            foot = (f'<div class="mx-legend">Your usual margin ({percent(summary.usual_margin, 1)}%) is the average of '
-                    "your jobs with complete costs.</div>")
+            foot = (f'<div class="mx-legend">Your usual margin ({percent(summary.usual_margin, 1)}%) is the share of sales '
+                    "you kept across all your jobs with complete costs, added together.</div>")
         _html(f'<div class="mx-card"><h3>What needs your attention</h3>{rows}{foot}</div>')
     else:
         _html('<div class="mx-card"><h3>What needs your attention</h3><div class="mx-item"><div class="mx-ico info">✓</div>'
