@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 import marginx_insights as mi
+import marginx_ui as ui
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("build_demo_page", ROOT / "scripts" / "build_demo_page.py")
@@ -48,6 +49,7 @@ class DemoPageTests(unittest.TestCase):
         self.assertIn("Rush banner (next-day) · J-105 lost $140", self.page)
         self.assertIn("Sales dated Oct 2 to Oct 23, 2026", self.page)
         self.assertIn("<title>MargenX Demo Shop</title>", self.page)
+        self.assertIn(f'<div class="mx-legend mx-fine">{ui.READING_NOTE}</div>', self.page)  # the whole how-to-read note
 
     def test_header_shows_the_real_margenx_logo(self):
         import base64

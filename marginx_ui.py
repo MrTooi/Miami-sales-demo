@@ -91,6 +91,7 @@ details[open] .mx-chev{display:inline-block;transform:rotate(90deg)}
 .mx-break .why{color:var(--mx-amber);margin-top:8px}.mx-break .price{color:var(--mx-green-dark);margin-top:8px}
 .mx-job .a .p{display:block;font-size:.75rem;font-weight:500;color:var(--mx-muted);font-family:'Inter',system-ui,sans-serif}
 .mx-legend{font-size:.78rem;color:var(--mx-muted);margin-top:8px}
+.mx-fine{margin:18px 4px 4px;line-height:1.45}
 .mx-legend span{display:inline-block;width:12px;height:7px;border-radius:3px;margin:0 5px 1px 0;vertical-align:middle}
 .mx-foot{font-size:.82rem;color:var(--mx-muted);margin:4px 2px 18px}
 .mx-file{font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-weight:700;font-size:1rem;margin:14px 0 2px;color:var(--mx-ink)}
@@ -167,6 +168,14 @@ def _money(amount) -> str:
     return escape(money(amount))
 
 
+# Shown under every set of results, so nobody mistakes a rounded figure or an estimate for an exact
+# fact, or the tool for professional advice.
+READING_NOTE = ("How to read these numbers: sales and costs are added up exactly, to the cent, from the files you "
+                "gave MargenX. Figures marked \"Needs a check\" may be missing costs. Percentages are rounded to "
+                "whole numbers, and suggested prices are estimates. MargenX is a tool to help you look at your own "
+                "numbers. It isn't accounting, tax or financial advice.")
+
+
 def results(report: ProfitReport, summary: Summary, items: list[Insight], period: str) -> None:
     """The results screen: headline, key numbers, what needs attention, customers and jobs."""
     _html(f'<div class="mx-kicker">{escape(period)}</div><div class="mx-title">Here\'s where your money was made</div>')
@@ -199,6 +208,7 @@ def results(report: ProfitReport, summary: Summary, items: list[Insight], period
 
     _customers(report)
     _jobs(report, summary)
+    _html(f'<div class="mx-legend mx-fine">{READING_NOTE}</div>')
 
 
 
