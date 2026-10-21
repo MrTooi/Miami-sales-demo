@@ -43,7 +43,7 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
 3. **Ask for files without sensitive details.** Before exporting, ask the owner to leave out Social Security numbers, card numbers, bank logins and other personal details. If a file has them, don't use it: ask for a clean version that still has every sale or cost row. **Never run with only one of the two files** (sales and costs): if a clean version isn't possible, stop the pilot rather than show results with a file missing.
 4. **The shop owner exports the files** from QuickBooks/Square while you watch: sales/invoices and costs/bills, as CSV.
 5. **Move the files to the laptop with a USB drive or AirDrop.** Don't email them, and don't put them in Google Drive, Dropbox or a chat app.
-6. **Never put a shop's file, numbers or screen into any AI tool** (ChatGPT, Claude, Copilot or similar) or any website. MargenX runs on the laptop; nothing else touches their files.
+6. **Never put a shop's file, numbers or screen into any AI tool** (ChatGPT, Claude, Copilot or similar) or any website. We only open their files in MargenX on the laptop, and never upload or send them anywhere.
 7. **The owner ticks the agreement box themselves.** Then upload the files.
 8. **Look at the results together.** Write down what they say in the #30 format, in their own words. **Never copy their numbers, customer names or job details into notes.** Write "a customer job lost money on materials", not "Acme lost $412".
 9. **No screenshots or photos of the screen,** and no recording of the session.
