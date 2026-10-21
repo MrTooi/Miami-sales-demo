@@ -9,6 +9,7 @@ How the pilot works: Alex or Abrey visits the shop and runs MargenX on a team la
 ## Before the visit (on the team laptop)
 - [ ] **Disk encryption is on:** FileVault on a Mac, BitLocker on Windows.
 - [ ] **The laptop has a password and locks** after a few minutes idle.
+- [ ] **Find My (Mac) or Find my device (Windows) is turned on**, so a lost laptop can be located and locked (on a Mac, also erased).
 - [ ] **Latest MargenX:** in the project folder, run `git pull`.
 - [ ] **No screen recording, screen sharing or remote-control apps** are running.
 - [ ] **Cloud syncing is off for the folders files may land in** (Downloads, Desktop, Documents): iCloud Drive "Desktop & Documents", Dropbox, Google Drive, OneDrive. The agreement promises shop files aren't sent to any cloud service.
@@ -68,7 +69,11 @@ Repeat the real upload-and-delete test with a **made-up** CSV. MargenX's cleanup
 ## If something goes wrong
 - **The page shows an error:** click End session and start again. Don't screenshot it. Write down what you were doing, not the data.
 - **A file was emailed, synced or uploaded somewhere by mistake:** tell Alex the same day. Contain it straight away: delete it there, or ask the service to delete it. **Tell the shop owner without undue delay, without waiting for the deletion to be confirmed:** what happened, what we've done so far, and anything they should do (agreement section 4). Write down what happened, when and what was done, without their figures. Alex checks whether a breach-notice law applies (for example Florida's, if personal information was involved).
-- **The laptop is lost or stolen with a shop's files on it:** tell Alex immediately. Use the laptop's find-and-erase feature (Find My Mac, or Find my device on Windows) to lock and erase it, and change the laptop's account password. Then tell the shop owner as above. Disk encryption (see "Before the visit") is what protects the files meanwhile.
+- **The laptop is lost or stolen with a shop's files on it:** tell Alex immediately, and **tell the shop owner right away as above; don't wait for the laptop to be found, locked or erased.** Then:
+  - **Mac:** if Find My was turned on before the visit, use it (icloud.com/find) to lock the laptop and erase it remotely.
+  - **Windows:** Find my device can only locate and lock the laptop, not erase it. Use it to lock it.
+  - Change the passwords for the laptop's account and any accounts signed in on it.
+  - Disk encryption (see "Before the visit") is what protects the files on a lost laptop; remote locking or erasing only works if the laptop goes online.
 - **The owner wants to stop:** click End session right away and delete the files.
 
 ## What this setup does and doesn't protect
