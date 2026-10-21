@@ -4,11 +4,17 @@
 
 How the pilot works: Alex or Abrey visits the shop and runs MargenX on a team laptop, with the shop owner present. The shop's files are read in memory only. They are never saved, uploaded or kept after the session.
 
+**This checklist is how we keep the promises in the signed MargenX Free Pilot Agreement and Privacy Notice** (draft kept as a Claude Doc; the owner fills in the blanks before first use). If a step here can't be done, don't run the pilot: the agreement says we do it. A signed agreement doesn't approve real data by itself; the D-007 decision above still comes first.
+
 ## Before the visit (on the team laptop)
 - [ ] **Disk encryption is on:** FileVault on a Mac, BitLocker on Windows.
 - [ ] **The laptop has a password and locks** after a few minutes idle.
+- [ ] **Find My (Mac) or Find my device (Windows) is turned on**, so a lost laptop can be located and locked (on a Mac, also erased).
 - [ ] **Latest MargenX:** in the project folder, run `git pull`.
 - [ ] **No screen recording, screen sharing or remote-control apps** are running.
+- [ ] **Cloud syncing is off for the folders files may land in** (Downloads, Desktop, Documents): iCloud Drive "Desktop & Documents", Dropbox, Google Drive, OneDrive. The agreement promises shop files aren't sent to any cloud service.
+- [ ] **Automatic backups are paused for the visit** (Time Machine or similar), so no backup copy of the shop's files is made.
+- [ ] **Printed copies ready:** two copies of the signed-version Free Pilot Agreement (one for the owner, one for us) and the Privacy Notice for the owner to keep.
 - [ ] **No tunnel or proxy is running** (e.g. ngrok, Cloudflare Tunnel, Tailscale Funnel, a VPN "share" feature). MargenX refuses requests that show signs of a proxy or tunnel, but it can't detect every one.
 - [ ] **Practice once with the sample files** so the visit goes quickly.
 
@@ -32,12 +38,15 @@ The page must say **"Pilot session on this laptop"**. If it says "made-up data o
 Pilot mode only works with `--server.address localhost`, opened in a browser on this same laptop at `http://localhost:8501`. This keeps other computers from reaching the app. Never run pilot mode on a shared or public server.
 
 ## During the visit
-1. **Explain what happens.** Use the agreement text on the screen: we read their files on this laptop only, nothing is kept, and they can stop at any time.
-2. **The shop owner exports the files** from QuickBooks/Square while you watch: sales/invoices and costs/bills, as CSV.
-3. **Move the files to the laptop with a USB drive or AirDrop.** Don't email them, and don't put them in Google Drive, Dropbox or a chat app.
-4. **The owner ticks the agreement box themselves.** Then upload the files.
-5. **Look at the results together.** Write down what they say in the #30 format, in their own words. **Never copy their numbers, customer names or job details into notes.** Write "a customer job lost money on materials", not "Acme lost $412".
-6. **No screenshots or photos of the screen.**
+1. **Sign the agreement first, before any files.** Walk through it in plain words, especially: what MargenX shows (job contribution, not net profit), how files are handled and cleaned up, that it isn't advice, and the limit of responsibility. Both of you sign and date both copies; the owner keeps one, with the Privacy Notice.
+2. **Explain what happens on screen.** Use the agreement text on the screen too: we read their files on this laptop only, nothing is kept, and they can stop at any time.
+3. **Ask for files without sensitive details.** Before exporting, ask the owner to leave out Social Security numbers, card numbers, bank logins and other personal details. If a file has them, don't use it: ask for a clean version that still has every sale or cost row. **Never run with only one of the two files** (sales and costs): if a clean version isn't possible, stop the pilot rather than show results with a file missing.
+4. **The shop owner exports the files** from QuickBooks/Square while you watch: sales/invoices and costs/bills, as CSV.
+5. **Move the files to the laptop with a USB drive or AirDrop.** Don't email them, and don't put them in Google Drive, Dropbox or a chat app.
+6. **Never put a shop's file, numbers or screen into any AI tool** (ChatGPT, Claude, Copilot or similar) or any website. We only open their files in MargenX on the laptop, and never upload or send them anywhere.
+7. **The owner ticks the agreement box themselves.** Then upload the files.
+8. **Look at the results together.** Write down what they say in the #30 format, in their own words. **Never copy their numbers, customer names or job details into notes.** Write "a customer job lost money on materials", not "Acme lost $412".
+9. **No screenshots or photos of the screen,** and no recording of the session.
 
 ## Before you leave (don't skip this)
 - [ ] Click **End session and clear everything** in MargenX. It should say the uploaded files "were removed from MargenX's upload storage". If it says it **couldn't confirm** that, go straight to the next step. End session only clears what MargenX holds: it does **not** delete the original CSV files on the laptop.
@@ -45,7 +54,10 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
 - [ ] **Delete the shop's files from the laptop.** Check Downloads, the Desktop and wherever AirDrop saved them. **Then empty the Trash/Recycle Bin.**
 - [ ] **Delete the files from the USB drive**, or give the drive to the owner.
 - [ ] Ask the owner whether they want the exported files deleted from **their** computer too.
+- [ ] If the owner asks, **explain the cleanup steps you just took** (the agreement promises this).
 - [ ] Note the date, the shop (by type, e.g. "sign shop A") and that the deletion was done, without any of their figures.
+- [ ] **Turn cloud syncing and automatic backups back on** only after the files are deleted and the Trash is emptied.
+- [ ] **File the signed agreement** where the Privacy Notice says signed agreements are kept.
 
 ## Before the first real visit, and after any Streamlit upgrade
 Repeat the real upload-and-delete test with a **made-up** CSV. MargenX's cleanup relies on Streamlit 1.65.0 internals (`pilot_safety.release_uploads`).
@@ -56,7 +68,12 @@ Repeat the real upload-and-delete test with a **made-up** CSV. MargenX's cleanup
 
 ## If something goes wrong
 - **The page shows an error:** click End session and start again. Don't screenshot it. Write down what you were doing, not the data.
-- **A file was emailed or uploaded somewhere by mistake:** tell Alex the same day. Delete it there, and tell the shop owner honestly.
+- **A file was emailed, synced or uploaded somewhere by mistake:** tell Alex the same day. Contain it straight away: delete it there, or ask the service to delete it. **Tell the shop owner without undue delay, without waiting for the deletion to be confirmed:** what happened, what we've done so far, and anything they should do (agreement section 4). Write down what happened, when and what was done, without their figures. Alex checks whether a breach-notice law applies (for example Florida's, if personal information was involved).
+- **The laptop is lost or stolen with a shop's files on it:** tell Alex immediately, and **tell the shop owner right away as above; don't wait for the laptop to be found, locked or erased.** Then:
+  - **Mac:** if Find My was turned on before the visit, use it (icloud.com/find) to lock the laptop and erase it remotely.
+  - **Windows:** Find my device can only locate and lock the laptop, not erase it. Use it to lock it.
+  - Change the passwords for the laptop's account and any accounts signed in on it.
+  - Disk encryption (see "Before the visit") is what protects the files on a lost laptop; remote locking or erasing only works if the laptop goes online.
 - **The owner wants to stop:** click End session right away and delete the files.
 
 ## What this setup does and doesn't protect
