@@ -2,13 +2,15 @@
 
 Turns job_profit.ProfitReport into the headline numbers and a short "what needs your
 attention" list. Deterministic and exact: it only restates figures the report already
-holds (Decimal), never estimates, allocates or hides an uncertain result. Percentages are
-rounded for display only.
+holds (Decimal), never estimates, allocates or hides an uncertain result. Shares of sales
+(margins) are exact fractions (Fraction keeps 1/3 as exactly 1/3), so every comparison between
+them is exact; percentages and "about $X" prices are rounded only for display.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
+from fractions import Fraction
 
 from job_profit import ZERO, CustomerResult, JobResult, ProfitReport, format_money
 
@@ -46,7 +48,7 @@ class Summary:
     # (jobs without a figure, sales without a job number) or some rows couldn't be read: a total
     # then could be wrong, so it's withheld.
     after_unlinked_costs: Decimal | None
-    usual_margin: Decimal | None   # share kept across complete jobs (0.30 = 30%), when there are enough
+    usual_margin: Fraction | None  # share kept across complete jobs, exact (3/10 = 30%), when there are enough
 
     @property
     def figure_is_partial(self) -> bool:
@@ -75,47 +77,54 @@ def money(amount: Decimal) -> str:
     return text[:-3] if text.endswith(".00") else text
 
 
-def percent(part: Decimal, whole: Decimal) -> int | None:
+def share_of(part: Decimal, whole: Decimal) -> Fraction:
+    """part / whole exactly (whole must be positive). Margins are compared only as exact shares."""
+    return Fraction(part) / Fraction(whole)
+
+
+def _round_half_up(value: Fraction) -> int:
+    """To a whole number, halves away from zero, computed exactly."""
+    rounded = int(abs(value) + Fraction(1, 2))
+    return rounded if value >= 0 else -rounded
+
+
+def percent(part: Decimal | Fraction, whole: Decimal | Fraction | int) -> int | None:
     """Whole percent for display, or None when there's nothing to divide by."""
     if whole <= 0:
         return None
-    return int((part * 100 / whole).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return _round_half_up(Fraction(part) * 100 / Fraction(whole))
 
 
 def job_name(job: JobResult) -> str:
     return f"{job.description} · {job.job_id}" if job.description else f"Job {job.job_id}"
 
 
-def usual_margin(report: ProfitReport) -> Decimal | None:
-    """The share of sales kept across complete jobs (exact), or None with too few of them."""
+def usual_margin(report: ProfitReport) -> Fraction | None:
+    """The share of sales kept across complete jobs, as an exact fraction, or None with too few of them."""
     complete = [j for j in report.jobs if j.status == "complete" and j.sales > 0]
     sales = sum((j.sales for j in complete), ZERO)
     if len(complete) < MIN_JOBS_FOR_USUAL or sales <= 0:
         return None
-    return sum((j.contribution for j in complete), ZERO) / sales
+    return share_of(sum((j.contribution for j in complete), ZERO), sales)
 
 
-def whole_dollars(amount: Decimal) -> Decimal:
-    return amount.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-
-
-def pricing(job: JobResult, usual: Decimal | None) -> dict | None:
+def pricing(job: JobResult, usual: Fraction | None) -> dict | None:
     """Break-even and "at your usual margin" prices for a complete job, from its own recorded costs.
 
     None for a job that isn't complete (its costs may be understated, so any price would be too
-    low) or that has no costs. The target price is costs / (1 - usual margin), rounded to whole
-    dollars for display and stated as "about".
+    low) or that has no costs. The target price is costs / (1 - usual margin), computed exactly and
+    rounded to whole dollars (halves up) only for display, stated as "about".
     """
     if job.status != "complete" or job.total_costs <= 0:
         return None
     result = {"break_even": job.total_costs, "usual": None, "at_usual": None}
-    if usual is not None and Decimal("0") < usual < Decimal("1"):
-        result["usual"] = percent(usual, Decimal("1"))
-        result["at_usual"] = whole_dollars(job.total_costs / (1 - usual))
+    if usual is not None and 0 < usual < 1:
+        result["usual"] = percent(usual, 1)
+        result["at_usual"] = Decimal(_round_half_up(Fraction(job.total_costs) / (1 - Fraction(usual))))
     return result
 
 
-def _price_sentence(job: JobResult, usual: Decimal | None) -> str:
+def _price_sentence(job: JobResult, usual: Fraction | None) -> str:
     """Break-even (for a losing job) and the price at the usual margin, when it's higher.
 
     Both come from the job's own recorded costs, before overhead (rent, fees) not tied to the job,
@@ -182,16 +191,16 @@ def _thin_biggest_customer(report: ProfitReport) -> Insight | None:
     total_sales = sum((c.sales for c in complete), ZERO)
     biggest = max(complete, key=lambda c: (c.sales, c.customer))
     # The gap is measured on exact shares; only the percentages shown are rounded.
-    gap_points = (sum((c.contribution for c in complete), ZERO) / total_sales
-                  - biggest.contribution / biggest.sales) * 100
-    if gap_points < THIN_GAP_POINTS:
+    gap_points = (share_of(sum((c.contribution for c in complete), ZERO), total_sales)
+                  - share_of(biggest.contribution, biggest.sales)) * 100
+    if gap_points < Fraction(THIN_GAP_POINTS):
         return None
     share = percent(biggest.contribution, biggest.sales)
     everything_complete = (not report.unlinked_sales_lines
                            and all(c.status == "complete" for c in report.customers)
                            and all(j.status == "complete" and len(j.customers) == 1 for j in report.jobs))
     others = [c for c in complete if c is not biggest]
-    best = max(others, key=lambda c: (c.contribution / c.sales, c.customer))
+    best = max(others, key=lambda c: (share_of(c.contribution, c.sales), c.customer))
     detail = (f"{money(biggest.sales)} in sales, {money(biggest.contribution)} left after job costs. "
               f"{best.customer} keeps {percent(best.contribution, best.sales)}%.")
     if everything_complete:
@@ -222,8 +231,8 @@ def attention(report: ProfitReport) -> list[Insight]:
     # Complete jobs that made money but kept less than half the usual margin.
     if usual is not None and usual > 0:
         thin_jobs = sorted((j for j in report.jobs if j.status == "complete" and j.sales > 0
-                            and j.contribution >= 0 and j.contribution / j.sales < usual / 2),
-                           key=lambda j: (j.contribution / j.sales, j.job_id))
+                            and j.contribution >= 0 and share_of(j.contribution, j.sales) < usual / 2),
+                           key=lambda j: (share_of(j.contribution, j.sales), j.job_id))
         for job in thin_jobs[:MAX_THIN_JOBS]:
             items.append(Insight("warn", f"{job_name(job)} kept only {percent(job.contribution, job.sales)}%",
                                  f"Sold for {money(job.sales)}, cost {money(job.total_costs)}."

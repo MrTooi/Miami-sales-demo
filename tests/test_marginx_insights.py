@@ -1,4 +1,5 @@
 from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 import unittest
 
@@ -98,7 +99,7 @@ class PricingTests(unittest.TestCase):
     def test_usual_margin_uses_complete_jobs_only_and_needs_enough_of_them(self):
         report = demo_report()
         # J-101..J-107 are complete: $3,120 left of $10,300 sales. J-108 (no labor) is left out.
-        self.assertEqual(Decimal("3120.00") / Decimal("10300.00"), mi.usual_margin(report))
+        self.assertEqual(Fraction(3120, 10300), mi.usual_margin(report))  # exact, not cut off at 28 digits
         two_jobs = report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/01/2026,A,J-2,100.00\n",
                                b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
                                b"B-2,10/01/2026,Paper,J-1,Materials,30.00\nB-3,10/01/2026,Crew,J-2,Labor,20.00\n"
@@ -213,6 +214,92 @@ class AttentionTests(unittest.TestCase):
         titles = [i.title for i in mi.attention(report_from(invoices, costs))]
         self.assertEqual(4, sum(1 for t in titles if "need" in t))
         self.assertIn("2 more jobs need a check", titles)
+
+
+class ExactMarginTests(unittest.TestCase):
+    """Margins are compared as exact fractions, so a near-tie is never decided by a cut-off decimal."""
+
+    SALES = (b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A (fictional),J-1,300.00\n"
+             b"I-2,10/01/2026,B (fictional),J-2,200.00\nI-3,10/01/2026,C (fictional),J-3,100.00\n")
+
+    def costs(self, j1_materials):
+        return (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,150.00\n"
+                + f"B-2,10/01/2026,Paper,J-1,Materials,{j1_materials}\n".encode()
+                + b"B-3,10/01/2026,Crew,J-2,Labor,100.00\nB-4,10/01/2026,Paper,J-2,Materials,98.00\n"
+                  b"B-5,10/01/2026,Crew,J-3,Labor,50.00\nB-6,10/01/2026,Paper,J-3,Materials,49.00\n")
+
+    def test_a_job_exactly_at_half_the_usual_margin_is_not_called_thin(self):
+        # J-1 keeps $1 of $300 (1/300); all jobs keep $4 of $600, so half the usual margin is exactly 1/300.
+        # "Less than half" is false. With 28-digit decimals, 1/300 rounds down and (4/600) / 2 rounds up,
+        # so the old comparison wrongly called J-1 thin.
+        report = report_from(self.SALES, self.costs("149.00"))
+        self.assertEqual(Fraction(4, 600), mi.usual_margin(report))
+        self.assertEqual(mi.usual_margin(report) / 2, mi.share_of(Decimal("1.00"), Decimal("300.00")))
+        self.assertTrue(Decimal(1) / Decimal(300) < (Decimal(4) / Decimal(600)) / 2)  # the old, wrong answer
+        self.assertFalse(any("J-1 kept only" in i.title for i in mi.attention(report)))
+        # Control: one cent less kept, and J-1 really is below half: it is listed.
+        thinner = report_from(self.SALES, self.costs("149.01"))
+        self.assertTrue(any("J-1 kept only" in i.title for i in mi.attention(thinner)))
+
+    def test_a_customer_exactly_15_points_below_the_business_is_compared_exactly(self):
+        sales = (b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Big (fictional),J-1,200.00\n"
+                 b"I-2,10/01/2026,Small (fictional),J-2,100.00\n")
+        def costs(j2_materials):
+            return (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,100.00\n"
+                    b"B-2,10/01/2026,Paper,J-1,Materials,80.00\nB-3,10/01/2026,Crew,J-2,Labor,25.00\n"
+                    + f"B-4,10/01/2026,Paper,J-2,Materials,{j2_materials}\n".encode())
+        # Big keeps 20/200 = 10%; the business keeps 75/300 = 25%: exactly 15 points, so it is listed.
+        at_line = [i.title for i in mi.attention(report_from(sales, costs("20.00")))]
+        self.assertTrue(any("Big (fictional)" in t and "keeps only 10%" in t for t in at_line), at_line)
+        # One cent more cost elsewhere: the gap is just under 15 points, so it isn't.
+        under = [i.title for i in mi.attention(report_from(sales, costs("20.01")))]
+        self.assertFalse(any("keeps only" in t for t in under), under)
+
+    def test_the_15_point_line_holds_with_repeating_shares(self):
+        # Big keeps 110 of 330 (1/3); the business keeps 261 of 540 (29/60): 29/60 - 1/3 is exactly 15 points.
+        # (A 600,000-case search found no such line the old 28-digit decimals decided wrongly, since
+        # their rounding cancels when subtracted; this keeps the exact comparison honest at the line.)
+        sales = (b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,Big (fictional),J-1,330.00\n"
+                 b"I-2,10/01/2026,Small (fictional),J-2,210.00\n")
+        def costs(j2_materials):
+            return (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,120.00\n"
+                    b"B-2,10/01/2026,Paper,J-1,Materials,100.00\nB-3,10/01/2026,Crew,J-2,Labor,30.00\n"
+                    + f"B-4,10/01/2026,Paper,J-2,Materials,{j2_materials}\n".encode())
+        report = report_from(sales, costs("29.00"))
+        big, small = sorted(report.customers, key=lambda c: c.sales, reverse=True)
+        total = mi.share_of(big.contribution + small.contribution, big.sales + small.sales)
+        self.assertEqual(Fraction(15, 100), total - mi.share_of(big.contribution, big.sales))
+        self.assertTrue(any("keeps only 33%" in i.title for i in mi.attention(report)))
+        self.assertFalse(any("keeps only" in i.title for i in mi.attention(report_from(sales, costs("29.01")))))
+
+    def test_the_best_customer_is_picked_on_exact_margins(self):
+        # Two customers whose margins differ only after the 28th digit: as 28-digit decimals they tie,
+        # and the old tie-break by name picked "Zed". Exactly, Amy keeps more. (Absurdly large made-up
+        # amounts are needed to get that close; the point is the method, not the size.)
+        from types import SimpleNamespace as Row
+        def customer(name, sales_cents, kept_cents):
+            return Row(customer=name, status="complete", sales=Decimal(sales_cents) / 100,
+                       contribution=Decimal(kept_cents) / 100)
+        amy = customer("Amy (fictional)", 10 ** 17 + 7, 83333333333333339)
+        zed = customer("Zed (fictional)", 10 ** 17 + 1, 83333333333333334)
+        big = customer("Big (fictional)", 11 * 10 ** 16, 0)
+        self.assertGreater(mi.share_of(amy.contribution, amy.sales), mi.share_of(zed.contribution, zed.sales))
+        self.assertEqual(amy.contribution / amy.sales, zed.contribution / zed.sales)  # the old, tied view
+        report = Row(customers=[big, amy, zed], unlinked_sales_lines=0, jobs=[])
+        finding = mi._thin_biggest_customer(report)
+        self.assertIn("Big (fictional) is your biggest customer, but keeps only 0%", finding.title)
+        self.assertIn("Amy (fictional) keeps 83%", finding.detail)
+
+    def test_percent_and_price_round_only_at_the_end(self):
+        self.assertEqual(33, mi.percent(Decimal("1"), Decimal("3")))
+        self.assertEqual(-50, mi.percent(Decimal("-1"), Decimal("2")))
+        self.assertEqual(-1, mi.percent(Decimal("-1"), Decimal("200")))  # -0.5%: halves away from zero
+        self.assertEqual(-33, mi.percent(Decimal("-1"), Decimal("3")))
+        self.assertEqual(1, mi.percent(Decimal("1"), Decimal("200")))  # 0.5% shows as 1%
+        self.assertEqual(30, mi.percent(Fraction(3, 10), 1))
+        job = next(j for j in report_from(self.SALES, self.costs("149.00")).jobs if j.job_id == "J-1")
+        price = mi.pricing(job, Fraction(1, 3))  # costs 299 / (1 - 1/3) = 448.50 exactly: rounds up to 449
+        self.assertEqual((33, Decimal(449)), (price["usual"], price["at_usual"]))
 
 
 if __name__ == "__main__":

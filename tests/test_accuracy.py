@@ -311,7 +311,7 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual((1100000, 364000, 164000, 1, 7), (cents(summary.sales), cents(summary.left_after_job_costs),
                                                            cents(summary.after_unlinked_costs), summary.losing_jobs,
                                                            summary.complete_jobs))
-        self.assertEqual(Decimal(312000) / Decimal(1030000), summary.usual_margin)
+        self.assertEqual(Fraction(312000, 1030000), summary.usual_margin)  # exact: 156/515
         self.assertEqual((30, Decimal("1062"), Decimal("740.00")),
                          (mi.percent(summary.usual_margin, Decimal(1)), mi.pricing(j105, summary.usual_margin)["at_usual"],
                           mi.pricing(j105, summary.usual_margin)["break_even"]))
