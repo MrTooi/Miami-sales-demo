@@ -12,7 +12,7 @@ from __future__ import annotations
 import itertools
 import sys
 from contextlib import ExitStack
-from decimal import ROUND_HALF_EVEN, Decimal
+from fractions import Fraction
 from pathlib import Path
 from unittest import mock
 
@@ -50,7 +50,8 @@ def _overhead_out_of_left(report):
 def _half_even(part, whole):
     if whole <= 0:
         return None
-    return int((part * 100 / whole).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
+    # Exact, like MargenX's percent (margins can be Fractions), but halves go to the even number.
+    return round(Fraction(part) * 100 / Fraction(whole))
 
 
 _unique = itertools.count()
