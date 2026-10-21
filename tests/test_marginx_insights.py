@@ -255,9 +255,29 @@ class ExactMarginTests(unittest.TestCase):
         under = [i.title for i in mi.attention(report_from(sales, costs("20.01")))]
         self.assertFalse(any("keeps only" in t for t in under), under)
 
+    def test_the_best_customer_is_picked_on_exact_margins(self):
+        # Two customers whose margins differ only after the 28th digit: as 28-digit decimals they tie,
+        # and the old tie-break by name picked "Zed". Exactly, Amy keeps more. (Absurdly large made-up
+        # amounts are needed to get that close; the point is the method, not the size.)
+        from types import SimpleNamespace as Row
+        def customer(name, sales_cents, kept_cents):
+            return Row(customer=name, status="complete", sales=Decimal(sales_cents) / 100,
+                       contribution=Decimal(kept_cents) / 100)
+        amy = customer("Amy (fictional)", 10 ** 17 + 7, 83333333333333339)
+        zed = customer("Zed (fictional)", 10 ** 17 + 1, 83333333333333334)
+        big = customer("Big (fictional)", 11 * 10 ** 16, 0)
+        self.assertGreater(mi.share_of(amy.contribution, amy.sales), mi.share_of(zed.contribution, zed.sales))
+        self.assertEqual(amy.contribution / amy.sales, zed.contribution / zed.sales)  # the old, tied view
+        report = Row(customers=[big, amy, zed], unlinked_sales_lines=0, jobs=[])
+        finding = mi._thin_biggest_customer(report)
+        self.assertIn("Big (fictional) is your biggest customer, but keeps only 0%", finding.title)
+        self.assertIn("Amy (fictional) keeps 83%", finding.detail)
+
     def test_percent_and_price_round_only_at_the_end(self):
         self.assertEqual(33, mi.percent(Decimal("1"), Decimal("3")))
-        self.assertEqual(-50, mi.percent(Decimal("-1"), Decimal("2")))  # halves away from zero
+        self.assertEqual(-50, mi.percent(Decimal("-1"), Decimal("2")))
+        self.assertEqual(-1, mi.percent(Decimal("-1"), Decimal("200")))  # -0.5%: halves away from zero
+        self.assertEqual(-33, mi.percent(Decimal("-1"), Decimal("3")))
         self.assertEqual(1, mi.percent(Decimal("1"), Decimal("200")))  # 0.5% shows as 1%
         self.assertEqual(30, mi.percent(Fraction(3, 10), 1))
         job = next(j for j in report_from(self.SALES, self.costs("149.00")).jobs if j.job_id == "J-1")
