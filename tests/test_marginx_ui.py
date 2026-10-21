@@ -167,6 +167,20 @@ class SafetyTests(unittest.TestCase):
             b"B-4,10/01/2026,Paper,J-2,Materials,50.00\n"))
         self.assertIn('<i class="neg" style="width:3%">', html)  # B lost $1: under 1% of $1,000, still shown
 
+    def test_every_result_ends_with_the_how_to_read_note(self):
+        # Rounded percentages and estimated prices are never mistaken for exact facts, and the tool is
+        # never mistaken for professional advice. Shown with or without findings.
+        demo = report_from((SAMPLES / "demo_sign_shop_invoices.csv").read_bytes(),
+                           (SAMPLES / "demo_sign_shop_costs.csv").read_bytes())
+        for report in (demo, report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\n",
+                                                  b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                                                  b"B-2,10/01/2026,Paper,J-1,Materials,30.00\n")):
+            html = render(report)
+            self.assertTrue(html.rstrip().endswith(f'<div class="mx-legend mx-fine">{ui.READING_NOTE}</div>'))
+        for words in ("Percentages are rounded", "Suggested prices are estimates",
+                      "isn't accounting, tax or financial advice"):
+            self.assertIn(words, ui.READING_NOTE)
+
     def test_html_blocks_stay_on_one_line_so_markdown_never_runs(self):
         out = []
         report = report_from(b'Invoice,Date,Customer,Job,Description,Amount\n'

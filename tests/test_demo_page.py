@@ -48,6 +48,7 @@ class DemoPageTests(unittest.TestCase):
         self.assertIn("Rush banner (next-day) · J-105 lost $140", self.page)
         self.assertIn("Sales dated Oct 2 to Oct 23, 2026", self.page)
         self.assertIn("<title>MargenX Demo Shop</title>", self.page)
+        self.assertIn("It isn't accounting, tax or financial advice.", self.page)  # the how-to-read note
 
     def test_header_shows_the_real_margenx_logo(self):
         import base64
