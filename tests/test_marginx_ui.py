@@ -167,6 +167,24 @@ class SafetyTests(unittest.TestCase):
             b"B-4,10/01/2026,Paper,J-2,Materials,50.00\n"))
         self.assertIn('<i class="neg" style="width:3%">', html)  # B lost $1: under 1% of $1,000, still shown
 
+    def test_every_result_ends_with_the_how_to_read_note(self):
+        # Rounded percentages and estimated prices are never mistaken for exact facts, and the tool is
+        # never mistaken for professional advice. Shown with or without findings.
+        demo = report_from((SAMPLES / "demo_sign_shop_invoices.csv").read_bytes(),
+                           (SAMPLES / "demo_sign_shop_costs.csv").read_bytes())
+        for report in (demo, report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\n",
+                                                  b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
+                                                  b"B-2,10/01/2026,Paper,J-1,Materials,30.00\n")):
+            html = render(report)
+            self.assertTrue(html.rstrip().endswith(f'<div class="mx-legend mx-fine">{ui.READING_NOTE}</div>'))
+        # The wording is spelled out here, not taken from the constant, so a change to what it promises is
+        # a deliberate test change. Each claim holds on main: sums are exact Decimal (#118), "Needs a check"
+        # marks Provisional figures, percentages are rounded only for display (#119), prices say "about".
+        self.assertEqual("How to read these numbers: sales and costs are added up exactly, to the cent, from the "
+                         "files you gave MargenX. Figures marked \"Needs a check\" may be missing costs. Percentages "
+                         "are rounded to whole numbers, and suggested prices are estimates. MargenX is a tool to help "
+                         "you look at your own numbers. It isn't accounting, tax or financial advice.", ui.READING_NOTE)
+
     def test_html_blocks_stay_on_one_line_so_markdown_never_runs(self):
         out = []
         report = report_from(b'Invoice,Date,Customer,Job,Description,Amount\n'
