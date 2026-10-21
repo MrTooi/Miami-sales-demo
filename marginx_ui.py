@@ -170,9 +170,10 @@ def _money(amount) -> str:
 
 # Shown under every set of results, so nobody mistakes a rounded figure or an estimate for an exact
 # fact, or the tool for professional advice.
-READING_NOTE = ("How to read these numbers: dollar amounts are exact, to the cent, from the files you gave MargenX. "
-                "Percentages are rounded to whole numbers. Suggested prices are estimates. MargenX is a tool to help "
-                "you look at your own numbers. It isn't accounting, tax or financial advice.")
+READING_NOTE = ("How to read these numbers: sales and costs are added up exactly, to the cent, from the files you "
+                "gave MargenX. Figures marked \"Needs a check\" may be missing costs. Percentages are rounded to "
+                "whole numbers, and suggested prices are estimates. MargenX is a tool to help you look at your own "
+                "numbers. It isn't accounting, tax or financial advice.")
 
 
 def results(report: ProfitReport, summary: Summary, items: list[Insight], period: str) -> None:

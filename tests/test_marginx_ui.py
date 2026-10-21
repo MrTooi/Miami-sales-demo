@@ -177,9 +177,13 @@ class SafetyTests(unittest.TestCase):
                                                   b"B-2,10/01/2026,Paper,J-1,Materials,30.00\n")):
             html = render(report)
             self.assertTrue(html.rstrip().endswith(f'<div class="mx-legend mx-fine">{ui.READING_NOTE}</div>'))
-        for words in ("Percentages are rounded", "Suggested prices are estimates",
-                      "isn't accounting, tax or financial advice"):
-            self.assertIn(words, ui.READING_NOTE)
+        # The wording is spelled out here, not taken from the constant, so a change to what it promises is
+        # a deliberate test change. Each claim holds on main: sums are exact Decimal (#118), "Needs a check"
+        # marks Provisional figures, percentages are rounded only for display (#119), prices say "about".
+        self.assertEqual("How to read these numbers: sales and costs are added up exactly, to the cent, from the "
+                         "files you gave MargenX. Figures marked \"Needs a check\" may be missing costs. Percentages "
+                         "are rounded to whole numbers, and suggested prices are estimates. MargenX is a tool to help "
+                         "you look at your own numbers. It isn't accounting, tax or financial advice.", ui.READING_NOTE)
 
     def test_html_blocks_stay_on_one_line_so_markdown_never_runs(self):
         out = []
