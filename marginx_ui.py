@@ -63,16 +63,12 @@ h1,h2,h3,.mx-h{font-family:'Plus Jakarta Sans','Inter',system-ui,sans-serif!impo
 .mx-ico{flex:0 0 30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.95rem}
 .mx-ico.loss{background:var(--mx-red-bg);color:var(--mx-red)}.mx-ico.warn{background:var(--mx-amber-bg);color:var(--mx-amber)}.mx-ico.info{background:var(--mx-blue-bg);color:var(--mx-blue)}
 .mx-item .t{font-weight:600;color:var(--mx-ink)}.mx-item .d{font-size:.88rem;color:var(--mx-muted);margin-top:2px}
-.mx-row{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,2fr) 128px;gap:14px;align-items:center;padding:10px 0;border-top:1px solid var(--mx-line)}
+.mx-row{display:grid;grid-template-columns:minmax(0,1.6fr) repeat(3,minmax(0,1fr));gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--mx-line)}
+.mx-row>div:not(.n){text-align:right;font-variant-numeric:tabular-nums}.mx-row .lft{font-weight:700;font-family:'Plus Jakarta Sans',system-ui,sans-serif}
+.mx-row.head{font-size:.8rem;color:var(--mx-muted);padding:2px 0 6px;border-top:0}.mx-row.loss .lft,.mx-row.loss .mg{color:var(--mx-red)}
+.mx-row .n small.chk{display:inline-block;margin-top:3px;font-size:.75rem;padding:1px 8px;border-radius:999px;background:var(--mx-amber-bg);color:var(--mx-amber)}
 .mx-row:first-of-type{border-top:0}
 .mx-row .n{font-weight:600}.mx-row .n small{display:block;font-weight:400;color:var(--mx-muted);font-size:.8rem}
-.mx-bar{height:14px;background:#CFE9DC;border-radius:4px;overflow:hidden}
-.mx-bar i{display:block;height:14px}.mx-bar i.left{background:var(--mx-green)}
-.mx-bar i.left.check{background:repeating-linear-gradient(135deg,var(--mx-green) 0 5px,#5FAF8C 5px 10px)}
-.mx-bar.loss{background:var(--mx-red)}
-.mx-key{font-size:.82rem;color:var(--mx-muted);margin:-4px 0 8px}
-.mx-key span{display:inline-block;width:12px;height:10px;border-radius:2px;margin:0 5px 1px 0;vertical-align:middle}
-.mx-row .r{text-align:right}.mx-row .r .a{font-weight:700;font-family:'Plus Jakarta Sans',system-ui,sans-serif}.mx-row .r .p{font-size:.8rem;color:var(--mx-muted)}
 .mx-job{display:grid;grid-template-columns:12px minmax(0,1fr) auto 120px;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--mx-line);font-size:.95rem}
 .mx-job:first-of-type{border-top:0}
 .mx-dot{width:10px;height:10px;border-radius:50%}.mx-dot.complete{background:var(--mx-green)}.mx-dot.loss{background:var(--mx-red)}.mx-dot.provisional{background:#E0A43A}.mx-dot.unavailable{background:#B7C4BE}
@@ -106,7 +102,7 @@ div[data-testid="stExpander"]{border:1px solid var(--mx-line)!important;border-r
 [data-testid="stDataFrame"]{border:1px solid var(--mx-line);border-radius:12px;overflow:hidden}
 .stAlert{border-radius:14px!important}
 div[data-testid="stAlertContentWarning"]{font-size:.88rem}
-@media(max-width:700px){.mx-title{font-size:1.6rem}.mx-metric{padding:12px 14px}.mx-metric .v{font-size:1.3rem}.mx-row{grid-template-columns:minmax(0,1fr) 110px}.mx-row .bars{display:none}
+@media(max-width:700px){.mx-title{font-size:1.6rem}.mx-metric{padding:12px 14px}.mx-metric .v{font-size:1.3rem}.mx-row{grid-template-columns:minmax(0,1.2fr) repeat(3,minmax(0,1fr));gap:8px;font-size:.88rem}
 .mx-job{grid-template-columns:12px minmax(0,1fr) 96px}.mx-job .tagc{display:none}}
 </style>
 """
@@ -259,8 +255,6 @@ def _metrics(summary: Summary) -> list[tuple[str, str, str, str]]:
         cover = (f"From {summary.jobs_with_figure} of {summary.jobs} jobs" if summary.figure_is_partial
                  else f"From all {_plural(summary.jobs, 'job')}")
         left_note = [cover]
-        if summary.share_percent is not None:
-            left_note.append(f"{summary.share_percent}% of their sales")
         if summary.figure_is_provisional:
             left_note.append("some still need a check")
         if summary.rejected_sales_lines or summary.rejected_cost_lines:
@@ -281,12 +275,29 @@ def _metrics(summary: Summary) -> list[tuple[str, str, str, str]]:
     return [
         ("Sales", _money(summary.sales), sales_note, ""),
         ("Left after job costs", left[0], left[1], ""),
+        _margin_card(summary),
         ("Jobs losing money", losing, " · ".join(losing_note),
          "red" if summary.losing_jobs else ("amber" if summary.possible_losses else "green")),
-        ("Jobs that need a check", str(summary.jobs_to_check),
-         "missing costs or figures" if summary.jobs_to_check else "all jobs complete",
-         "amber" if summary.jobs_to_check else "green"),
     ]
+
+
+def _margin_card(summary: Summary) -> tuple[str, str, str, str]:
+    """Profit margin: the share of sales left after job costs, for the same jobs as "Left after job costs".
+
+    A margin that includes jobs still needing a check may be too high, so it says so and, when there are
+    enough complete jobs, gives their margin too: the same "usual margin" the attention list uses.
+    """
+    if summary.share_percent is None:
+        return ("Profit margin", "—", "No job has a figure yet", "")
+    note = ["After job costs, before rent and overhead"]
+    if summary.figure_is_partial:
+        note.append(f"from {summary.jobs_with_figure} of {summary.jobs} jobs")
+    if summary.figure_is_provisional:
+        note.append("may be too high, some jobs need a check")
+        if summary.usual_margin is not None:
+            note.append(f"jobs with complete costs: {percent(summary.usual_margin, 1)}%")
+    return ("Profit margin", f"{summary.share_percent}%", " · ".join(note),
+            "red" if summary.share_percent < 0 else "")
 
 
 def _after_costs(summary: Summary) -> tuple[str, str] | None:
@@ -315,55 +326,44 @@ def _after_costs(summary: Summary) -> tuple[str, str] | None:
             "your real profit is lower.")
     if summary.figure_is_provisional:
         note += " Some jobs still need a check, so this may be too high."
-    return f"After the {costs}, these files leave <b>{_money(summary.after_unlinked_costs)}</b>", note
+    # Shown only when every sale is in the job total, so its margin is of all sales.
+    margin = percent(summary.after_unlinked_costs, summary.sales)
+    margin_text = "" if margin is None else f", a {margin}% margin on all sales"
+    return (f"After the {costs}, these files leave <b>{_money(summary.after_unlinked_costs)}</b>{margin_text}",
+            note)
 
 
 def _customers(report: ProfitReport) -> None:
+    """A table of customers by what they leave you: sales, left after job costs and margin, nothing else."""
     counted = [c for c in report.customers if c.contribution is not None]
     if not counted:
         return
-    top = max(max(c.sales for c in counted), 1)
-    rows = []
+    rows = ['<div class="mx-row head"><div class="n">Customer</div><div>Sales</div><div>Left after job costs</div>'
+            '<div>Margin</div></div>']
     for c in sorted(counted, key=lambda c: (-c.contribution, c.customer)):
         share = percent(c.contribution, c.sales)  # the same rounding as the attention list
-        # One bar per customer: its length is their sales, and the dark part is the share left for you, the
-        # same rounded percent printed beside it. A loss turns the whole bar red: the jobs cost more than the
-        # customer paid.
-        sales_width = max(3, int(c.sales * 100 / top))  # a small customer is still a visible bar
-        if c.contribution < 0:
-            bar = f'<div class="mx-bar loss" style="width:{sales_width}%"></div>'
-        else:
-            check = "" if c.status == "complete" else " check"
-            bar = (f'<div class="mx-bar" style="width:{sales_width}%">'
-                   f'<i class="left{check}" style="width:{min(100, share or 0)}%"></i></div>')
-        note = "" if c.status == "complete" else "<small>Needs a check</small>"
+        checked = c.status == "complete"
+        # A customer whose jobs need a check may be missing costs: its margin is "so far", as in the job list.
+        margin = "—" if share is None else f"{share}%{'' if checked else ' so far'}"
+        note = "" if checked else '<small class="chk">Needs a check</small>'
         jobs = [j for j in report.jobs if j.job_id in c.jobs]
         inner = "".join(f'<tr><td>{escape(j.description or "Job")} · {escape(j.job_id)}</td>'
                         f'<td class="r">{"—" if j.contribution is None else _money(j.contribution)}</td></tr>'
                         for j in jobs)
         why = f'<div class="why">{escape(" ".join(c.reasons))}</div>' if c.reasons else ""
         rows.append(
-            f'<details class="mx-d"><summary><div class="mx-row"><div class="n">{escape(c.customer)}'
-            f'<span class="mx-chev">›</span>{note}</div>'
-            f'<div class="bars">{bar}</div>'
-            f'<div class="r"><div class="a">{_money(c.contribution)}</div>'
-            f'<div class="p">{"" if share is None else f"{share}% of "}{_money(c.sales)}</div></div></div></summary>'
+            f'<details class="mx-d"><summary><div class="mx-row{" loss" if c.contribution < 0 else ""}">'
+            f'<div class="n">{escape(c.customer)}<span class="mx-chev">›</span>{note}</div>'
+            f'<div>{_money(c.sales)}</div><div class="lft">{_money(c.contribution)}</div>'
+            f'<div class="mg">{margin}</div></div></summary>'
             f'<div class="mx-break"><table>{inner}</table>{why}</div></details>')
-    key = ('<div class="mx-key">Each bar is what a customer paid you. '
-           '<span style="background:#0F7A55;margin-left:4px"></span>Left for you '
-           '<span style="background:#CFE9DC;margin-left:10px"></span>Spent on their jobs '
-           '<span style="background:#B42318;margin-left:10px"></span>Lost money')
-    if any(c.status != "complete" and c.contribution >= 0 for c in counted):
-        key += ('<span style="background:repeating-linear-gradient(135deg,#0F7A55 0 3px,#5FAF8C 3px 6px);'
-                'margin-left:10px"></span>Striped: needs a check, may be too high')
-    key += "</div>"
     legend = ""
     left_out = [c.customer for c in report.customers if c.contribution is None]
     if left_out:
         # The list must never read as every customer when some have no figure yet.
-        legend += (f'<div class="mx-legend">Not listed, no figure yet: {escape(", ".join(left_out))}. '
-                   "See the job list below.</div>")
-    _html(f'<div class="mx-card"><h3>Customers, by what they leave you</h3>{key}{"".join(rows)}{legend}</div>')
+        legend = (f'<div class="mx-legend">Not listed, no figure yet: {escape(", ".join(left_out))}. '
+                  "See the job list below.</div>")
+    _html(f'<div class="mx-card"><h3>Customers, by what they leave you</h3>{"".join(rows)}{legend}</div>')
 
 
 def _jobs(report: ProfitReport, summary: Summary) -> None:
