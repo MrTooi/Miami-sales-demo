@@ -543,6 +543,18 @@ class MargenXImportPageTests(unittest.TestCase):
             self.assertEqual(("Provisional", "No labor recorded."), tuple(jobs.loc[to_check, ["Status", "Why"]]))
             self.assertFalse(any("couldn't be imported" in t.value for t in at.text), sample_set)
 
+    def test_switching_between_demo_businesses_never_mixes_their_results(self):
+        at = self.run_page(sample_set="contractor")
+        menu = lambda: next(r for r in at.radio if r.label == "Which made-up files?")
+        self.assertEqual([f"J-20{i}" for i in range(1, 9)], sorted(self.profit_table(at)["Job"]))
+        for sample_set, jobs in (("custom_shop", [f"K-30{i}" for i in range(1, 9)]),
+                                 ("demo", [f"J-10{i}" for i in range(1, 9)]),
+                                 ("contractor", [f"J-20{i}" for i in range(1, 9)])):
+            menu().set_value(sample_set).run()
+            self.assertFalse(at.exception, at.exception)
+            self.assertEqual(jobs, sorted(self.profit_table(at)["Job"]), sample_set)  # nothing stale
+            self.assertEqual(["Which made-up files?"], [r.label for r in at.radio if r.label != "File type"])
+
     def test_switching_between_test_files_and_demo_keeps_results_apart(self):
         at = self.run_page()  # messy test files
         radio(at, SAMPLE_AMOUNT_QUESTION).set_value("line").run()
