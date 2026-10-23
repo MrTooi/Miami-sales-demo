@@ -72,7 +72,7 @@ class HeadlineTests(unittest.TestCase):
             b"I-3,10/01/2026,C,J-3,40.00\n",
             b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1
             + b"B-3,10/01/2026,Crew,J-3,Labor,50.00\nB-4,10/01/2026,Paper,J-3,Materials,10.00\n"))
-        self.assertIn('<i class="neg" style="width:20%">', html)  # C lost $20: a visible red bar
+        self.assertIn('<div class="mx-bar loss" style="width:40%"></div>', html)  # C lost $20 on $40: a red bar
         self.assertIn("Not listed, no figure yet: B.", html)  # B has sales but no costs
 
     def test_rows_that_could_not_be_read_are_disclosed_and_withhold_the_after_costs_total(self):
@@ -165,7 +165,21 @@ class SafetyTests(unittest.TestCase):
             b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,200.00\n"
             b"B-2,10/01/2026,Paper,J-1,Materials,200.00\nB-3,10/01/2026,Crew,J-2,Labor,51.00\n"
             b"B-4,10/01/2026,Paper,J-2,Materials,50.00\n"))
-        self.assertIn('<i class="neg" style="width:3%">', html)  # B lost $1: under 1% of $1,000, still shown
+        self.assertIn('<div class="mx-bar loss" style="width:10%"></div>', html)  # B lost $1: still a red bar
+
+    def test_each_customer_bar_matches_the_numbers_beside_it(self):
+        # Bar length is the customer's sales next to the biggest customer; the dark part is the share left for
+        # you, the same percent printed on the right. The biggest customer here keeps only 6%.
+        html = render(report_from((SAMPLES / "demo_contractor_invoices.csv").read_bytes(),
+                                  (SAMPLES / "demo_contractor_costs.csv").read_bytes()))
+        self.assertIn('<div class="mx-bar" style="width:100%"><i class="left" style="width:6%"></i></div>', html)
+        self.assertIn("6% of $33,600", html)  # Ocean View Condos
+        self.assertIn('<div class="mx-bar" style="width:71%"><i class="left" style="width:48%"></i></div>', html)
+        self.assertIn("48% of $24,000", html)  # Rivera Family
+        self.assertIn('<div class="mx-bar" style="width:18%"><i class="left check" style="width:51%"></i></div>',
+                      html)  # Kendall Pediatrics needs a check: striped, and the key explains it
+        self.assertIn("Striped: needs a check, may be too high", html)
+        self.assertIn('<div class="mx-bar loss" style="width:26%"></div>', html)  # Gomez Family lost $650
 
     def test_every_result_ends_with_the_how_to_read_note(self):
         # Rounded percentages and estimated prices are never mistaken for exact facts, and the tool is

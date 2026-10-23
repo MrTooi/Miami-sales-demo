@@ -66,9 +66,12 @@ h1,h2,h3,.mx-h{font-family:'Plus Jakarta Sans','Inter',system-ui,sans-serif!impo
 .mx-row{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,2fr) 128px;gap:14px;align-items:center;padding:10px 0;border-top:1px solid var(--mx-line)}
 .mx-row:first-of-type{border-top:0}
 .mx-row .n{font-weight:600}.mx-row .n small{display:block;font-weight:400;color:var(--mx-muted);font-size:.8rem}
-.mx-bar{height:7px;background:#EEF5F1;border-radius:6px;overflow:hidden;margin:3px 0}
-.mx-bar i{display:block;height:7px;border-radius:6px}
-.mx-bar i.sales{background:#A7E3C8}.mx-bar i.left{background:var(--mx-green)}.mx-bar i.neg{background:var(--mx-red)}
+.mx-bar{height:14px;background:#CFE9DC;border-radius:4px;overflow:hidden}
+.mx-bar i{display:block;height:14px}.mx-bar i.left{background:var(--mx-green)}
+.mx-bar i.left.check{background:repeating-linear-gradient(135deg,var(--mx-green) 0 5px,#5FAF8C 5px 10px)}
+.mx-bar.loss{background:var(--mx-red)}
+.mx-key{font-size:.82rem;color:var(--mx-muted);margin:-4px 0 8px}
+.mx-key span{display:inline-block;width:12px;height:10px;border-radius:2px;margin:0 5px 1px 0;vertical-align:middle}
 .mx-row .r{text-align:right}.mx-row .r .a{font-weight:700;font-family:'Plus Jakarta Sans',system-ui,sans-serif}.mx-row .r .p{font-size:.8rem;color:var(--mx-muted)}
 .mx-job{display:grid;grid-template-columns:12px minmax(0,1fr) auto 120px;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--mx-line);font-size:.95rem}
 .mx-job:first-of-type{border-top:0}
@@ -323,10 +326,16 @@ def _customers(report: ProfitReport) -> None:
     rows = []
     for c in sorted(counted, key=lambda c: (-c.contribution, c.customer)):
         share = percent(c.contribution, c.sales)  # the same rounding as the attention list
-        left_width = min(100, int(abs(c.contribution) * 100 / top))
+        # One bar per customer: its length is their sales, and the dark part is the share left for you, the
+        # same rounded percent printed beside it. A loss turns the whole bar red: the jobs cost more than the
+        # customer paid.
+        sales_width = max(3, int(c.sales * 100 / top))  # a small customer is still a visible bar
         if c.contribution < 0:
-            left_width = max(left_width, 3)  # a loss, however small, is always a visible red bar
-        bar = "neg" if c.contribution < 0 else "left"
+            bar = f'<div class="mx-bar loss" style="width:{sales_width}%"></div>'
+        else:
+            check = "" if c.status == "complete" else " check"
+            bar = (f'<div class="mx-bar" style="width:{sales_width}%">'
+                   f'<i class="left{check}" style="width:{min(100, share or 0)}%"></i></div>')
         note = "" if c.status == "complete" else "<small>Needs a check</small>"
         jobs = [j for j in report.jobs if j.job_id in c.jobs]
         inner = "".join(f'<tr><td>{escape(j.description or "Job")} · {escape(j.job_id)}</td>'
@@ -336,19 +345,25 @@ def _customers(report: ProfitReport) -> None:
         rows.append(
             f'<details class="mx-d"><summary><div class="mx-row"><div class="n">{escape(c.customer)}'
             f'<span class="mx-chev">›</span>{note}</div>'
-            f'<div class="bars"><div class="mx-bar"><i class="sales" style="width:{int(c.sales * 100 / top)}%"></i></div>'
-            f'<div class="mx-bar"><i class="{bar}" style="width:{left_width}%"></i></div></div>'
+            f'<div class="bars">{bar}</div>'
             f'<div class="r"><div class="a">{_money(c.contribution)}</div>'
             f'<div class="p">{"" if share is None else f"{share}% of "}{_money(c.sales)}</div></div></div></summary>'
             f'<div class="mx-break"><table>{inner}</table>{why}</div></details>')
-    legend = ('<div class="mx-legend"><span style="background:#A7E3C8"></span>Sales'
-              '<span style="background:#0F7A55;margin-left:14px"></span>Left after job costs</div>')
+    key = ('<div class="mx-key">Each bar is what a customer paid you. '
+           '<span style="background:#0F7A55;margin-left:4px"></span>Left for you '
+           '<span style="background:#CFE9DC;margin-left:10px"></span>Spent on their jobs '
+           '<span style="background:#B42318;margin-left:10px"></span>Lost money')
+    if any(c.status != "complete" and c.contribution >= 0 for c in counted):
+        key += ('<span style="background:repeating-linear-gradient(135deg,#0F7A55 0 3px,#5FAF8C 3px 6px);'
+                'margin-left:10px"></span>Striped: needs a check, may be too high')
+    key += "</div>"
+    legend = ""
     left_out = [c.customer for c in report.customers if c.contribution is None]
     if left_out:
         # The list must never read as every customer when some have no figure yet.
         legend += (f'<div class="mx-legend">Not listed, no figure yet: {escape(", ".join(left_out))}. '
                    "See the job list below.</div>")
-    _html(f'<div class="mx-card"><h3>Customers, by what they leave you</h3>{"".join(rows)}{legend}</div>')
+    _html(f'<div class="mx-card"><h3>Customers, by what they leave you</h3>{key}{"".join(rows)}{legend}</div>')
 
 
 def _jobs(report: ProfitReport, summary: Summary) -> None:
