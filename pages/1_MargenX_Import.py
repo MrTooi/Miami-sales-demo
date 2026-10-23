@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +27,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 import job_intake as ji  # noqa: E402
+import job_matching as jm  # noqa: E402
 import job_profit as jp  # noqa: E402
 import marginx_insights as mi  # noqa: E402
 import marginx_ui as ui  # noqa: E402
@@ -334,7 +336,7 @@ def show_profit(results: list[ji.IntakeResult], pending: list[str]) -> bool:
         st.info("Profit by job needs exactly one sales file and one costs file, each fully read below. "
                 "Answer any questions below, or upload one of each.")
         return False
-    report = jp.job_profit(invoices[0], costs[0])
+    report = jp.job_profit(invoices[0], which_job(invoices[0], costs[0]))
     if not report.available:
         for reason in report.reasons:
             st.info(ui.md_text(reason))
@@ -347,6 +349,46 @@ def show_profit(results: list[ji.IntakeResult], pending: list[str]) -> bool:
     with st.expander("All the details: every job, customer and how the figures are worked out"):
         _details(report)
     return True
+
+
+def which_job(invoices: ji.IntakeResult, costs: ji.IntakeResult) -> ji.IntakeResult:
+    """Ask the owner which job each cost without a job number was for, and apply the answers.
+
+    MargenX never guesses: every cost starts as "Not sure yet" and stays unlinked until the owner
+    picks. Jobs with sales or costs around the cost's date are listed first, only to save time.
+    """
+    if "job_id" not in invoices.mapped_fields:
+        return costs  # no job numbers on the sales either: there are no jobs to choose from
+    rows = jm.unmatched(costs)
+    job_list = jm.jobs(invoices, costs)
+    if not rows or not job_list:
+        return costs
+    labels = {}
+    for job in job_list:
+        about = " · ".join(x for x in (job.description, ", ".join(job.customers)) if x)
+        labels[job.job_id] = f"{job.job_id} · {about}" if about else job.job_id
+    # Answers are keyed to these exact files, so new or changed files ask again.
+    asked = hashlib.sha256(repr(([(r["row"], str(r["amount"]), r["date"]) for r in rows],
+                                 [j.job_id for j in job_list])).encode("utf-8")).hexdigest()[:12]
+    choices: dict[int, str] = {}
+    answered = sum(1 for r in rows if st.session_state.get(f"match-{asked}-{r['row']}", jm.NOT_SURE) != jm.NOT_SURE)
+    with st.expander(f"Which job was each cost for? {answered} of {len(rows)} answered", expanded=answered < len(rows)):
+        st.caption(f"These {len(rows)} costs don't say which job they were for. If you know, pick the job; if "
+                   "you're not sure, leave it. MargenX never guesses: a cost you don't match stays out of every "
+                   "job's figure, and those jobs show \"Needs a check\".")
+        for line in rows:
+            near = jm.nearby(line, job_list)
+            others = [j.job_id for j in job_list if j.job_id not in near]
+            options = [jm.NOT_SURE, *near, jm.NOT_A_JOB, *others]
+            what = " · ".join(x for x in (line.get("vendor"), line.get("cost_type"), line.get("memo")) if x)
+            day = date.fromisoformat(line["date"])
+            names = {jm.NOT_SURE: "Not sure yet", jm.NOT_A_JOB: "Not for a job (a general business cost)",
+                     **{j: labels[j] + (" · around that date" if j in near else "") for j in labels}}
+            choices[line["row"]] = st.selectbox(
+                ui.md_text(f"{day:%b} {day.day}, {day.year} · {what} · {jp.format_money(line['amount'])} "
+                           f"(row {line['row']})"),
+                options, format_func=lambda o, n=names: ui.md_text(n[o]), key=f"match-{asked}-{line['row']}")
+    return jm.apply(costs, choices, job_list)
 
 
 def _details(report: jp.ProfitReport) -> None:

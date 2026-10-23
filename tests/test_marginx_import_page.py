@@ -457,12 +457,63 @@ class MargenXImportPageTests(unittest.TestCase):
         gym = customers.set_index("Customer").loc["Demo Gym (fictional)"]
         self.assertEqual(("—", "—", "—", "Unavailable"), tuple(gym[["Sales", "Costs", "Direct contribution", "Status"]]))
 
-    def test_profit_needs_job_numbers_in_both_files(self):
-        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
-                             "Date,Vendor,Type,Amount\n10/31/2026,Paper Co (fictional),Materials,40.00\n")
-        self.assertFalse(at.exception, at.exception)
-        self.assertTrue(any("costs file has no job number column" in i.value for i in at.info))
+    def test_profit_needs_job_numbers_on_the_sales(self):
+        at = self.with_files("Invoice,Date,Customer,Amount\nA,10/31/2026,X (fictional),100.00\n",
+                             "Date,Vendor,Job,Type,Amount\n10/31/2026,Paper Co (fictional),J-1,Materials,40.00\n")
+        self.assertTrue(any("sales file has no job number column" in i.value for i in at.info))
         self.assertFalse(any("Direct contribution" in d.value.columns for d in at.dataframe))
+        self.assertEqual([], self.which_job(at))  # no jobs to choose from, so nothing is asked
+
+    def which_job(self, at):
+        return [s for s in at.selectbox if "(row " in s.label]
+
+    def test_costs_without_job_numbers_are_matched_only_by_the_owner(self):
+        # A costs file with no job column at all: MargenX asks which job each cost was for and never
+        # picks one itself. Until the owner answers, no cost counts toward any job.
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n"
+                             "B,10/01/2026,Y (fictional),J-2,90.00\n",
+                             "Date,Vendor,Type,Amount\n10/30/2026,Paper Co (fictional),Materials,40.00\n"
+                             "10/30/2026,Crew (fictional),Labor,25.50\n10/30/2026,Landlord (fictional),Rent,500.00\n")
+        asks = self.which_job(at)
+        self.assertEqual(2, len(asks))  # rent is overhead: not asked about
+        self.assertEqual(["", ""], [a.value for a in asks])  # every cost starts as "Not sure yet"
+        # J-1's sale is the day after: listed first and marked; J-2 is a month away, listed after.
+        self.assertEqual(["Not sure yet", "J-1 · X (fictional) · around that date",
+                          "Not for a job (a general business cost)", "J-2 · Y (fictional)"], asks[0].options)
+        jobs = self.profit_table(at).set_index("Job")
+        self.assertEqual("—", jobs.loc["J-1"]["Direct contribution"])  # nothing guessed
+        self.assertIn("2 cost line(s) worth $65.50 have no job number and may belong to this job.",
+                      jobs.loc["J-1"]["Why"])
+        for ask in asks:
+            ask.set_value("J-1")
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("$34.50", "Complete"), (job["Direct contribution"], job["Status"]))
+        self.assertIn("2 cost line(s) worth $65.50 had no job number in the file; you said which job each was for.",
+                      page_text(at))
+
+    def test_a_cost_the_owner_says_is_not_for_a_job_counts_as_overhead(self):
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                             "Date,Vendor,Job,Type,Amount\n10/30/2026,Paper Co (fictional),J-1,Materials,40.00\n"
+                             "10/30/2026,Crew (fictional),J-1,Labor,25.50\n"
+                             "10/30/2026,Shop Supply (fictional),,Supplies,15.00\n")
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual("Provisional", job["Status"])  # the unmatched $15 may belong to J-1
+        ask, = self.which_job(at)
+        ask.set_value("not_a_job").run()
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("$34.50", "Complete"), (job["Direct contribution"], job["Status"]))
+        self.assertIn("1 cost line(s) worth $15.00 had no job number in the file; you said they aren't for any "
+                      "job, so they're counted with overhead.", page_text(at))
+
+    def test_cost_text_in_the_which_job_question_is_escaped(self):
+        trap = "![t](https://e.example/p.png)"
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                             f"Date,Vendor,Type,Amount\n10/30/2026,{trap} Co,Materials,40.00\n")
+        ask, = self.which_job(at)
+        self.assertIn("e.example", ask.label)
+        self.assertNotRegex(ask.label, r"(?<!\\)!\\?\[|(?<!\\)\[")
 
     def test_complete_job_shows_an_exact_figure(self):
         at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
