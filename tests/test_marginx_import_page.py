@@ -533,6 +533,16 @@ class MargenXImportPageTests(unittest.TestCase):
         self.assertIn("(such as rent) aren't linked to a job", page_text(at))
         self.assertFalse(any("couldn't be imported" in t.value for t in at.text))
 
+    def test_contractor_and_custom_shop_demos_need_no_questions_either(self):
+        for sample_set, losing_job, loss, to_check in (("contractor", "J-206", "-$650.00", "J-207"),
+                                                       ("custom_shop", "K-304", "-$350.00", "K-308")):
+            at = self.run_page(sample_set=sample_set)
+            self.assertEqual(["Which made-up files?"], [r.label for r in at.radio if r.label != "File type"])
+            jobs = self.profit_table(at).set_index("Job")
+            self.assertEqual((loss, "Complete"), tuple(jobs.loc[losing_job, ["Direct contribution", "Status"]]))
+            self.assertEqual(("Provisional", "No labor recorded."), tuple(jobs.loc[to_check, ["Status", "Why"]]))
+            self.assertFalse(any("couldn't be imported" in t.value for t in at.text), sample_set)
+
     def test_switching_between_test_files_and_demo_keeps_results_apart(self):
         at = self.run_page()  # messy test files
         radio(at, SAMPLE_AMOUNT_QUESTION).set_value("line").run()

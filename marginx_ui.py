@@ -22,7 +22,8 @@ from job_profit import CATEGORIES, CATEGORY_LABELS, ProfitReport
 from marginx_insights import Insight, Summary, money, percent, pricing
 
 BRAND = "MargenX"  # the product name, in one place
-TAGLINE = "Profit per job for print, sign and apparel shops"
+# Fits every kind of business MargenX is for: those that quote, do and bill work by the job.
+TAGLINE = "See which jobs make you money, and which lose it"
 
 _CSS = """
 <style>
