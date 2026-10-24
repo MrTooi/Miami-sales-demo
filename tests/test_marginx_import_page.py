@@ -476,16 +476,16 @@ class MargenXImportPageTests(unittest.TestCase):
                              "10/30/2026,Crew (fictional),Labor,25.50\n10/30/2026,Landlord (fictional),Rent,500.00\n")
         asks = self.which_job(at)
         self.assertEqual(2, len(asks))  # rent is overhead: not asked about
-        self.assertEqual(["", ""], [a.value for a in asks])  # every cost starts as "Not sure yet"
+        self.assertEqual(["Not sure yet"] * 2, [a.options[a.index] for a in asks])  # nothing is picked
         # J-1's sale is the day after: listed first and marked; J-2 is a month away, listed after.
-        self.assertEqual(["Not sure yet", "J-1 · X (fictional) · around that date",
-                          "Not for a job (a general business cost)", "J-2 · Y (fictional)"], asks[0].options)
+        self.assertEqual(["Not sure yet", "Job J-1 · X (fictional) · around that date",
+                          "Not for a job (a general business cost)", "Job J-2 · Y (fictional)"], asks[0].options)
         jobs = self.profit_table(at).set_index("Job")
         self.assertEqual("—", jobs.loc["J-1"]["Direct contribution"])  # nothing guessed
         self.assertIn("2 cost line(s) worth $65.50 have no job number and may belong to this job.",
                       jobs.loc["J-1"]["Why"])
         for ask in asks:
-            ask.set_value("J-1")
+            ask.select_index(1)  # Job J-1
         at.run()
         self.assertFalse(at.exception, at.exception)
         job = self.profit_table(at).set_index("Job").loc["J-1"]
@@ -501,11 +501,46 @@ class MargenXImportPageTests(unittest.TestCase):
         job = self.profit_table(at).set_index("Job").loc["J-1"]
         self.assertEqual("Provisional", job["Status"])  # the unmatched $15 may belong to J-1
         ask, = self.which_job(at)
-        ask.set_value("not_a_job").run()
+        ask.select_index(ask.options.index("Not for a job (a general business cost)")).run()
         job = self.profit_table(at).set_index("Job").loc["J-1"]
         self.assertEqual(("$34.50", "Complete"), (job["Direct contribution"], job["Status"]))
         self.assertIn("1 cost line(s) worth $15.00 had no job number in the file; you said they aren't for any "
                       "job, so they're counted with overhead.", page_text(at))
+
+    def test_a_job_named_like_a_choice_gets_its_cost(self):
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),not_a_job,100.00\n",
+                             "Date,Vendor,Type,Amount\n10/30/2026,Paper Co (fictional),Materials,40.00\n"
+                             "10/30/2026,Crew (fictional),Labor,25.50\n")
+        asks = self.which_job(at)
+        self.assertEqual(["Not sure yet", "Job not_a_job · X (fictional) · around that date",
+                          "Not for a job (a general business cost)"], asks[0].options)
+        for ask in asks:
+            ask.select_index(1)  # the job, not "Not for a job"
+        at.run()
+        job = self.profit_table(at).set_index("Job").loc["not_a_job"]
+        self.assertEqual(("$34.50", "Complete"), (job["Direct contribution"], job["Status"]))
+
+    def test_new_files_never_reuse_old_answers(self):
+        # The same job numbers, dates, amounts and rows, but a different customer on the sales file:
+        # every answer resets, so old answers are never applied to new records.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        sales, costs = Path(tmp.name, "fictional_invoices.csv"), Path(tmp.name, "fictional_costs.csv")
+        sales.write_text("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n", encoding="utf-8")
+        costs.write_text("Date,Vendor,Type,Amount\n10/30/2026,Paper Co (fictional),Materials,40.00\n", encoding="utf-8")
+        source = Path(PAGE).read_text(encoding="utf-8").replace(
+            'SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"', f"SAMPLES = Path({tmp.name!r})").replace(
+            'DEFAULT_SAMPLE_SET = "demo"', 'DEFAULT_SAMPLE_SET = "test"')
+        at = run_source(source)
+        ask, = self.which_job(at)
+        ask.select_index(1).run()
+        self.assertEqual("Job J-1 · X (fictional) · around that date", self.which_job(at)[0].options[
+            self.which_job(at)[0].index])
+        sales.write_text("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,Z (fictional),J-1,100.00\n", encoding="utf-8")
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+        ask, = self.which_job(at)
+        self.assertEqual("Not sure yet", ask.options[ask.index])
 
     def test_cost_text_in_the_which_job_question_is_escaped(self):
         trap = "![t](https://e.example/p.png)"

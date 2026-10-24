@@ -49,7 +49,7 @@ class MatchingTests(unittest.TestCase):
         self.assertTrue(all(j.status == "provisional" for j in after.jobs))  # $450 may belong to either job
 
     def test_answers_put_each_cost_on_exactly_the_chosen_job(self):
-        answered = jm.apply(self.costs, {5: "J-1", 7: jm.NOT_A_JOB}, self.jobs)
+        answered = jm.apply(self.costs, {5: jm.job("J-1"), 7: jm.NOT_A_JOB}, self.jobs)
         report = jp.job_profit(self.invoices, answered)
         self.assertEqual((Decimal("300.00"), "complete"), (self.job(report, "J-1").contribution,
                                                            self.job(report, "J-1").status))  # 1000 - 300 - 400
@@ -63,26 +63,46 @@ class MatchingTests(unittest.TestCase):
                       "so they're counted with overhead.", report.notes)
 
     def test_the_original_file_result_is_never_changed(self):
-        jm.apply(self.costs, {5: "J-1", 7: jm.NOT_A_JOB}, self.jobs)
+        jm.apply(self.costs, {5: jm.job("J-1"), 7: jm.NOT_A_JOB}, self.jobs)
         self.assertEqual("", self.costs.accepted[3].get("job_id", ""))
         self.assertNotIn("not_for_a_job", self.costs.accepted[5])
 
     def test_a_job_that_is_not_in_the_files_is_refused(self):
         with self.assertRaises(ValueError):
-            jm.apply(self.costs, {5: "J-9"}, self.jobs)
+            jm.apply(self.costs, {5: jm.job("J-9")}, self.jobs)
 
     def test_a_cost_that_already_has_a_job_or_is_overhead_cannot_be_moved(self):
         with self.assertRaises(ValueError):
-            jm.apply(self.costs, {2: "J-2"}, self.jobs)  # row 2 is already J-1's labor
+            jm.apply(self.costs, {2: jm.job("J-2")}, self.jobs)  # row 2 is already J-1's labor
         with self.assertRaises(ValueError):
-            jm.apply(self.costs, {6: "J-1"}, self.jobs)  # row 6 is rent
+            jm.apply(self.costs, {6: jm.job("J-1")}, self.jobs)  # row 6 is rent
+
+    def test_a_plain_job_number_is_never_taken_as_an_answer(self):
+        # Answers are tagged pairs: a bare string, even a real job number, is refused.
+        with self.assertRaises(ValueError):
+            jm.apply(self.costs, {5: "J-1"}, self.jobs)
+
+    def test_a_job_named_like_a_choice_still_gets_its_costs(self):
+        # A job numbered "not_a_job" (or "not_sure") is a job like any other: picking it puts the
+        # cost on that job, never in overhead.
+        invoices = read(b"Invoice,Date,Customer,Job,Amount\nI-1,10/31/2026,Gomez (fictional),not_a_job,1000.00\n"
+                        b"I-2,10/31/2026,Rivera (fictional),not_sure,500.00\n", "invoices")
+        costs = read(b"Date,Vendor,Type,Amount\n10/30/2026,Crew (fictional),Labor,300.00\n"
+                     b"10/30/2026,Tile Co (fictional),Materials,400.00\n", "costs")
+        job_list = jm.jobs(invoices, costs)
+        report = jp.job_profit(invoices, jm.apply(costs, {2: jm.job("not_a_job"), 3: jm.job("not_a_job")}, job_list))
+        self.assertEqual((Decimal("300.00"), "complete"), (self.job(report, "not_a_job").contribution,
+                                                           self.job(report, "not_a_job").status))
+        self.assertEqual(Decimal("0"), report.unlinked_costs)  # nothing went to overhead
+        self.assertNotEqual(jm.job("not_a_job"), jm.NOT_A_JOB)
+        self.assertNotEqual(jm.job("not_sure"), jm.NOT_SURE)
 
     def test_a_costs_file_with_no_job_column_can_still_be_matched(self):
         costs = read(b"Date,Vendor,Type,Amount\n10/30/2026,Crew (fictional),Labor,300.00\n"
                      b"10/30/2026,Tile Co (fictional),Materials,400.00\n", "costs")
         self.assertFalse(jp.job_profit(self.invoices, costs).available)  # nothing to match on, as before
         job_list = jm.jobs(self.invoices, costs)
-        report = jp.job_profit(self.invoices, jm.apply(costs, {2: "J-1", 3: "J-1"}, job_list))
+        report = jp.job_profit(self.invoices, jm.apply(costs, {2: jm.job("J-1"), 3: jm.job("J-1")}, job_list))
         self.assertEqual((Decimal("300.00"), "complete"), (self.job(report, "J-1").contribution,
                                                            self.job(report, "J-1").status))
         self.assertEqual("unavailable", self.job(report, "J-2").status)  # no costs were said to be J-2's

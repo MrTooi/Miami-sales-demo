@@ -363,14 +363,16 @@ def which_job(invoices: ji.IntakeResult, costs: ji.IntakeResult) -> ji.IntakeRes
     job_list = jm.jobs(invoices, costs)
     if not rows or not job_list:
         return costs
+    # Every job starts with "Job ", so no job number can read the same as MargenX's own choices.
     labels = {}
     for job in job_list:
         about = " · ".join(x for x in (job.description, ", ".join(job.customers)) if x)
-        labels[job.job_id] = f"{job.job_id} · {about}" if about else job.job_id
-    # Answers are keyed to these exact files, so new or changed files ask again.
-    asked = hashlib.sha256(repr(([(r["row"], str(r["amount"]), r["date"]) for r in rows],
-                                 [j.job_id for j in job_list])).encode("utf-8")).hexdigest()[:12]
-    choices: dict[int, str] = {}
+        labels[job.job_id] = f"Job {job.job_id} · {about}" if about else f"Job {job.job_id}"
+    # Answers are keyed to everything read from both files (every row, how each column was read), so
+    # any change to either file asks again instead of applying old answers to new records.
+    asked = hashlib.sha256(repr([(r.kind, r.headers, r.mapped_fields, r.total_rows, r.accepted, r.rejected, r.skipped)
+                                 for r in (invoices, costs)]).encode("utf-8")).hexdigest()[:12]
+    choices: dict[int, tuple[str, str]] = {}
     answered = sum(1 for r in rows if st.session_state.get(f"match-{asked}-{r['row']}", jm.NOT_SURE) != jm.NOT_SURE)
     with st.expander(f"Which job was each cost for? {answered} of {len(rows)} answered", expanded=answered < len(rows)):
         st.caption(f"These {len(rows)} costs don't say which job they were for. If you know, pick the job; if "
@@ -379,11 +381,11 @@ def which_job(invoices: ji.IntakeResult, costs: ji.IntakeResult) -> ji.IntakeRes
         for line in rows:
             near = jm.nearby(line, job_list)
             others = [j.job_id for j in job_list if j.job_id not in near]
-            options = [jm.NOT_SURE, *near, jm.NOT_A_JOB, *others]
+            options = [jm.NOT_SURE, *map(jm.job, near), jm.NOT_A_JOB, *map(jm.job, others)]
             what = " · ".join(x for x in (line.get("vendor"), line.get("cost_type"), line.get("memo")) if x)
             day = date.fromisoformat(line["date"])
             names = {jm.NOT_SURE: "Not sure yet", jm.NOT_A_JOB: "Not for a job (a general business cost)",
-                     **{j: labels[j] + (" · around that date" if j in near else "") for j in labels}}
+                     **{jm.job(j): labels[j] + (" · around that date" if j in near else "") for j in labels}}
             choices[line["row"]] = st.selectbox(
                 ui.md_text(f"{day:%b} {day.day}, {day.year} · {what} · {jp.format_money(line['amount'])} "
                            f"(row {line['row']})"),

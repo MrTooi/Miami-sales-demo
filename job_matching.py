@@ -13,8 +13,10 @@ from datetime import date
 from job_intake import IntakeResult
 from job_profit import cost_category
 
-NOT_SURE = ""            # not answered yet: the cost stays unlinked and keeps jobs provisional
-NOT_A_JOB = "not_a_job"  # the owner says it's a general business cost, like overhead
+# An answer is a tagged pair, so a job number from a file can never be mistaken for one of
+# MargenX's own choices (a job named "not_a_job" is still just a job).
+NOT_SURE = ("not_sure", "")    # not answered yet: the cost stays unlinked and keeps jobs provisional
+NOT_A_JOB = ("not_a_job", "")  # the owner says it's a general business cost, like overhead
 NEAR_DAYS = 7            # "around that date": a job with a sale or cost this many days either side
 
 
@@ -24,6 +26,11 @@ class Job:
     description: str
     customers: tuple[str, ...]
     dates: tuple[str, ...]  # ISO dates of the job's sales and costs in these files
+
+
+def job(job_id: str) -> tuple[str, str]:
+    """The answer "this cost was for job job_id"."""
+    return ("job", job_id)
 
 
 def jobs(invoices: IntakeResult, costs: IntakeResult) -> list[Job]:
@@ -66,10 +73,10 @@ def nearby(line: dict, job_list: list[Job]) -> list[str]:
     return [job_id for _, job_id in sorted(distances)]
 
 
-def apply(costs: IntakeResult, choices: dict[int, str], job_list: list[Job]) -> IntakeResult:
+def apply(costs: IntakeResult, choices: dict[int, tuple[str, str]], job_list: list[Job]) -> IntakeResult:
     """The costs with the owner's answers applied, keyed by the cost's row in its file.
 
-    A job number is set on that line (marked as the owner's answer); NOT_A_JOB marks it as a
+    job(id) sets that job number on the line (marked as the owner's answer); NOT_A_JOB marks it as a
     general business cost; NOT_SURE changes nothing. The original result is never changed.
     """
     known = {job.job_id for job in job_list}
@@ -82,8 +89,8 @@ def apply(costs: IntakeResult, choices: dict[int, str], job_list: list[Job]) -> 
                 raise ValueError(f"Row {line['row']} already has a job number or is overhead; it isn't asked about.")
             if choice == NOT_A_JOB:
                 line = {**line, "not_for_a_job": True}
-            elif choice in known:
-                line = {**line, "job_id": choice, "job_from_owner": True}
+            elif tuple(choice)[:1] == ("job",) and len(choice) == 2 and choice[1] in known:
+                line = {**line, "job_id": choice[1], "job_from_owner": True}
             else:
                 raise ValueError(f"Row {line['row']}: {choice!r} isn't a job in these files.")
         accepted.append(line)
