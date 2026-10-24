@@ -1,0 +1,9 @@
+Invoice,Date,Customer,Job,Description,Amount
+INV-3001,10/01/2026,Rivera Family (fictional),J-201,Kitchen remodel,24000.00
+INV-3002,10/03/2026,Ocean View Condos (fictional),J-202,Lobby flooring,9200.00
+INV-3003,10/06/2026,Ocean View Condos (fictional),J-203,Unit 4B bathroom,7800.00
+INV-3004,10/09/2026,Sunset Dental (fictional),J-204,Office painting,4600.00
+INV-3005,10/14/2026,Ocean View Condos (fictional),J-205,Hallway repaint,5400.00
+INV-3006,10/16/2026,Gomez Family (fictional),J-206,Bathroom remodel,8900.00
+INV-3007,10/21/2026,Kendall Pediatrics (fictional),J-207,Waiting room flooring,6300.00
+INV-3008,10/27/2026,Ocean View Condos (fictional),J-208,Pool deck tile,11200.00

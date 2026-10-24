@@ -1,4 +1,4 @@
-"""Build the MargenX demo page: one static HTML file of the made-up demo sign shop (D-006).
+"""Build a MargenX demo page: one static HTML file of a made-up demo business (D-006).
 
 The page is what the public demo link shows. It is built from the real MargenX code, so its numbers
 and look always match the app: the demo shop's sample files go through the same intake and profit
@@ -6,7 +6,7 @@ engine (job_intake, job_profit), the same summary (marginx_insights), and the sa
 (marginx_ui). It is plain HTML and CSS: no server, no script, no form and no way to upload anything.
 Clicking a job or a customer still opens its breakdown (HTML details elements).
 
-Usage: python scripts/build_demo_page.py OUTPUT.html
+Usage: python scripts/build_demo_page.py OUTPUT.html [sign_shop|contractor|custom_shop]
 """
 from __future__ import annotations
 
@@ -25,10 +25,21 @@ import marginx_insights as mi  # noqa: E402
 import marginx_ui as ui  # noqa: E402
 
 SAMPLES = ROOT / "sample_data" / "marginx"
-DEMO_FILES = {"invoices": "demo_sign_shop_invoices.csv", "costs": "demo_sign_shop_costs.csv"}
-TITLE = "MargenX Demo Shop"
-NOTICE = ("Online demo with a made-up sign shop. Every name and number here is invented. "
-          "It's an example of what MargenX shows.")
+# Each demo business: its page title, and what the notice at the top calls it.
+SHOPS = {
+    "sign_shop": ("MargenX Demo Shop", "a made-up sign shop"),
+    "contractor": ("MargenX Demo Contractor", "a made-up remodeling contractor"),
+    "custom_shop": ("MargenX Demo Custom Shop", "a made-up cabinet and metal shop"),
+}
+
+
+def demo_files(shop: str) -> dict[str, str]:
+    return {kind: f"demo_{shop}_{kind}.csv" for kind in ("invoices", "costs")}
+
+
+def notice(shop: str) -> str:
+    return (f"Online demo with {SHOPS[shop][1]}. Every name and number here is invented. "
+            "It's an example of what MargenX shows.")
 
 # The page's own layout around the app's styles: a centred column with a safe side gutter on phones.
 PAGE_CSS = """
@@ -47,10 +58,10 @@ summary:focus-visible{outline:2px solid #0F7A55;outline-offset:2px;border-radius
 """
 
 
-def demo_report() -> jp.ProfitReport:
-    """The demo shop through the same intake and engine as the app, with every automatic choice."""
+def demo_report(shop: str = "sign_shop") -> jp.ProfitReport:
+    """A demo business through the same intake and engine as the app, with every automatic choice."""
     results = {}
-    for kind, name in DEMO_FILES.items():
+    for kind, name in demo_files(shop).items():
         headers, records = ji.read_csv((SAMPLES / name).read_bytes())
         mapping = ji.suggest_mapping(headers, kind)
         date_format = ji.suggest_date_format(ji.column_values(headers, records, mapping["date"])) or "MM/DD/YYYY"
@@ -72,17 +83,17 @@ def _render(fn, *args) -> str:
     return "".join(out)
 
 
-def build_page() -> str:
-    report = demo_report()
+def build_page(shop: str = "sign_shop") -> str:
+    report = demo_report(shop)
     summary = mi.summarize(report)
     header = _render(ui.header, False)
     results = _render(ui.results, report, summary, mi.attention(report), mi.period_text(report))
     # Notes shown under the results in the app (the overhead note is already the "after overhead" line).
     notes = "".join(f"<div>{escape(n)}</div>" for n in report.notes if "overhead or fee line" not in n)
     notes_html = f'<div class="mx-notes">{notes}</div>' if notes else ""
-    head, rest = NOTICE.split(". ", 1)
+    head, rest = notice(shop).split(". ", 1)
     return (
-        f"<title>{escape(TITLE)}</title>\n"
+        f"<title>{escape(SHOPS[shop][0])}</title>\n"
         '<meta name="claude:viewport-fit-sides" content="cover">\n'
         f"{ui._CSS}{PAGE_CSS}"
         '<main class="mx-page">'
@@ -96,10 +107,10 @@ def build_page() -> str:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
+    if len(argv) not in (2, 3) or (len(argv) == 3 and argv[2] not in SHOPS):
         print(__doc__.strip().splitlines()[-1])
         return 2
-    Path(argv[1]).write_text(build_page(), encoding="utf-8")
+    Path(argv[1]).write_text(build_page(argv[2] if len(argv) == 3 else "sign_shop"), encoding="utf-8")
     print(f"wrote {argv[1]}")
     return 0
 

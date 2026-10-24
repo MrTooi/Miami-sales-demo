@@ -131,3 +131,25 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
   - Anyone the owner shares the link with sees the made-up demo. Acceptable: it holds no real data and has no input of any kind.
   - The page doesn't update itself: after screen or sample changes, rebuild and republish (`docs/DEMO_LINK.md`).
 - Evidence / links: PR #112 (closed) and its ChatGPT manual review; `tests/test_demo_page.py`; `docs/DEMO_LINK.md`.
+
+### D-007 — MargenX is for job-based small businesses, not only print shops
+- Date: 2026-10-22 (confirmed for this record on 2026-10-24)
+- Status: Accepted (in force once the PR adding this entry is merged with the owner's approval)
+- Decided by: Human owner (MrTooi), in a Claude Code session on 2026-10-22: "our product isn't just for print shops we shouldn't try to make a master product for everyone but we can do more". The owner confirmed this wording with "yes, record it" on 2026-10-24. The manual review of PR #122 asked for the record, because D-003 requires a new decision to change the target customer type.
+- Context: Walk-in visits to print shops didn't lead to conversations, and the customer plan was redone on 2026-10-22. MargenX's math works the same for any business that bills by job and has job costs.
+- Decision:
+  1. The pilot target widens from small print/service shops to job-based small businesses:
+     - print, sign and apparel shops
+     - trade contractors (remodeling, flooring and similar)
+     - custom makers and installers (cabinets, metal work and similar)
+  2. It isn't a product for every business. (The 2026-10-22 plan lists businesses that only sell time, such as cleaning or consulting, as "not for now", because MargenX needs labor and materials or outsourced work on a job to call it complete.)
+  3. The authorized scope of D-003 (a) to (e) is otherwise unchanged.
+- Not changed:
+  - Real customer data still needs step 3b and a separate owner decision for a named pilot shop, used only in the sit-down pilot on the team laptop.
+  - Pricing and launch claims, live integrations, production deployment and unattended agents still need their own owner decisions.
+  - Merging still needs the owner's explicit approval for each PR.
+- Consequences / risks:
+  - Demos and slides are made per business type, with made-up data only (PR #122).
+  - Owners in the new groups may record costs differently, for example receipts with no job number. That is handled by asking the owner, never by guessing (PR #123).
+  - A wider target can blur focus. The plan's scorecard (Nov 13) decides which groups to keep.
+- Evidence / links: PR #122 and its manual review; PR #123; the 2026-10-22 customer plan (shared with Abrey as a claude.ai document, not in this repository).

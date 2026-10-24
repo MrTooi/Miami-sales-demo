@@ -1,0 +1,21 @@
+Bill,Date,Vendor,Job,Type,Memo,Amount
+B-701,09/29/2026,Home Supply Depot (fictional),J-201,Materials,Cabinets and quartz counters,6400.00
+B-702,10/01/2026,Bay Plumbing & Electric (fictional),J-201,Subcontractor,Plumbing and electrical,2400.00
+B-703,10/01/2026,Crew payroll (fictional),J-201,Labor,Demo and install crew,3800.00
+B-704,10/02/2026,Tile Outlet (fictional),J-202,Materials,Porcelain tile and setting materials,4100.00
+B-705,10/03/2026,Crew payroll (fictional),J-202,Labor,Flooring crew,4500.00
+B-706,10/04/2026,Tile Outlet (fictional),J-203,Materials,Tile and fixtures,2900.00
+B-707,10/05/2026,Bay Plumbing & Electric (fictional),J-203,Subcontractor,Plumbing,1800.00
+B-708,10/06/2026,Crew payroll (fictional),J-203,Labor,Bathroom crew,2500.00
+B-709,10/08/2026,Paint Center (fictional),J-204,Materials,Paint and supplies,700.00
+B-710,10/09/2026,Crew payroll (fictional),J-204,Labor,Painting crew,1000.00
+B-711,10/13/2026,Paint Center (fictional),J-205,Materials,Paint and supplies,900.00
+B-712,10/14/2026,Crew payroll (fictional),J-205,Labor,Painting crew (weekend),4100.00
+B-713,10/14/2026,Tile Outlet (fictional),J-206,Materials,Tile reordered after wrong size,4300.00
+B-714,10/15/2026,Bay Plumbing & Electric (fictional),J-206,Subcontractor,Plumbing (extra trip),2600.00
+B-715,10/16/2026,Crew payroll (fictional),J-206,Labor,Bathroom crew (extra days),2650.00
+B-716,10/20/2026,Tile Outlet (fictional),J-207,Materials,Vinyl plank flooring,3100.00
+B-717,10/24/2026,Tile Outlet (fictional),J-208,Materials,Pool deck pavers,4800.00
+B-718,10/26/2026,Crew payroll (fictional),J-208,Labor,Deck crew,5200.00
+B-719,10/27/2026,Bay Plumbing & Electric (fictional),J-208,Subcontractor,Drain relocation,900.00
+B-720,10/31/2026,Landlord (fictional),,Rent,Office and yard rent October,2500.00
