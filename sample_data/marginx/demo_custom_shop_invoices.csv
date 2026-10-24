@@ -1,0 +1,9 @@
+Invoice,Date,Customer,Job,Description,Amount
+INV-4001,10/02/2026,Morales Family (fictional),K-301,Kitchen cabinets,14800.00
+INV-4002,10/05/2026,Lopez Residence (fictional),K-302,Closet built-ins,6200.00
+INV-4003,10/07/2026,Brickell Wine Bar (fictional),K-303,Bar top and shelving,9800.00
+INV-4004,10/09/2026,Grove Boutique (fictional),K-304,Store display (rush),4200.00
+INV-4005,10/13/2026,Harbor Builders (fictional),K-305,Stair railing,7600.00
+INV-4006,10/16/2026,Harbor Builders (fictional),K-306,Model unit cabinets,12400.00
+INV-4007,10/21/2026,Harbor Builders (fictional),K-307,Entry gate,5800.00
+INV-4008,10/26/2026,Lopez Residence (fictional),K-308,Vanity cabinets,3900.00

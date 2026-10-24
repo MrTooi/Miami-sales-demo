@@ -33,11 +33,18 @@ import pilot_safety as ps  # noqa: E402
 
 SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"
 SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")
-# A clean made-up shop for showing MargenX to owners: no questions to answer, one losing job, a big
-# customer who barely makes money, one job missing labor, and rent as unlinked overhead.
-DEMO_FILES = ("demo_sign_shop_invoices.csv", "demo_sign_shop_costs.csv")
+# Clean made-up businesses for showing MargenX to owners, one per kind of business we talk to. Each
+# has no questions to answer, one losing job, a big customer who barely makes money, one job
+# missing labor, and rent as unlinked overhead.
+DEMO_SETS = {
+    "demo": ("demo_sign_shop_invoices.csv", "demo_sign_shop_costs.csv"),
+    "contractor": ("demo_contractor_invoices.csv", "demo_contractor_costs.csv"),
+    "custom_shop": ("demo_custom_shop_invoices.csv", "demo_custom_shop_costs.csv"),
+}
 DEFAULT_SAMPLE_SET = "demo"
-SAMPLE_SET_LABELS = {"demo": "Demo sign shop (clean example to show owners)",
+SAMPLE_SET_LABELS = {"demo": "Demo sign shop",
+                     "contractor": "Demo remodeling contractor",
+                     "custom_shop": "Demo cabinet and metal shop",
                      "test": "Messy test files (errors, gaps and questions)"}
 KIND_LABELS = {"invoices": "sales / invoices", "costs": "costs / bills"}
 NOT_MAPPED = "(not in this file)"
@@ -113,7 +120,7 @@ if use_samples:
     sample_set = controls.radio("Which made-up files?", list(SAMPLE_SET_LABELS),
                                 index=list(SAMPLE_SET_LABELS).index(DEFAULT_SAMPLE_SET),
                                 format_func=SAMPLE_SET_LABELS.get, horizontal=True, key=f"sampleset-{session}")
-    chosen = DEMO_FILES if sample_set == "demo" else SAMPLE_FILES
+    chosen = DEMO_SETS.get(sample_set, SAMPLE_FILES)
     files = [(name, (SAMPLES / name).read_bytes()) for name in chosen]
 else:
     # The box comes first: the upload area isn't shown, so no file can be received, until it is ticked.
