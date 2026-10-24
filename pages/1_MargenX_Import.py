@@ -362,7 +362,9 @@ def which_job(invoices: ji.IntakeResult, costs: ji.IntakeResult) -> ji.IntakeRes
     rows = jm.unmatched(costs)
     job_list = jm.jobs(invoices, costs)
     if not rows or not job_list:
-        return costs
+        # Nothing to ask, but a costs file with no job column still gets one (every line blank), so it's
+        # read like any other file instead of refused.
+        return jm.apply(costs, {}, job_list)
     # Every job starts with "Job ", so no job number can read the same as MargenX's own choices.
     labels = {}
     for job in job_list:

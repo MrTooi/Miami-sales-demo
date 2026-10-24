@@ -493,6 +493,17 @@ class MargenXImportPageTests(unittest.TestCase):
         self.assertIn("2 cost line(s) worth $65.50 had no job number in the file; you said which job each was for.",
                       page_text(at))
 
+    def test_a_costs_file_with_only_overhead_and_no_job_column_is_read(self):
+        # Nothing to ask about (rent isn't), but the file is still read: rent stays overhead, and the
+        # job has no costs, so it has no figure rather than looking complete.
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                             "Date,Vendor,Type,Amount\n10/30/2026,Landlord (fictional),Rent,500.00\n")
+        self.assertEqual([], self.which_job(at))
+        self.assertFalse(any("costs file has no job number column" in i.value for i in at.info))
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("—", "Unavailable"), (job["Direct contribution"], job["Status"]))
+        self.assertIn("1 overhead or fee line(s) worth $500.00", page_text(at))
+
     def test_a_cost_the_owner_says_is_not_for_a_job_counts_as_overhead(self):
         at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
                              "Date,Vendor,Job,Type,Amount\n10/30/2026,Paper Co (fictional),J-1,Materials,40.00\n"
