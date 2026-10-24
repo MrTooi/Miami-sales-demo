@@ -108,5 +108,50 @@ class MatchingTests(unittest.TestCase):
         self.assertEqual("unavailable", self.job(report, "J-2").status)  # no costs were said to be J-2's
 
 
+class SourceKeyTests(unittest.TestCase):
+    def test_any_change_to_a_file_or_how_it_was_read_changes_its_key(self):
+        reading = (0, "invoices", [("job_id", "Job")], "MM/DD/YYYY", None, [])
+        key = jm.source_key("sales.csv", b"rows", reading)
+        self.assertEqual(key, jm.source_key("sales.csv", b"rows", reading))  # the same file, read the same way
+        self.assertNotEqual(key, jm.source_key("sales (2).csv", b"rows", reading))  # renamed
+        self.assertNotEqual(key, jm.source_key("sales.csv", b"Shop B\nrows", reading))  # another title line
+        self.assertNotEqual(key, jm.source_key("sales.csv", b"rows", (0, "invoices", [("job_id", "Project")],
+                                                                      "MM/DD/YYYY", None, [])))  # another column
+        self.assertNotEqual(key, jm.source_key("sales.csv", b"rows", (0, "invoices", [("job_id", "Job")],
+                                                                      "DD/MM/YYYY", None, [])))  # another date answer
+
+
+class AnswerChangeTests(unittest.TestCase):
+    """Changing or taking back an answer gives exactly the figures of the new answer, never a mix."""
+
+    def setUp(self):
+        self.invoices, self.costs = read(INVOICES, "invoices"), read(COSTS, "costs")
+        self.jobs = jm.jobs(self.invoices, self.costs)
+        self.original = [dict(line) for line in self.costs.accepted]
+
+    def figures(self, choices):
+        report = jp.job_profit(self.invoices, jm.apply(self.costs, choices, self.jobs))
+        self.assertEqual(self.original, self.costs.accepted)  # the file's own result is never changed
+        jobs = {j.job_id: (j.contribution, j.status) for j in report.jobs}
+        return jobs["J-1"], jobs["J-2"], report.unlinked_costs, report.unlinked_job_costs
+
+    def test_every_answer_change_gives_the_new_answers_figures(self):
+        d = Decimal
+        unanswered = ((d("700.00"), "provisional"), (d("500.00"), "provisional"), d("1350.00"), d("450.00"))
+        tile_j1 = ((d("300.00"), "complete"), (d("500.00"), "complete"), d("950.00"), d("0"))
+        tile_not_a_job = ((d("700.00"), "provisional"), (d("500.00"), "complete"), d("1350.00"), d("0"))
+        tile_j2 = ((d("700.00"), "provisional"), (d("100.00"), "complete"), d("950.00"), d("0"))
+        supplies = {7: jm.NOT_A_JOB}
+        steps = [  # J-1 -> Not sure, J-1 -> Not for a job, Not for a job -> J-2, Not for a job -> Not sure
+            ({5: jm.job("J-1"), **supplies}, tile_j1), ({}, unanswered),
+            ({5: jm.job("J-1"), **supplies}, tile_j1), ({5: jm.NOT_A_JOB, **supplies}, tile_not_a_job),
+            ({5: jm.job("J-2"), **supplies}, tile_j2),
+            ({5: jm.NOT_A_JOB, **supplies}, tile_not_a_job), ({5: jm.NOT_SURE, 7: jm.NOT_SURE}, unanswered),
+        ]
+        for choices, expected in steps:
+            with self.subTest(choices=choices):
+                self.assertEqual(expected, self.figures(choices))
+
+
 if __name__ == "__main__":
     unittest.main()

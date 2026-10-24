@@ -531,27 +531,119 @@ class MargenXImportPageTests(unittest.TestCase):
         job = self.profit_table(at).set_index("Job").loc["not_a_job"]
         self.assertEqual(("$34.50", "Complete"), (job["Direct contribution"], job["Status"]))
 
-    def test_new_files_never_reuse_old_answers(self):
-        # The same job numbers, dates, amounts and rows, but a different customer on the sales file:
-        # every answer resets, so old answers are never applied to new records.
+    # Sales for J-1, its labor tagged, and a $40 materials receipt with no job number: once the owner
+    # says the receipt was J-1's, J-1 is complete ($100 - $25.50 - $40 = $34.50).
+    SALES = "Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n"
+    COSTS = ("Date,Vendor,Job,Type,Amount\n10/30/2026,Crew (fictional),J-1,Labor,25.50\n"
+             "10/30/2026,Paper Co (fictional),,Materials,40.00\n")
+
+    def swappable_files(self, sales=SALES, costs=COSTS):
+        """The page on two made-up files that a test can rewrite between runs, as an owner swapping files."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        sales, costs = Path(tmp.name, "fictional_invoices.csv"), Path(tmp.name, "fictional_costs.csv")
-        sales.write_text("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n", encoding="utf-8")
-        costs.write_text("Date,Vendor,Type,Amount\n10/30/2026,Paper Co (fictional),Materials,40.00\n", encoding="utf-8")
+        paths = Path(tmp.name, "fictional_invoices.csv"), Path(tmp.name, "fictional_costs.csv")
+        paths[0].write_text(sales, encoding="utf-8")
+        paths[1].write_text(costs, encoding="utf-8")
         source = Path(PAGE).read_text(encoding="utf-8").replace(
             'SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"', f"SAMPLES = Path({tmp.name!r})").replace(
             'DEFAULT_SAMPLE_SET = "demo"', 'DEFAULT_SAMPLE_SET = "test"')
         at = run_source(source)
+        self.assertFalse(at.exception, at.exception)
+        return at, paths
+
+    def answer(self, at, label):
         ask, = self.which_job(at)
-        ask.select_index(1).run()
-        self.assertEqual("Job J-1 · X (fictional) · around that date", self.which_job(at)[0].options[
-            self.which_job(at)[0].index])
-        sales.write_text("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,Z (fictional),J-1,100.00\n", encoding="utf-8")
+        ask.select_index(ask.options.index(label)).run()
+        self.assertFalse(at.exception, at.exception)
+
+    def answered(self, at):
+        ask, = self.which_job(at)
+        return ask.options[ask.index]
+
+    def j1(self, at):
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        return job["Direct contribution"], job["Status"]
+
+    def assert_swap_resets(self, change, first="Job J-1 · X (fictional) · around that date"):
+        """Answer, swap a file, and check the answer is gone and J-1 is no longer complete."""
+        at, paths = self.swappable_files()
+        self.answer(at, first)
+        self.assertEqual(first, self.answered(at))
+        change(*paths)
         at.run()
         self.assertFalse(at.exception, at.exception)
-        ask, = self.which_job(at)
-        self.assertEqual("Not sure yet", ask.options[ask.index])
+        self.assertEqual("Not sure yet", self.answered(at))
+        self.assertEqual("Provisional", self.j1(at)[1])  # the $40 may be J-1's again: not complete
+        return at
+
+    def test_new_files_never_reuse_old_answers(self):
+        # The same job numbers, dates, amounts and rows, but a different customer on the sales file.
+        self.assert_swap_resets(lambda sales, costs: sales.write_text(self.SALES.replace("X (fictional)", "Z (fictional)"),
+                                                                       encoding="utf-8"),
+                                first="Job J-1 · X (fictional) · around that date")
+
+    def test_a_sales_file_that_differs_only_in_its_title_never_reuses_answers(self):
+        # A report title line is dropped by the reader, so the rows read the same; the file isn't.
+        at, paths = self.swappable_files(sales="Shop A (fictional)\n" + self.SALES)
+        self.answer(at, "Job J-1 · X (fictional) · around that date")
+        self.assertEqual(("$34.50", "Complete"), self.j1(at))
+        paths[0].write_text("Shop B (fictional)\n" + self.SALES, encoding="utf-8")
+        at.run()
+        self.assertEqual("Not sure yet", self.answered(at))
+        self.assertEqual("Provisional", self.j1(at)[1])
+
+    def test_a_costs_file_that_differs_only_in_its_title_never_reuses_answers(self):
+        at, paths = self.swappable_files(costs="Shop A costs (fictional)\n" + self.COSTS)
+        self.answer(at, "Job J-1 · X (fictional) · around that date")
+        self.assertEqual(("$34.50", "Complete"), self.j1(at))
+        paths[1].write_text("Shop B costs (fictional)\n" + self.COSTS, encoding="utf-8")
+        at.run()
+        self.assertEqual("Not sure yet", self.answered(at))
+        self.assertEqual("Provisional", self.j1(at)[1])
+
+    def test_changed_amounts_or_row_order_never_reuse_answers(self):
+        self.assert_swap_resets(lambda sales, costs: costs.write_text(self.COSTS.replace("40.00", "45.00"),
+                                                                       encoding="utf-8"))
+        lines = self.COSTS.splitlines()
+        self.assert_swap_resets(lambda sales, costs: costs.write_text(
+            "\n".join([lines[0], lines[2], lines[1]]) + "\n", encoding="utf-8"))
+
+    def test_not_for_a_job_is_never_reused_on_a_new_file(self):
+        # Both files have a title, so the rows are numbered the same: only the file's identity differs.
+        at, paths = self.swappable_files(costs="Shop A costs (fictional)\n" + self.COSTS)
+        self.answer(at, "Not for a job (a general business cost)")
+        paths[1].write_text("Shop B costs (fictional)\n" + self.COSTS, encoding="utf-8")
+        at.run()
+        self.assertEqual("Not sure yet", self.answered(at))
+        self.assertEqual("Provisional", self.j1(at)[1])
+
+    def test_a_changed_date_answer_resets_the_answers(self):
+        # 10/02 is ambiguous, so the owner is asked; a different answer is a different reading of the file.
+        at, paths = self.swappable_files(
+            sales="Invoice,Date,Customer,Job,Amount\nA,10/02/2026,X (fictional),J-1,100.00\n")
+        date = next(r for r in at.radio if r.label.startswith("In fictional_invoices.csv, what date is"))
+        date.set_value("MM/DD/YYYY").run()
+        first = next(o for o in self.which_job(at)[0].options if o.startswith("Job J-1"))
+        self.answer(at, first)
+        date = next(r for r in at.radio if r.label.startswith("In fictional_invoices.csv, what date is"))
+        date.set_value("DD/MM/YYYY").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertEqual("Not sure yet", self.answered(at))
+
+    def test_an_owner_can_change_or_take_back_an_answer(self):
+        at, _ = self.swappable_files()
+        job1 = "Job J-1 · X (fictional) · around that date"
+        self.answer(at, job1)
+        self.assertEqual(("$34.50", "Complete"), self.j1(at))
+        self.answer(at, "Not sure yet")  # taken back: the $40 may be J-1's again
+        self.assertEqual(("$74.50", "Provisional"), self.j1(at))
+        self.answer(at, "Not for a job (a general business cost)")  # overhead: J-1 now lacks materials
+        self.assertEqual(("$74.50", "Provisional"), self.j1(at))
+        self.assertIn("1 cost line(s) worth $40.00 had no job number in the file; you said they aren't for any "
+                      "job, so they're counted with overhead.", page_text(at))
+        self.answer(at, job1)
+        self.assertEqual(("$34.50", "Complete"), self.j1(at))
+        self.assertNotIn("you said they aren't for any job", page_text(at))
 
     def test_cost_text_in_the_which_job_question_is_escaped(self):
         trap = "![t](https://e.example/p.png)"

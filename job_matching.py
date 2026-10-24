@@ -7,6 +7,7 @@ owner. A cost the owner hasn't answered stays unlinked, exactly as before.
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, replace
 from datetime import date
 
@@ -54,8 +55,8 @@ def jobs(invoices: IntakeResult, costs: IntakeResult) -> list[Job]:
 def unmatched(costs: IntakeResult) -> list[dict]:
     """Cost lines with no job number that may belong to a job, in file order.
 
-    Clear overhead and fees (rent, card fees) aren't asked about: they stay outside job figures.
-    With no job number column at all, every cost line is asked about.
+    Every cost that may belong to a job is asked about, whether or not the file has a job number
+    column; clear overhead and fees (rent, card fees) never are: they stay outside job figures.
     """
     typed = "cost_type" in costs.mapped_fields
     return [line for line in costs.accepted
@@ -71,6 +72,16 @@ def nearby(line: dict, job_list: list[Job]) -> list[str]:
         if gap <= NEAR_DAYS:
             distances.append((gap, job.job_id))
     return [job_id for _, job_id in sorted(distances)]
+
+
+def source_key(name: str, data: bytes, reading) -> str:
+    """The identity of one file as read: its name, its exact bytes and every choice about how it was
+    read (file type, columns, date format, amount meaning, subtotal answers).
+
+    The owner's answers are kept under the keys of both files, so a different file, even one whose
+    rows read the same (another report title, another name), or a different reading never reuses them.
+    """
+    return hashlib.sha256(repr((name, hashlib.sha256(data).hexdigest(), reading)).encode("utf-8")).hexdigest()
 
 
 def apply(costs: IntakeResult, choices: dict[int, tuple[str, str]], job_list: list[Job]) -> IntakeResult:
