@@ -287,8 +287,13 @@ def _margin_card(summary: Summary) -> tuple[str, str, str, str]:
     A margin that includes jobs still needing a check may be too high, so it says so and, when there are
     enough complete jobs, gives their margin too: the same "usual margin" the attention list uses.
     """
-    if summary.share_percent is None:
+    if not summary.jobs_with_figure:
         return ("Profit margin", "—", "No job has a figure yet", "")
+    if summary.share_percent is None:
+        # Jobs have figures, but their sales add up to $0 or less (credits and refunds): a margin is a
+        # share of sales, so there is none to show.
+        return ("Profit margin", "—", f"Sales on these jobs add up to {money(summary.sales_with_figure)}, so there's "
+                "no margin to show", "")
     note = ["After job costs, before rent and overhead"]
     if summary.figure_is_partial:
         note.append(f"from {summary.jobs_with_figure} of {summary.jobs} jobs")

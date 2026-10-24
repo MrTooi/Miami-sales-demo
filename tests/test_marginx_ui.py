@@ -101,6 +101,22 @@ class HeadlineTests(unittest.TestCase):
         self.assertIn("Job J-1 may have lost $20", html)
         self.assertNotIn("J-1 lost", html)
 
+    def test_margin_card_tells_zero_sales_apart_from_no_figures(self):
+        # A job sold and fully refunded has a figure (it lost its costs) but $0 of sales: there's no
+        # margin, and the card says why instead of claiming no job has a figure.
+        html = render(report_from(
+            b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/02/2026,A,J-1,-100.00\n",
+            b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1))
+        self.assertIn('<div class="l">Left after job costs</div><div class="v ">-$50</div>', html)
+        self.assertIn('<div class="l">Profit margin</div><div class="v ">—</div><div class="s">Sales on these jobs '
+                      "add up to $0, so there&#x27;s no margin to show</div>", html)
+        self.assertNotIn("No job has a figure yet", html)
+        # With no figure at all, the card says that.
+        html = render(report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\n",
+                                  b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-2,Labor,20.00\n"))
+        self.assertIn('<div class="l">Profit margin</div><div class="v ">—</div><div class="s">No job has a figure '
+                      "yet</div>", html)
+
     def test_demo_shop(self):
         html = render(report_from((SAMPLES / "demo_sign_shop_invoices.csv").read_bytes(),
                                   (SAMPLES / "demo_sign_shop_costs.csv").read_bytes()))
