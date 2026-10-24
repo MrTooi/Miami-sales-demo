@@ -457,12 +457,201 @@ class MargenXImportPageTests(unittest.TestCase):
         gym = customers.set_index("Customer").loc["Demo Gym (fictional)"]
         self.assertEqual(("—", "—", "—", "Unavailable"), tuple(gym[["Sales", "Costs", "Direct contribution", "Status"]]))
 
-    def test_profit_needs_job_numbers_in_both_files(self):
-        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
-                             "Date,Vendor,Type,Amount\n10/31/2026,Paper Co (fictional),Materials,40.00\n")
-        self.assertFalse(at.exception, at.exception)
-        self.assertTrue(any("costs file has no job number column" in i.value for i in at.info))
+    def test_profit_needs_job_numbers_on_the_sales(self):
+        at = self.with_files("Invoice,Date,Customer,Amount\nA,10/31/2026,X (fictional),100.00\n",
+                             "Date,Vendor,Job,Type,Amount\n10/31/2026,Paper Co (fictional),J-1,Materials,40.00\n")
+        self.assertTrue(any("sales file has no job number column" in i.value for i in at.info))
         self.assertFalse(any("Direct contribution" in d.value.columns for d in at.dataframe))
+        self.assertEqual([], self.which_job(at))  # no jobs to choose from, so nothing is asked
+
+    def which_job(self, at):
+        return [s for s in at.selectbox if "(row " in s.label]
+
+    def test_costs_without_job_numbers_are_matched_only_by_the_owner(self):
+        # A costs file with no job column at all: MargenX asks which job each cost was for and never
+        # picks one itself. Until the owner answers, no cost counts toward any job.
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n"
+                             "B,10/01/2026,Y (fictional),J-2,90.00\n",
+                             "Date,Vendor,Type,Amount\n10/30/2026,Paper Co (fictional),Materials,40.00\n"
+                             "10/30/2026,Crew (fictional),Labor,25.50\n10/30/2026,Landlord (fictional),Rent,500.00\n")
+        asks = self.which_job(at)
+        self.assertEqual(2, len(asks))  # rent is overhead: not asked about
+        self.assertEqual(["Not sure yet"] * 2, [a.options[a.index] for a in asks])  # nothing is picked
+        # J-1's sale is the day after: listed first and marked; J-2 is a month away, listed after.
+        self.assertEqual(["Not sure yet", "Job J-1 · X (fictional) · around that date",
+                          "Not for a job (a general business cost)", "Job J-2 · Y (fictional)"], asks[0].options)
+        jobs = self.profit_table(at).set_index("Job")
+        self.assertEqual("—", jobs.loc["J-1"]["Direct contribution"])  # nothing guessed
+        self.assertIn("2 cost line(s) worth $65.50 have no job number and may belong to this job.",
+                      jobs.loc["J-1"]["Why"])
+        for ask in asks:
+            ask.select_index(1)  # Job J-1
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("$34.50", "Complete"), (job["Direct contribution"], job["Status"]))
+        self.assertIn("2 cost line(s) worth $65.50 had no job number in the file; you said which job each was for.",
+                      page_text(at))
+
+    def test_a_costs_file_with_only_overhead_and_no_job_column_is_read(self):
+        # Nothing to ask about (rent isn't), but the file is still read: rent stays overhead, and the
+        # job has no costs, so it has no figure rather than looking complete.
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                             "Date,Vendor,Type,Amount\n10/30/2026,Landlord (fictional),Rent,500.00\n")
+        self.assertEqual([], self.which_job(at))
+        self.assertFalse(any("costs file has no job number column" in i.value for i in at.info))
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("—", "Unavailable"), (job["Direct contribution"], job["Status"]))
+        self.assertIn("1 overhead or fee line(s) worth $500.00", page_text(at))
+
+    def test_a_cost_the_owner_says_is_not_for_a_job_counts_as_overhead(self):
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                             "Date,Vendor,Job,Type,Amount\n10/30/2026,Paper Co (fictional),J-1,Materials,40.00\n"
+                             "10/30/2026,Crew (fictional),J-1,Labor,25.50\n"
+                             "10/30/2026,Shop Supply (fictional),,Supplies,15.00\n")
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual("Provisional", job["Status"])  # the unmatched $15 may belong to J-1
+        ask, = self.which_job(at)
+        ask.select_index(ask.options.index("Not for a job (a general business cost)")).run()
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        self.assertEqual(("$34.50", "Complete"), (job["Direct contribution"], job["Status"]))
+        self.assertIn("1 cost line(s) worth $15.00 had no job number in the file; you said they aren't for any "
+                      "job, so they're counted with overhead.", page_text(at))
+
+    def test_a_job_named_like_a_choice_gets_its_cost(self):
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),not_a_job,100.00\n",
+                             "Date,Vendor,Type,Amount\n10/30/2026,Paper Co (fictional),Materials,40.00\n"
+                             "10/30/2026,Crew (fictional),Labor,25.50\n")
+        asks = self.which_job(at)
+        self.assertEqual(["Not sure yet", "Job not_a_job · X (fictional) · around that date",
+                          "Not for a job (a general business cost)"], asks[0].options)
+        for ask in asks:
+            ask.select_index(1)  # the job, not "Not for a job"
+        at.run()
+        job = self.profit_table(at).set_index("Job").loc["not_a_job"]
+        self.assertEqual(("$34.50", "Complete"), (job["Direct contribution"], job["Status"]))
+
+    # Sales for J-1, its labor tagged, and a $40 materials receipt with no job number: once the owner
+    # says the receipt was J-1's, J-1 is complete ($100 - $25.50 - $40 = $34.50).
+    SALES = "Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n"
+    COSTS = ("Date,Vendor,Job,Type,Amount\n10/30/2026,Crew (fictional),J-1,Labor,25.50\n"
+             "10/30/2026,Paper Co (fictional),,Materials,40.00\n")
+
+    def swappable_files(self, sales=SALES, costs=COSTS):
+        """The page on two made-up files that a test can rewrite between runs, as an owner swapping files."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        paths = Path(tmp.name, "fictional_invoices.csv"), Path(tmp.name, "fictional_costs.csv")
+        paths[0].write_text(sales, encoding="utf-8")
+        paths[1].write_text(costs, encoding="utf-8")
+        source = Path(PAGE).read_text(encoding="utf-8").replace(
+            'SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"', f"SAMPLES = Path({tmp.name!r})").replace(
+            'DEFAULT_SAMPLE_SET = "demo"', 'DEFAULT_SAMPLE_SET = "test"')
+        at = run_source(source)
+        self.assertFalse(at.exception, at.exception)
+        return at, paths
+
+    def answer(self, at, label):
+        ask, = self.which_job(at)
+        ask.select_index(ask.options.index(label)).run()
+        self.assertFalse(at.exception, at.exception)
+
+    def answered(self, at):
+        ask, = self.which_job(at)
+        return ask.options[ask.index]
+
+    def j1(self, at):
+        job = self.profit_table(at).set_index("Job").loc["J-1"]
+        return job["Direct contribution"], job["Status"]
+
+    def assert_swap_resets(self, change, first="Job J-1 · X (fictional) · around that date"):
+        """Answer, swap a file, and check the answer is gone and J-1 is no longer complete."""
+        at, paths = self.swappable_files()
+        self.answer(at, first)
+        self.assertEqual(first, self.answered(at))
+        change(*paths)
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertEqual("Not sure yet", self.answered(at))
+        self.assertEqual("Provisional", self.j1(at)[1])  # the $40 may be J-1's again: not complete
+        return at
+
+    def test_new_files_never_reuse_old_answers(self):
+        # The same job numbers, dates, amounts and rows, but a different customer on the sales file.
+        self.assert_swap_resets(lambda sales, costs: sales.write_text(self.SALES.replace("X (fictional)", "Z (fictional)"),
+                                                                       encoding="utf-8"),
+                                first="Job J-1 · X (fictional) · around that date")
+
+    def test_a_sales_file_that_differs_only_in_its_title_never_reuses_answers(self):
+        # A report title line is dropped by the reader, so the rows read the same; the file isn't.
+        at, paths = self.swappable_files(sales="Shop A (fictional)\n" + self.SALES)
+        self.answer(at, "Job J-1 · X (fictional) · around that date")
+        self.assertEqual(("$34.50", "Complete"), self.j1(at))
+        paths[0].write_text("Shop B (fictional)\n" + self.SALES, encoding="utf-8")
+        at.run()
+        self.assertEqual("Not sure yet", self.answered(at))
+        self.assertEqual("Provisional", self.j1(at)[1])
+
+    def test_a_costs_file_that_differs_only_in_its_title_never_reuses_answers(self):
+        at, paths = self.swappable_files(costs="Shop A costs (fictional)\n" + self.COSTS)
+        self.answer(at, "Job J-1 · X (fictional) · around that date")
+        self.assertEqual(("$34.50", "Complete"), self.j1(at))
+        paths[1].write_text("Shop B costs (fictional)\n" + self.COSTS, encoding="utf-8")
+        at.run()
+        self.assertEqual("Not sure yet", self.answered(at))
+        self.assertEqual("Provisional", self.j1(at)[1])
+
+    def test_changed_amounts_or_row_order_never_reuse_answers(self):
+        self.assert_swap_resets(lambda sales, costs: costs.write_text(self.COSTS.replace("40.00", "45.00"),
+                                                                       encoding="utf-8"))
+        lines = self.COSTS.splitlines()
+        self.assert_swap_resets(lambda sales, costs: costs.write_text(
+            "\n".join([lines[0], lines[2], lines[1]]) + "\n", encoding="utf-8"))
+
+    def test_not_for_a_job_is_never_reused_on_a_new_file(self):
+        # Both files have a title, so the rows are numbered the same: only the file's identity differs.
+        at, paths = self.swappable_files(costs="Shop A costs (fictional)\n" + self.COSTS)
+        self.answer(at, "Not for a job (a general business cost)")
+        paths[1].write_text("Shop B costs (fictional)\n" + self.COSTS, encoding="utf-8")
+        at.run()
+        self.assertEqual("Not sure yet", self.answered(at))
+        self.assertEqual("Provisional", self.j1(at)[1])
+
+    def test_a_changed_date_answer_resets_the_answers(self):
+        # 10/02 is ambiguous, so the owner is asked; a different answer is a different reading of the file.
+        at, paths = self.swappable_files(
+            sales="Invoice,Date,Customer,Job,Amount\nA,10/02/2026,X (fictional),J-1,100.00\n")
+        date = next(r for r in at.radio if r.label.startswith("In fictional_invoices.csv, what date is"))
+        date.set_value("MM/DD/YYYY").run()
+        first = next(o for o in self.which_job(at)[0].options if o.startswith("Job J-1"))
+        self.answer(at, first)
+        date = next(r for r in at.radio if r.label.startswith("In fictional_invoices.csv, what date is"))
+        date.set_value("DD/MM/YYYY").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertEqual("Not sure yet", self.answered(at))
+
+    def test_an_owner_can_change_or_take_back_an_answer(self):
+        at, _ = self.swappable_files()
+        job1 = "Job J-1 · X (fictional) · around that date"
+        self.answer(at, job1)
+        self.assertEqual(("$34.50", "Complete"), self.j1(at))
+        self.answer(at, "Not sure yet")  # taken back: the $40 may be J-1's again
+        self.assertEqual(("$74.50", "Provisional"), self.j1(at))
+        self.answer(at, "Not for a job (a general business cost)")  # overhead: J-1 now lacks materials
+        self.assertEqual(("$74.50", "Provisional"), self.j1(at))
+        self.assertIn("1 cost line(s) worth $40.00 had no job number in the file; you said they aren't for any "
+                      "job, so they're counted with overhead.", page_text(at))
+        self.answer(at, job1)
+        self.assertEqual(("$34.50", "Complete"), self.j1(at))
+        self.assertNotIn("you said they aren't for any job", page_text(at))
+
+    def test_cost_text_in_the_which_job_question_is_escaped(self):
+        trap = "![t](https://e.example/p.png)"
+        at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
+                             f"Date,Vendor,Type,Amount\n10/30/2026,{trap} Co,Materials,40.00\n")
+        ask, = self.which_job(at)
+        self.assertIn("e.example", ask.label)
+        self.assertNotRegex(ask.label, r"(?<!\\)!\\?\[|(?<!\\)\[")
 
     def test_complete_job_shows_an_exact_figure(self):
         at = self.with_files("Invoice,Date,Customer,Job,Amount\nA,10/31/2026,X (fictional),J-1,100.00\n",
