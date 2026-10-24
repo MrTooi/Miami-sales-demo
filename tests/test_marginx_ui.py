@@ -111,6 +111,14 @@ class HeadlineTests(unittest.TestCase):
         self.assertIn('<div class="l">Profit margin</div><div class="v ">—</div><div class="s">Sales on these jobs '
                       "add up to $0, so there&#x27;s no margin to show</div>", html)
         self.assertNotIn("No job has a figure yet", html)
+        # More refunded than sold: sales add up to less than $0. Still no percentage, and the card says why.
+        html = render(report_from(
+            b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/02/2026,A,J-1,-150.00\n",
+            b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1))
+        self.assertIn('<div class="l">Left after job costs</div><div class="v ">-$100</div>', html)
+        self.assertIn('<div class="l">Profit margin</div><div class="v ">—</div><div class="s">Sales on these jobs '
+                      "add up to -$50, so there&#x27;s no margin to show</div>", html)
+        self.assertNotRegex(html, r'Profit margin</div><div class="v [^"]*">-?\d+%')
         # With no figure at all, the card says that.
         html = render(report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\n",
                                   b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-2,Labor,20.00\n"))
