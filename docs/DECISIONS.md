@@ -142,7 +142,7 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
      - print, sign and apparel shops
      - trade contractors (remodeling, flooring and similar)
      - custom makers and installers (cabinets, metal work and similar)
-  2. It isn't a product for every business. Businesses that only sell time (cleaning, consulting) stay out of scope for now.
+  2. It isn't a product for every business. (The 2026-10-22 plan lists businesses that only sell time, such as cleaning or consulting, as "not for now", because MargenX needs labor and materials or outsourced work on a job to call it complete.)
   3. The authorized scope of D-003 (a) to (e) is otherwise unchanged.
 - Not changed:
   - Real customer data still needs step 3b and a separate owner decision for a named pilot shop, used only in the sit-down pilot on the team laptop.
