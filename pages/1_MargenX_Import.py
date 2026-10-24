@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +27,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 import job_intake as ji  # noqa: E402
+import job_matching as jm  # noqa: E402
 import job_profit as jp  # noqa: E402
 import marginx_insights as mi  # noqa: E402
 import marginx_ui as ui  # noqa: E402
@@ -50,6 +52,8 @@ KIND_LABELS = {"invoices": "sales / invoices", "costs": "costs / bills"}
 NOT_MAPPED = "(not in this file)"
 # A file that is fully dealt with but adds nothing to profit (a bank statement, headers only).
 EXCLUDED = "excluded"
+# Each read file's identity (job_matching.source_key), by id() of its result, for this run only.
+SOURCE_KEYS: dict[int, str] = {}
 LEVEL_LABELS = {"problem": "Problem", "gap": "Missing", "info": "Note"}
 # Deposits, transfers and payments are cash movements, not sales or costs (MVP spec).
 BANK_MESSAGE = ("MargenX can't read bank, card or payment statements yet: deposits, payments and transfers "
@@ -296,6 +300,8 @@ def show_file(position: int, name: str, data: bytes, same_as: str | None = None)
                                    key=f"{date_key}-override-{date_format}")
 
     result = ji.intake(headers, records, mapping, kind, date_format, amount_scope, subtotals)
+    SOURCE_KEYS[id(result)] = jm.source_key(name, data, (position, kind, sorted(mapping.items(), key=str), date_format,
+                                                         amount_scope, sorted(subtotals.items())))
     st.caption(f"Read as {KIND_LABELS[kind]}, dates as {date_format}.")
     report = ji.missing_report(result)
     problems_found = sum(1 for item in report if item["level"] != "info")
@@ -341,7 +347,8 @@ def show_profit(results: list[ji.IntakeResult], pending: list[str]) -> bool:
         st.info("Profit by job needs exactly one sales file and one costs file, each fully read below. "
                 "Answer any questions below, or upload one of each.")
         return False
-    report = jp.job_profit(invoices[0], costs[0])
+    sources = (SOURCE_KEYS[id(invoices[0])], SOURCE_KEYS[id(costs[0])])
+    report = jp.job_profit(invoices[0], which_job(invoices[0], costs[0], sources))
     if not report.available:
         for reason in report.reasons:
             st.info(ui.md_text(reason))
@@ -354,6 +361,51 @@ def show_profit(results: list[ji.IntakeResult], pending: list[str]) -> bool:
     with st.expander("All the details: every job, customer and how the figures are worked out"):
         _details(report)
     return True
+
+
+def which_job(invoices: ji.IntakeResult, costs: ji.IntakeResult, sources: tuple[str, str]) -> ji.IntakeResult:
+    """Ask the owner which job each cost without a job number was for, and apply the answers.
+
+    MargenX never guesses: every cost starts as "Not sure yet" and stays unlinked until the owner
+    picks. Jobs with sales or costs around the cost's date are listed first, only to save time.
+    """
+    if "job_id" not in invoices.mapped_fields:
+        return costs  # no job numbers on the sales either: there are no jobs to choose from
+    rows = jm.unmatched(costs)
+    job_list = jm.jobs(invoices, costs)
+    if not rows or not job_list:
+        # Nothing to ask, but a costs file with no job column still gets one (every line blank), so it's
+        # read like any other file instead of refused.
+        return jm.apply(costs, {}, job_list)
+    # Every job starts with "Job ", so no job number can read the same as MargenX's own choices.
+    labels = {}
+    for job in job_list:
+        about = " · ".join(x for x in (job.description, ", ".join(job.customers)) if x)
+        labels[job.job_id] = f"Job {job.job_id} · {about}" if about else f"Job {job.job_id}"
+    # Answers are keyed to both files themselves (name, exact bytes, every reading choice) and to what was
+    # read from them, so any change to either file, even one the reader drops (a report title, the file's
+    # name), asks again instead of applying old answers to other records.
+    asked = hashlib.sha256(repr((sources, [(r.kind, r.headers, r.mapped_fields, r.total_rows, r.accepted, r.rejected,
+                                            r.skipped) for r in (invoices, costs)])).encode("utf-8")).hexdigest()[:32]
+    choices: dict[int, tuple[str, str]] = {}
+    answered = sum(1 for r in rows if st.session_state.get(f"match-{asked}-{r['row']}", jm.NOT_SURE) != jm.NOT_SURE)
+    with st.expander(f"Which job was each cost for? {answered} of {len(rows)} answered", expanded=answered < len(rows)):
+        st.caption(f"These {len(rows)} costs don't say which job they were for. If you know, pick the job; if "
+                   "you're not sure, leave it. MargenX never guesses: a cost you don't match stays out of every "
+                   "job's figure, and those jobs show \"Needs a check\".")
+        for line in rows:
+            near = jm.nearby(line, job_list)
+            others = [j.job_id for j in job_list if j.job_id not in near]
+            options = [jm.NOT_SURE, *map(jm.job, near), jm.NOT_A_JOB, *map(jm.job, others)]
+            what = " · ".join(x for x in (line.get("vendor"), line.get("cost_type"), line.get("memo")) if x)
+            day = date.fromisoformat(line["date"])
+            names = {jm.NOT_SURE: "Not sure yet", jm.NOT_A_JOB: "Not for a job (a general business cost)",
+                     **{jm.job(j): labels[j] + (" · around that date" if j in near else "") for j in labels}}
+            choices[line["row"]] = st.selectbox(
+                ui.md_text(f"{day:%b} {day.day}, {day.year} · {what} · {jp.format_money(line['amount'])} "
+                           f"(row {line['row']})"),
+                options, format_func=lambda o, n=names: ui.md_text(n[o]), key=f"match-{asked}-{line['row']}")
+    return jm.apply(costs, choices, job_list)
 
 
 def _details(report: jp.ProfitReport) -> None:

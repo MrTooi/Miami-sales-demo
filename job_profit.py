@@ -205,6 +205,8 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
             billed.add(job)
 
     unlinked_job_costs: list[Decimal] = []
+    not_for_a_job: list[Decimal] = []  # the owner's answer: a general business cost
+    matched_by_owner: list[Decimal] = []  # the owner's answer: which job a cost was for
     job_costs: dict[str, dict[str, Decimal]] = defaultdict(lambda: {c: ZERO for c in CATEGORIES})
     cost_lines: dict[str, dict[str, int]] = defaultdict(lambda: {c: 0 for c in CATEGORIES})
     for line in costs.accepted:
@@ -212,11 +214,16 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
         if not job:
             report.unlinked_costs += line["amount"]
             report.unlinked_cost_lines += 1
-            # Unlinked fees and overhead are left out by the stated basis; any other unlinked
-            # cost may belong to a job, so it holds every job back from "complete".
-            if not typed or cost_category(line.get("cost_type")) != "fees_overhead":
+            # Unlinked fees and overhead are left out by the stated basis, and so is a cost the owner
+            # said isn't for any job; any other unlinked cost may belong to a job, so it holds every
+            # job back from "complete".
+            if line.get("not_for_a_job"):
+                not_for_a_job.append(line["amount"])
+            elif not typed or cost_category(line.get("cost_type")) != "fees_overhead":
                 unlinked_job_costs.append(line["amount"])
             continue
+        if line.get("job_from_owner"):
+            matched_by_owner.append(line["amount"])
         category = cost_category(line.get("cost_type")) if typed else "unknown"
         job_costs[job][category] += line["amount"]
         cost_lines[job][category] += 1
@@ -266,6 +273,10 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
         elif not sum(counts.values()):
             status = "unavailable"
             reasons.append("No costs recorded for this job.")
+            if unlinked_job_costs:
+                reasons.append(f"{len(unlinked_job_costs)} cost line(s) worth "
+                               f"{format_money(sum(unlinked_job_costs, ZERO))} have no job number and may "
+                               "belong to this job.")
         else:
             if not typed:
                 reasons.append("The costs file has no cost type column, so labor and materials can't be checked.")
@@ -387,6 +398,13 @@ def job_profit(invoices: IntakeResult, costs: IntakeResult) -> ProfitReport:
                             "rent) aren't linked to a job, so they aren't allocated to any job. Overhead recorded "
                             "against a job is included in that job. These figures are direct job contribution, not "
                             "the business's final profit.")
+    # The owner's answers are disclosed, so every figure can be traced to the files or to them.
+    if matched_by_owner:
+        report.notes.append(f"{len(matched_by_owner)} cost line(s) worth {format_money(sum(matched_by_owner, ZERO))} "
+                            "had no job number in the file; you said which job each was for.")
+    if not_for_a_job:
+        report.notes.append(f"{len(not_for_a_job)} cost line(s) worth {format_money(sum(not_for_a_job, ZERO))} had no "
+                            "job number in the file; you said they aren't for any job, so they're counted with overhead.")
     if unlinked_job_costs:
         report.notes.append(f"{len(unlinked_job_costs)} cost line(s) worth "
                             f"{format_money(sum(unlinked_job_costs, ZERO))} aren't linked to a job, so they aren't in "
