@@ -121,9 +121,10 @@ class HeadlineTests(unittest.TestCase):
         html = render(report_from((SAMPLES / "demo_sign_shop_invoices.csv").read_bytes(),
                                   (SAMPLES / "demo_sign_shop_costs.csv").read_bytes()))
         self.assertIn("From all 8 jobs · some still need a check", html)
-        # A margin that counts jobs still needing a check says it may be too high, beside the complete jobs' margin.
+        # A margin that counts jobs still needing a check says it may change (a missing cost or sale could move it
+        # either way), beside the complete jobs' margin.
         self.assertIn('<div class="l">Profit margin</div><div class="v ">33%</div><div class="s">After job costs, '
-                      "before rent and overhead · may be too high, some jobs need a check · jobs with complete "
+                      "before rent and overhead · may change, some jobs need a check · jobs with complete "
                       "costs: 30%</div>", html)
         self.assertIn("After the $2,000 of costs not tied to any job (overhead such as rent), these files leave "
                       "<b>$1,640</b>, a 15% margin on all sales", html)
@@ -182,6 +183,17 @@ class SafetyTests(unittest.TestCase):
                       '</tr><tr><td>Labor</td><td class="r">−$20</td></tr><tr><td>Fees &amp; overhead on this job</td>'
                       '<td class="r">−$5</td></tr><tr class="tot"><td>Left after job costs</td><td class="r">$45</td>',
                       html)
+
+    def test_a_customer_losing_a_few_cents_is_still_shown_as_a_loss(self):
+        # B lost $0.01 on $100: its margin rounds to 0%, but the row is a loss, its amount is negative,
+        # and nothing on it reads as a profit.
+        html = render(report_from(
+            b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/01/2026,B,J-2,100.00\n",
+            b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1
+            + b"B-3,10/01/2026,Crew,J-2,Labor,50.00\nB-4,10/01/2026,Paper,J-2,Materials,50.01\n"))
+        self.assertIn('<div class="mx-row loss"><div class="n">B<', html)  # the row is styled as a loss
+        self.assertIn('<div>$100</div><div class="lft">-$0.01</div><div class="mg">0%</div>', html)
+        self.assertIn("Job J-2 lost $0.01", html)  # and the attention list names the loss
 
     def test_customer_table_shows_sales_what_is_left_and_margin(self):
         # One row per customer: what they paid, what's left after job costs and the margin, the same

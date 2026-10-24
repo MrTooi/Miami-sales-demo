@@ -284,8 +284,9 @@ def _metrics(summary: Summary) -> list[tuple[str, str, str, str]]:
 def _margin_card(summary: Summary) -> tuple[str, str, str, str]:
     """Profit margin: the share of sales left after job costs, for the same jobs as "Left after job costs".
 
-    A margin that includes jobs still needing a check may be too high, so it says so and, when there are
-    enough complete jobs, gives their margin too: the same "usual margin" the attention list uses.
+    A margin that includes jobs still needing a check may change either way (a missing cost makes it too
+    high, a missing sale too low), so it says so and, when there are enough complete jobs, gives their
+    margin too: the same "usual margin" the attention list uses.
     """
     if not summary.jobs_with_figure:
         return ("Profit margin", "—", "No job has a figure yet", "")
@@ -298,7 +299,7 @@ def _margin_card(summary: Summary) -> tuple[str, str, str, str]:
     if summary.figure_is_partial:
         note.append(f"from {summary.jobs_with_figure} of {summary.jobs} jobs")
     if summary.figure_is_provisional:
-        note.append("may be too high, some jobs need a check")
+        note.append("may change, some jobs need a check")
         if summary.usual_margin is not None:
             note.append(f"jobs with complete costs: {percent(summary.usual_margin, 1)}%")
     return ("Profit margin", f"{summary.share_percent}%", " · ".join(note),
