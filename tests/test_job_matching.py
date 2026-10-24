@@ -97,6 +97,33 @@ class MatchingTests(unittest.TestCase):
         self.assertNotEqual(jm.job("not_a_job"), jm.NOT_A_JOB)
         self.assertNotEqual(jm.job("not_sure"), jm.NOT_SURE)
 
+    def test_an_answer_for_a_row_that_is_not_asked_about_is_refused(self):
+        # Never silently ignored: a row not in the file, a row that couldn't be read, and a cost that
+        # already has a job are each refused, whatever the answer.
+        for row in (999, 2, 6):  # not in the file; J-1's labor; rent
+            for answer in (jm.job("J-1"), jm.NOT_A_JOB, jm.NOT_SURE):
+                with self.subTest(row=row, answer=answer), self.assertRaises(ValueError):
+                    jm.apply(self.costs, {row: answer}, self.jobs)
+        bad = read(COSTS + b"10/29/2026,Bad Co (fictional),,Materials,abc\n", "costs")
+        self.assertEqual([8], [r["row"] for r in bad.rejected])
+        with self.assertRaises(ValueError):
+            jm.apply(bad, {8: jm.job("J-1")}, self.jobs)
+
+    def test_an_answer_for_a_skipped_total_row_is_refused(self):
+        headers = ["Group", "Date", "Vendor", "Job", "Type", "Amount"]
+        rows = [("Shop costs (fictional)", "", "", "", "", ""),
+                ("", "10/30/2026", "Crew (fictional)", "J-1", "Labor", "300.00"),
+                ("", "10/29/2026", "Tile Co (fictional)", "", "Materials", "400.00"),
+                ("Total for Shop costs (fictional)", "", "", "", "", "700.00")]
+        costs = ji.intake(headers, [ji.Record(n, r) for n, r in enumerate(rows, start=2)],
+                          ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")
+        self.assertEqual([2, 5], [r["row"] for r in costs.skipped])
+        self.assertEqual([4], [line["row"] for line in jm.unmatched(costs)])
+        for row in (2, 5):
+            with self.subTest(row=row), self.assertRaises(ValueError):
+                jm.apply(costs, {row: jm.job("J-1")}, self.jobs)
+        jm.apply(costs, {4: jm.job("J-1")}, self.jobs)  # the one cost asked about is accepted
+
     def test_a_costs_file_with_no_job_column_can_still_be_matched(self):
         costs = read(b"Date,Vendor,Type,Amount\n10/30/2026,Crew (fictional),Labor,300.00\n"
                      b"10/30/2026,Tile Co (fictional),Materials,400.00\n", "costs")

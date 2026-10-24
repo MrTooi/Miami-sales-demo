@@ -89,15 +89,20 @@ def apply(costs: IntakeResult, choices: dict[int, tuple[str, str]], job_list: li
 
     job(id) sets that job number on the line (marked as the owner's answer); NOT_A_JOB marks it as a
     general business cost; NOT_SURE changes nothing. The original result is never changed.
+
+    Every answer must be for a cost that is asked about: an answer for any other row (one not in the
+    file, one that couldn't be read, a skipped total, a cost that already has a job, overhead) is
+    refused, so no caller can believe an answer was applied when it wasn't.
     """
     known = {job.job_id for job in job_list}
     asked = {line["row"] for line in unmatched(costs)}
+    others = sorted(set(choices) - asked, key=str)
+    if others:
+        raise ValueError(f"Row(s) {', '.join(map(str, others))} aren't costs asked about; no answer can apply to them.")
     accepted = []
     for line in costs.accepted:
         choice = choices.get(line["row"], NOT_SURE)
         if choice != NOT_SURE:
-            if line["row"] not in asked:
-                raise ValueError(f"Row {line['row']} already has a job number or is overhead; it isn't asked about.")
             if choice == NOT_A_JOB:
                 line = {**line, "not_for_a_job": True}
             elif tuple(choice)[:1] == ("job",) and len(choice) == 2 and choice[1] in known:

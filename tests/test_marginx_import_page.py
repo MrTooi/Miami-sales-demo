@@ -630,6 +630,42 @@ class MargenXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertEqual("Not sure yet", self.answered(at))
 
+    def test_the_demos_never_ask_which_job(self):
+        # Owners are shown the finished product: every demo cost has a job number or is clear overhead,
+        # so the "Which job was each cost for?" step never appears in a demo.
+        for demo in ("demo", "contractor", "custom_shop"):
+            with self.subTest(demo=demo):
+                at = self.run_page(demo)
+                self.assertEqual([], self.which_job(at))
+                self.assertFalse(any(e.label.startswith("Which job was each cost for?") for e in at.expander))
+                self.assertTrue(any("Direct contribution" in d.value.columns for d in at.dataframe))
+
+    def test_margin_and_after_rent_total_follow_the_owners_answers(self):
+        # The results page (margin card, after-overhead line) with matched, unmatched and "Not for a job"
+        # costs: the margin moves with the answer and says "may change" until J-1 is complete, and the
+        # total after every cost always reconciles to sales minus all costs ($100 - $25.50 - $40 - $10).
+        at, _ = self.swappable_files(costs=self.COSTS + "10/30/2026,Landlord (fictional),,Rent,10.00\n")
+
+        def screen():
+            return " ".join(m.value for m in at.markdown)
+
+        def margin_card():
+            html = screen()
+            start = html.index('<div class="l">Profit margin</div>')
+            return html[start:html.index("</div></div>", start)]
+
+        self.assertIn('<div class="v ">75%</div>', margin_card())  # $74.50 of $100 so far: the $40 isn't on J-1
+        self.assertIn("may change, some jobs need a check", margin_card())
+        self.assertIn("these files leave <b>$24.50</b>, a 25% margin on all sales", screen())
+        self.answer(at, "Job J-1 · X (fictional) · around that date")
+        self.assertIn('<div class="v ">35%</div>', margin_card())  # $34.50 of $100, complete
+        self.assertNotIn("may change", margin_card())
+        self.assertIn("these files leave <b>$24.50</b>, a 25% margin on all sales", screen())
+        self.answer(at, "Not for a job (a general business cost)")
+        self.assertIn('<div class="v ">75%</div>', margin_card())
+        self.assertIn("may change, some jobs need a check", margin_card())  # J-1 now has no materials
+        self.assertIn("these files leave <b>$24.50</b>, a 25% margin on all sales", screen())
+
     def test_an_owner_can_change_or_take_back_an_answer(self):
         at, _ = self.swappable_files()
         job1 = "Job J-1 · X (fictional) · around that date"
