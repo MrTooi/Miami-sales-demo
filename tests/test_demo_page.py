@@ -101,6 +101,27 @@ class DemoPageTests(unittest.TestCase):
             for job_id in customer.jobs:
                 self.assertIn(f"· {job_id}</td>", block)
 
+    def test_contractor_and_custom_shop_pages(self):
+        for shop, title, what, finding in (
+                ("contractor", "MargenX Demo Contractor", "a made-up remodeling contractor",
+                 "Bathroom remodel · J-206 lost $650"),
+                ("custom_shop", "MargenX Demo Custom Shop", "a made-up cabinet and metal shop",
+                 "Store display (rush) · K-304 lost $350")):
+            page = build.build_page(shop)
+            self.assertIn(f"<title>{title}</title>", page)
+            self.assertIn(f"Online demo with {what}.", page)
+            self.assertIn(finding, page)
+            self.assertIn(f'<div class="mx-legend mx-fine">{ui.READING_NOTE}</div>', page)
+            inventory = _Inventory()
+            inventory.feed(page)
+            self.assertLessEqual(inventory.tags, ALLOWED_TAGS, shop)  # display only, like the sign shop page
+            self.assertLessEqual(inventory.attributes, ALLOWED_ATTRIBUTES, shop)
+
+    def test_script_refuses_an_unknown_demo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(2, build.main(["build_demo_page.py", str(Path(tmp) / "x.html"), "bakery"]))
+            self.assertFalse((Path(tmp) / "x.html").exists())
+
     def test_script_writes_the_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "demo.html"

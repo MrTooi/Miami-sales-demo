@@ -1,0 +1,21 @@
+Bill,Date,Vendor,Job,Type,Memo,Amount
+B-801,10/01/2026,Lumber & Hardware Co (fictional),K-301,Materials,Plywood and hardware,4300.00
+B-802,10/01/2026,Stone Fabricators (fictional),K-301,Outsourced,Countertop cutting,1800.00
+B-803,10/02/2026,Shop payroll (fictional),K-301,Labor,Build and install,2800.00
+B-804,10/04/2026,Lumber & Hardware Co (fictional),K-302,Materials,Melamine and hardware,1500.00
+B-805,10/05/2026,Shop payroll (fictional),K-302,Labor,Build and install,1900.00
+B-806,10/06/2026,Lumber & Hardware Co (fictional),K-303,Materials,Hardwood and finish,3000.00
+B-807,10/07/2026,Shop payroll (fictional),K-303,Labor,Build and install,1900.00
+B-808,10/08/2026,Metal Supply (fictional),K-304,Materials,Steel and acrylic,1600.00
+B-809,10/09/2026,Shop payroll (fictional),K-304,Labor,Overtime to finish overnight,2300.00
+B-810,10/09/2026,Coat Pros (fictional),K-304,Outsourced,Rush powder coating,650.00
+B-811,10/12/2026,Metal Supply (fictional),K-305,Materials,Steel tube and posts,2300.00
+B-812,10/13/2026,Shop payroll (fictional),K-305,Labor,Weld and install,4200.00
+B-813,10/13/2026,Coat Pros (fictional),K-305,Outsourced,Powder coating,900.00
+B-814,10/15/2026,Lumber & Hardware Co (fictional),K-306,Materials,Cabinet boxes and doors,5200.00
+B-815,10/16/2026,Shop payroll (fictional),K-306,Labor,Build and install,6300.00
+B-816,10/20/2026,Metal Supply (fictional),K-307,Materials,Steel and motor kit,1900.00
+B-817,10/21/2026,Shop payroll (fictional),K-307,Labor,Weld and install,3200.00
+B-818,10/21/2026,Coat Pros (fictional),K-307,Outsourced,Powder coating,400.00
+B-819,10/25/2026,Lumber & Hardware Co (fictional),K-308,Materials,Vanity boxes and tops,1200.00
+B-820,10/31/2026,Landlord (fictional),,Rent,Shop rent October,3200.00

@@ -36,7 +36,10 @@ class HeadlineTests(unittest.TestCase):
         html = render(report_from(
             b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/01/2026,B,J-2,60.00\n",
             b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1 + b"B-3,10/01/2026,Landlord,,Rent,10.00\n"))
-        self.assertIn("From 1 of 2 jobs · 50% of their sales", html)
+        self.assertIn('<div class="s">From 1 of 2 jobs</div>', html)
+        # The margin is of the same jobs, and says so.
+        self.assertIn('<div class="l">Profit margin</div><div class="v ">50%</div>'
+                      '<div class="s">After job costs, before rent and overhead · from 1 of 2 jobs</div>', html)
         self.assertIn('0 of 1</div><div class="s">jobs with complete costs', html)  # jobs losing money
         self.assertIn("A total after them isn't shown yet", html)
         self.assertIn("The totals leave out 1 job without a figure", html)
@@ -72,7 +75,8 @@ class HeadlineTests(unittest.TestCase):
             b"I-3,10/01/2026,C,J-3,40.00\n",
             b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1
             + b"B-3,10/01/2026,Crew,J-3,Labor,50.00\nB-4,10/01/2026,Paper,J-3,Materials,10.00\n"))
-        self.assertIn('<i class="neg" style="width:20%">', html)  # C lost $20: a visible red bar
+        self.assertIn('<div class="mx-row loss">', html)  # C lost $20: its row is red
+        self.assertIn('<div>$40</div><div class="lft">-$20</div><div class="mg">-50%</div>', html)
         self.assertIn("Not listed, no figure yet: B.", html)  # B has sales but no costs
 
     def test_rows_that_could_not_be_read_are_disclosed_and_withhold_the_after_costs_total(self):
@@ -97,12 +101,33 @@ class HeadlineTests(unittest.TestCase):
         self.assertIn("Job J-1 may have lost $20", html)
         self.assertNotIn("J-1 lost", html)
 
+    def test_margin_card_tells_zero_sales_apart_from_no_figures(self):
+        # A job sold and fully refunded has a figure (it lost its costs) but $0 of sales: there's no
+        # margin, and the card says why instead of claiming no job has a figure.
+        html = render(report_from(
+            b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/02/2026,A,J-1,-100.00\n",
+            b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1))
+        self.assertIn('<div class="l">Left after job costs</div><div class="v ">-$50</div>', html)
+        self.assertIn('<div class="l">Profit margin</div><div class="v ">—</div><div class="s">Sales on these jobs '
+                      "add up to $0, so there&#x27;s no margin to show</div>", html)
+        self.assertNotIn("No job has a figure yet", html)
+        # With no figure at all, the card says that.
+        html = render(report_from(b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\n",
+                                  b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-2,Labor,20.00\n"))
+        self.assertIn('<div class="l">Profit margin</div><div class="v ">—</div><div class="s">No job has a figure '
+                      "yet</div>", html)
+
     def test_demo_shop(self):
         html = render(report_from((SAMPLES / "demo_sign_shop_invoices.csv").read_bytes(),
                                   (SAMPLES / "demo_sign_shop_costs.csv").read_bytes()))
-        self.assertIn("From all 8 jobs · 33% of their sales · some still need a check", html)
+        self.assertIn("From all 8 jobs · some still need a check", html)
+        # A margin that counts jobs still needing a check says it may change (a missing cost or sale could move it
+        # either way), beside the complete jobs' margin.
+        self.assertIn('<div class="l">Profit margin</div><div class="v ">33%</div><div class="s">After job costs, '
+                      "before rent and overhead · may change, some jobs need a check · jobs with complete "
+                      "costs: 30%</div>", html)
         self.assertIn("After the $2,000 of costs not tied to any job (overhead such as rent), these files leave "
-                      "<b>$1,640</b>", html)
+                      "<b>$1,640</b>, a 15% margin on all sales", html)
         self.assertIn("Some jobs still need a check, so this may be too high.", html)
 
 
@@ -159,13 +184,29 @@ class SafetyTests(unittest.TestCase):
                       '<td class="r">−$5</td></tr><tr class="tot"><td>Left after job costs</td><td class="r">$45</td>',
                       html)
 
-    def test_a_small_customer_loss_is_still_a_visible_bar(self):
+    def test_a_customer_losing_a_few_cents_is_still_shown_as_a_loss(self):
+        # B lost $0.01 on $100: its margin rounds to 0%, but the row is a loss, its amount is negative,
+        # and nothing on it reads as a profit.
         html = render(report_from(
-            b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,1000.00\nI-2,10/01/2026,B,J-2,100.00\n",
-            b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,200.00\n"
-            b"B-2,10/01/2026,Paper,J-1,Materials,200.00\nB-3,10/01/2026,Crew,J-2,Labor,51.00\n"
-            b"B-4,10/01/2026,Paper,J-2,Materials,50.00\n"))
-        self.assertIn('<i class="neg" style="width:3%">', html)  # B lost $1: under 1% of $1,000, still shown
+            b"Invoice,Date,Customer,Job,Amount\nI-1,10/01/2026,A,J-1,100.00\nI-2,10/01/2026,B,J-2,100.00\n",
+            b"Bill,Date,Vendor,Job,Type,Amount\n" + COMPLETE_J1
+            + b"B-3,10/01/2026,Crew,J-2,Labor,50.00\nB-4,10/01/2026,Paper,J-2,Materials,50.01\n"))
+        self.assertIn('<div class="mx-row loss"><div class="n">B<', html)  # the row is styled as a loss
+        self.assertIn('<div>$100</div><div class="lft">-$0.01</div><div class="mg">0%</div>', html)
+        self.assertIn("Job J-2 lost $0.01", html)  # and the attention list names the loss
+
+    def test_customer_table_shows_sales_what_is_left_and_margin(self):
+        # One row per customer: what they paid, what's left after job costs and the margin, the same
+        # rounded percent as the attention list. A customer whose jobs need a check shows "so far".
+        html = render(report_from((SAMPLES / "demo_contractor_invoices.csv").read_bytes(),
+                                  (SAMPLES / "demo_contractor_costs.csv").read_bytes()))
+        self.assertIn('<div class="mx-row head"><div class="n">Customer</div><div>Sales</div>'
+                      '<div>Left after job costs</div><div>Margin</div></div>', html)
+        self.assertIn('<div>$33,600</div><div class="lft">$1,900</div><div class="mg">6%</div>', html)  # Ocean View
+        self.assertIn('<div>$6,300</div><div class="lft">$3,200</div><div class="mg">51% so far</div>', html)
+        self.assertIn('<small class="chk">Needs a check</small>', html)  # Kendall Pediatrics, no labor cost
+        self.assertIn('<div class="mx-row loss">', html)  # Gomez Family lost $650
+        self.assertNotIn("mx-bar", html)
 
     def test_every_result_ends_with_the_how_to_read_note(self):
         # Rounded percentages and estimated prices are never mistaken for exact facts, and the tool is

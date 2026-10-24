@@ -148,13 +148,19 @@ def screen_problems(html: str, want: shops.Answer, seed) -> list[str]:
     # No figure at all, or no complete job: a dash on that card, never $0.
     expect_card("Left after job costs", shops.shown_money(want.left) if want.jobs_with_figure else "—")
     expect_card("Jobs losing money", f"{want.losing} of {want.complete_jobs}" if want.complete_jobs else "—")
+    # Profit margin: what's left over the sales of the same jobs, never a margin made up from nothing.
+    figure_sales = sum(j.sales for j in want.jobs.values() if j.contribution is not None)
+    margin = shops.shown_percent(want.left, figure_sales) if want.jobs_with_figure else None
+    expect_card("Profit margin", "—" if margin is None else f"{margin}%")
     if want.overhead or want.unassigned_job_costs:
         if want.after_unlinked is None:
             expect("after-overhead total withheld", "A total after them isn't shown yet")
             if "these files leave" in html:
                 found.append(f"seed {seed}: on screen, an after-overhead total is shown though it must be withheld")
         else:
-            expect("after-overhead line", f"these files leave <b>{shops.shown_money(want.after_unlinked)}</b>")
+            after_margin = shops.shown_percent(want.after_unlinked, want.total_sales)
+            expect("after-overhead line", f"these files leave <b>{shops.shown_money(want.after_unlinked)}</b>"
+                   + ("" if after_margin is None else f", a {after_margin}% margin on all sales"))
     blocks = re.findall(r'<details class="mx-d">(.*?)</details>', html)
     for job_id, expected in want.jobs.items():
         block = next((b for b in blocks if f"· {job_id}</small>" in b), None)
@@ -195,11 +201,12 @@ def screen_problems(html: str, want: shops.Answer, seed) -> list[str]:
             found.append(f"seed {seed}: on screen, customer {name} is missing")
             continue
         share = shops.shown_percent(expected.contribution, expected.sales)
-        text = (f'<div class="a">{shops.shown_money(expected.contribution)}</div><div class="p">'
-                + ("" if share is None else f"{share}% of ") + f"{shops.shown_money(expected.sales)}</div>")
+        margin = "—" if share is None else f"{share}%" + ("" if expected.status == "complete" else " so far")
+        text = (f'<div>{shops.shown_money(expected.sales)}</div>'
+                f'<div class="lft">{shops.shown_money(expected.contribution)}</div><div class="mg">{margin}</div>')
         if text not in block:
             found.append(f"seed {seed}: on screen, customer {name}: expected {text!r}")
-        if ("<small>Needs a check</small>" in block) != (expected.status == "provisional"):
+        if ('<small class="chk">Needs a check</small>' in block) != (expected.status == "provisional"):
             found.append(f"seed {seed}: on screen, customer {name} 'Needs a check' note doesn't match {expected.status}")
     return found
 
