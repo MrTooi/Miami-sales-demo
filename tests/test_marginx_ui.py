@@ -1,5 +1,6 @@
 """What the MargenX results screen says: headline coverage, the after-costs line, escaping, no outside requests."""
 from pathlib import Path
+import re
 import unittest
 from unittest import mock
 
@@ -137,6 +138,42 @@ class HeadlineTests(unittest.TestCase):
         self.assertIn("After the $2,000 of costs not tied to any job (overhead such as rent), these files leave "
                       "<b>$1,640</b>, a 15% margin on all sales", html)
         self.assertIn("Some jobs still need a check, so this may be too high.", html)
+
+
+class AppFrameTests(unittest.TestCase):
+    def frame(self, fn, *args):
+        out = []
+        with mock.patch.object(ui, "_html", out.append):
+            fn(*args)
+        return "\n".join(out)
+
+    def test_steps_mark_the_current_step_and_check_off_earlier_ones(self):
+        html = self.frame(ui.steps, 3)
+        self.assertEqual(2, html.count('<div class="mx-nav done">'))
+        self.assertIn('<div class="mx-nav on"><div class="n">3</div>', html)
+
+    def test_file_status_follows_what_marginx_read(self):
+        self.assertIn("<b>Sales report</b> · read", self.frame(ui.file_slots, {"invoices"}))
+        self.assertIn("<b>Cost report</b> · waiting", self.frame(ui.file_slots, {"invoices"}))
+        both = self.frame(ui.file_slots, {"invoices", "costs"})
+        self.assertEqual(2, both.count('class="mx-slot ok"'))
+
+    def test_the_top_bar_says_which_kind_of_session_it_is(self):
+        self.assertIn("Pilot session · this laptop only", self.frame(ui.top_bar, True))
+        self.assertIn("Example data only", self.frame(ui.top_bar, False))
+        self.assertIn(ui.TAGLINE, self.frame(ui.top_bar, False))
+
+    def test_the_app_frame_loads_nothing_from_outside(self):
+        # Icons are drawn inline, the logo is embedded image data, and the frame's style sheet names no
+        # font, image or outside address.
+        bars = [self.frame(ui.top_bar, True), self.frame(ui.top_bar, False)]
+        for markup in (ui._APP_CSS, self.frame(ui.privacy_points, True), self.frame(ui.privacy_points, False),
+                       self.frame(ui.locked_drop),
+                       self.frame(ui.steps, 2), self.frame(ui.what_you_get), self.frame(ui.file_slots, set()), *bars):
+            outside = re.sub(r"data:image/png;base64,[A-Za-z0-9+/=]+", "", markup)  # the embedded logo
+            self.assertNotRegex(outside, r"https?://|@import|url\(|//[a-z]")
+        for bar in bars:
+            self.assertEqual(["data:image/png;base64,"], [m[:22] for m in re.findall(r'src="([^"]+)"', bar)])
 
 
 class SafetyTests(unittest.TestCase):
