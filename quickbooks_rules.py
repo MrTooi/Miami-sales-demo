@@ -228,7 +228,8 @@ def quickbooks_signs(table: list[tuple[int, list[str]]], title_lines: int) -> li
     signs = []
     above_lines = True
     for position, (_, cells) in enumerate(table):
-        filled = [c.strip() for c in cells if c and c.strip()]
+        # Repeated or odd spaces never hide a sign ("Profit  and Loss Detail", "Total  for Fuel").
+        filled = [" ".join(c.split()) for c in cells if c and c.strip()]
         if not filled:
             continue
         first = filled[0]

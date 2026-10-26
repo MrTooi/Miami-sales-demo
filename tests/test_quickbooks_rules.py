@@ -415,6 +415,23 @@ class QuickBooksLookAlikeTests(unittest.TestCase):
             with self.subTest(sign, name="read_csv"), self.assertRaisesRegex(ji.IntakeError, "looks like a QuickBooks report"):
                 ji.read_csv(csv_bytes(rows))
 
+    def test_repeated_spaces_never_hide_a_sign(self):
+        # Automated review of 6b95a49: "Profit  and Loss Detail" above generic columns.
+        plain = [["Invoice", "Date", "Customer", "Type", "Amount"], ["INV-1", "10/02/2026", "Bakery (fictional)", "Invoice", "40.00"]]
+        for rows in ([["Profit  and Loss Detail"], *plain], [[" Sales by\tCustomer   Detail "], *plain],
+                     [*plain, ["Total  for   Bakery (fictional)", "", "", "", "40.00"]],
+                     [*plain, ["Accrual  Basis  Monday, October 26, 2026 07:04 PM GMTZ"]],
+                     [*plain, ["Gross   Profit", "", "", "", "40.00"]],
+                     [["Invoice", "Date", "Customer", "Memo/Description", "Amount"],
+                      ["INV-1", "10/02/2026", "Bakery (fictional)", "Sign", "40.00"]],
+                     [["Invoice", "Date", "Customer", "Transaction  type", "Num", "Amount"],
+                      ["INV-1", "10/02/2026", "Bakery (fictional)", "Invoice", "1001", "40.00"]]):
+            for name in ("file.csv", "file.xlsx"):
+                with self.subTest(rows=rows[0], name=name):
+                    self.assertIn("looks like a QuickBooks report", self.refusal(rows, name))
+        with self.assertRaisesRegex(ji.IntakeError, "Transaction List by Customer"):
+            ji.read_file("list.csv", csv_bytes([["Transaction  List by  Customer"], *plain]))
+
     def test_titles_are_looked_for_only_above_the_lines(self):
         # A line whose description happens to start like a report title isn't a title.
         rows = [["Invoice", "Date", "Customer", "Description", "Amount"],
@@ -469,6 +486,17 @@ class PlainListReaderAuditTests(unittest.TestCase):
         reasons = " ".join(" ".join(r["reasons"]) for r in result.rejected)
         self.assertIn("Account 'Cost of Goods Sold' isn't an income account, so this line isn't counted as a sale", reasons)
         self.assertIn("This line's account is blank", reasons)
+        # Every account column name is checked, and every account column must show income.
+        for header in ("Account name", "Income account", "GL account", "Ledger account"):
+            with self.subTest(header):
+                result = self.read(f"Invoice,Date,Customer,{header},Amount\nI-1,10/02/2026,A,Design income,1.00\n"
+                                   f"I-2,10/02/2026,A,Cost of Goods Sold,2.00\n".encode(), "invoices")
+                self.assertEqual((["I-1"], [3]), ([r["invoice_id"] for r in result.accepted], [r["row"] for r in result.rejected]))
+        both = self.read(b"Invoice,Date,Customer,Account,Income account,Amount\nI-1,10/02/2026,A,Design income,Design income,1.00\n"
+                         b"I-2,10/02/2026,A,Design income,Cost of Goods Sold,2.00\n"
+                         b"I-3,10/02/2026,A,Cost of Goods Sold,Design income,3.00\n", "invoices")
+        self.assertEqual(["I-1"], [r["invoice_id"] for r in both.accepted])
+        self.assertTrue(all(r["money_missing"] for r in both.rejected))
         # A file with no account column reads as before.
         plain = self.read(b"Invoice,Date,Customer,Amount\nI-1,10/02/2026,Bakery (fictional),100.00\n", "invoices")
         self.assertEqual(1, len(plain.accepted))
