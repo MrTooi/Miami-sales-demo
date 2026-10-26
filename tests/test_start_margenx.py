@@ -201,6 +201,67 @@ class LauncherTests(unittest.TestCase):
         for target, data in planted.items():
             self.assertEqual(data, target.read_bytes())  # left exactly as it was
 
+    def helper(self, place, name="helper"):
+        """An executable that records it ran (in a sentinel file) and does nothing else."""
+        place.mkdir(parents=True, exist_ok=True)
+        script = place / name
+        script.write_text(f'#!/bin/sh\necho "{name} ran" >> "{self.root / "ran.txt"}"\n')
+        script.chmod(0o755)
+        return script
+
+    def assert_nothing_else_ran(self):
+        sentinel = self.root / "ran.txt"
+        self.assertFalse(sentinel.exists(), "a git helper ran: " + (sentinel.read_text() if sentinel.exists() else ""))
+
+    def test_a_git_file_monitor_never_runs_online_or_offline(self):
+        # core.fsmonitor makes git run a program on every status check; here one hides in an allowed cache.
+        for offline in (False, True):
+            with self.subTest(offline=offline):
+                self.setUp()
+                self.first_start()
+                monitor = self.helper(self.app / "__pycache__", "fsmonitor")
+                git("config", "core.fsmonitor", str(monitor), cwd=self.app)
+                if offline:
+                    self.go_offline()
+                self.assert_refused(self.launch(), "core.fsmonitor")
+                self.assert_nothing_else_ran()
+
+    def test_git_hooks_never_run_during_an_update(self):
+        # Hooks in the project's own hooks folder (after checkout, on any ref change) are switched off,
+        # and the update to the new main still happens.
+        self.first_start()
+        hooks = Path(git("rev-parse", "--git-common-dir", cwd=self.repo))
+        hooks = (hooks if hooks.is_absolute() else self.repo / hooks) / "hooks"
+        for name in ("post-checkout", "reference-transaction"):
+            self.helper(hooks, name)
+        v2 = self.commit("v2")
+        run = self.launch()
+        self.assertEqual(0, run.returncode, run.stdout + run.stderr)
+        self.assertEqual(v2, git("rev-parse", "HEAD", cwd=self.app))
+        self.assert_nothing_else_ran()
+
+    def test_settings_that_point_git_at_other_programs_never_start(self):
+        for key, value in (("core.hooksPath", "__pycache__"), ("filter.x.clean", "helper"),
+                           ("core.sshCommand", "helper"), ("credential.helper", "helper"),
+                           ("include.path", "/dev/null"), ("url.ext::sh.insteadOf", "https://")):
+            with self.subTest(key=key):
+                self.setUp()
+                self.first_start()
+                self.helper(self.app / "__pycache__")
+                git("config", key, value, cwd=self.app)
+                self.assert_refused(self.launch(), key.lower().split(".")[0])
+                self.assert_nothing_else_ran()
+
+    def test_this_macs_own_git_settings_are_ignored(self):
+        # Git LFS adds filters to the personal git settings (as on the owner's Mac): they are ignored,
+        # never run, and don't block MargenX.
+        filt = self.helper(self.root / "bin", "lfs-filter")
+        (self.root / ".gitconfig").write_text(f"[filter \"lfs\"]\n\tclean = {filt}\n\tsmudge = {filt}\n"
+                                              f"\trequired = true\n[core]\n\tfsmonitor = {filt}\n")
+        run = self.launch()
+        self.assertEqual(0, run.returncode, run.stdout + run.stderr)
+        self.assert_nothing_else_ran()
+
     def test_a_version_that_is_not_on_main_never_runs(self):
         self.assertEqual(0, self.launch().returncode)
         self.record.unlink()

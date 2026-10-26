@@ -28,6 +28,23 @@ stop() {
 
 real() { (cd "$1" 2>/dev/null && pwd -P); }
 
+# Git can be set up to run other programs (a file monitor, hooks, filters, credential and transport
+# helpers). Every git command here ignores this Mac's system and personal git settings and runs
+# with those features off; the project's own settings must not name any of them (checked below).
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+GIT_SAFE=(-c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.untrackedCache=false
+          -c core.attributesFile=/dev/null -c protocol.ext.allow=never)
+g() { git "${GIT_SAFE[@]}" "$@"; }
+
+check_git_config() {
+  local cfg bad
+  cfg="$(g -C "$1" config --list --show-scope 2>&1)" || stop "Couldn't read the git settings in $1 ($cfg)."
+  bad="$(printf '%s\n' "$cfg" | awk -F'\t' '$1 != "command" { split($2, kv, "="); print kv[1] }' \
+    | grep -Ei '^(filter\.|core\.(fsmonitor|hookspath|attributesfile|sshcommand|gitproxy|askpass)$|credential\.|include\.|includeif\.|url\.|protocol\.|uploadpack\.|remote\.[^.]+\.(uploadpack|receivepack|vcs|proxy)$)' \
+    | sort -u | tr '\n' ' ')"
+  [ -z "$bad" ] || stop "$1 has git settings that can run other programs ($bad), so MargenX won't start. Ask Claude Code to check them."
+}
+
 # The copy must be exactly its approved version. Git's own summary isn't trusted alone: a failing git
 # command stops here, files flagged so git ignores their edits (assume-unchanged, skip-worktree) are
 # refused, and every committed file is compared byte for byte with what is on disk. Nothing in the
@@ -42,8 +59,12 @@ import sys
 app = sys.argv[1]
 
 
+SAFE = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.untrackedCache=false",
+        "-c", "core.attributesFile=/dev/null", "-c", "protocol.ext.allow=never"]  # as g() in the shell
+
+
 def git(*args):
-    run = subprocess.run(["git", "-C", app, *args], capture_output=True)
+    run = subprocess.run(["git", *SAFE, "-C", app, *args], capture_output=True)
     if run.returncode != 0:
         print(f"  git {args[0]} failed: {run.stderr.decode(errors='replace').strip()}")
         sys.exit(2)
@@ -94,6 +115,7 @@ PY
 }
 
 [ -d "$REPO/.git" ] || stop "Can't find the MargenX project at $REPO."
+check_git_config "$REPO"
 [ -x "$VENV/bin/streamlit" ] && [ -x "$VENV/bin/python" ] || stop "Can't find MargenX's Python setup at $VENV."
 if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   stop "Something is already running at port $PORT. If MargenX is already open, use that window, or close it first."
@@ -109,30 +131,31 @@ if [ -e "$APP" ]; then
     case "$line" in
       "worktree "*) [ "$(real "${line#worktree }")" = "$app_real" ] && registered=yes ;;
     esac
-  done < <(git -C "$REPO" worktree list --porcelain 2>/dev/null)
+  done < <(g -C "$REPO" worktree list --porcelain 2>/dev/null)
   [ "$registered" = yes ] || stop "$APP isn't MargenX's own copy. Move it somewhere else, then try again."
+  check_git_config "$APP"
   verify_copy
 fi
 
 echo "Getting the latest approved MargenX..."
-if git -C "$REPO" fetch --quiet origin main; then
+if g -C "$REPO" fetch --quiet origin main; then
   online=yes
 else
   online=no
   echo "Couldn't reach GitHub, so this is the version already on this Mac."
 fi
-git -C "$REPO" rev-parse --verify --quiet origin/main >/dev/null || stop "There's no approved version of MargenX on this Mac yet. Connect to the internet and try again."
+g -C "$REPO" rev-parse --verify --quiet origin/main >/dev/null || stop "There's no approved version of MargenX on this Mac yet. Connect to the internet and try again."
 if [ ! -e "$APP" ]; then
-  git -C "$REPO" worktree add --quiet --detach "$APP" origin/main || stop "Couldn't set up $APP."
+  g -C "$REPO" worktree add --quiet --detach "$APP" origin/main || stop "Couldn't set up $APP."
 elif [ "$online" = yes ]; then
-  git -C "$APP" checkout --quiet --detach origin/main || stop "Couldn't update $APP."
+  g -C "$APP" checkout --quiet --detach origin/main || stop "Couldn't update $APP."
 fi
 
 # Approved means on main, as last fetched from GitHub: a local or unmerged version never runs.
-head="$(git -C "$APP" rev-parse --verify --quiet HEAD)" || stop "Couldn't read the version in $APP."
-git -C "$REPO" merge-base --is-ancestor "$head" origin/main || stop "The copy in $APP isn't an approved version of MargenX."
+head="$(g -C "$APP" rev-parse --verify --quiet HEAD)" || stop "Couldn't read the version in $APP."
+g -C "$REPO" merge-base --is-ancestor "$head" origin/main || stop "The copy in $APP isn't an approved version of MargenX."
 verify_copy  # again, after any update: what runs is exactly the approved files
-echo "MargenX version $(git -C "$APP" log -1 --format='%h from %cd' --date=format:'%b %d, %Y')."
+echo "MargenX version $(g -C "$APP" log -1 --format='%h from %cd' --date=format:'%b %d, %Y')."
 
 # The Python setup must have every package this version needs, at the version it needs (checked
 # isolated, from outside the copy, so nothing in the copy is imported).
