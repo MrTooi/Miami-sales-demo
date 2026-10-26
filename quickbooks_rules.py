@@ -178,17 +178,19 @@ def classify_sales_by_customer_line(transaction_type: str | None, amount: Decima
 
 # --- S2: what makes a file look like a QuickBooks report -----------------------------------------
 
-# Report titles QuickBooks Online prints above the column names (a title line, matched from its
-# start). Generous on purpose: a false match only refuses a file, it never counts anything.
+# Report titles QuickBooks Online prints above the column names, matched from the start of any cell
+# in the top rows (a title can share its row with the company name or the period). Generous on
+# purpose: a false match only refuses a file, it never counts anything.
 QUICKBOOKS_TITLE = re.compile(
-    r"(?i)^(profit and loss|balance sheet|statement of cash flows|general ledger|journal\b|trial balance|"
+    r"(?i)^(profit and loss|balance sheet|statement of cash flows|general ledger|journal( report)?$|trial balance|"
     r"transaction (detail|list|report)|sales by (customer|product|class|location|rep)|income by customer|"
     r"customer balance|vendor balance|a/?r aging|a/?p aging|invoice list|invoices and received payments|"
     r"open invoices|collections report|deposit detail|check detail|expenses by vendor|purchases by|"
-    r"bill payment list|unpaid bills|project profitability|time activities by|estimates by|unbilled|"
+    r"bill payment list|unpaid bills|project profitability|time activities by|estimates by|unbilled (charges|time)|"
     r"sales tax liability|recent transactions|inventory valuation|physical inventory)")
 TRANSACTION_LIST = re.compile(r"(?i)^transaction list by customer\b")
-# Column names only QuickBooks uses (compared in lower case, spaces collapsed).
+# Column names QuickBooks uses (compared in lower case, spaces collapsed). A heuristic, not proof: other
+# programs may use some of them too, and a false match only refuses the file, never counts anything.
 QUICKBOOKS_COLUMNS = frozenset({
     "memo/description", "product/service", "product/service full name", "item split account", "split",
     "split account", "class full name", "location full name", "account full name", "customer full name",
@@ -198,6 +200,9 @@ QUICKBOOKS_COLUMNS = frozenset({
 # October 26, 2026 07:04 PM GMTZ") and Profit and Loss summary rows, in a row's first filled cell.
 TOTAL_FOR = re.compile(r"(?i)^total for\s+\S")
 BASIS_FOOTER = re.compile(r"(?i)^(accrual|cash) basis\b")
+# A cell that is only a number or a date ("40.00", "10/02/2026", "(12.50)"): the first row holding one
+# is where the lines start, so titles and column names are looked for only above it.
+DATA_CELL = re.compile(r"^[\s$+\-(]*\d[\d,.\s/:-]*\)?$")
 SUMMARY_ROWS = frozenset({"gross profit", "net ordinary income", "net operating income", "net other income",
                           "net income"})
 
@@ -211,19 +216,22 @@ def quickbooks_signs(table: list[tuple[int, list[str]]], title_lines: int) -> li
     """What makes a file look like a QuickBooks report, in plain words; empty when nothing does.
 
     table: every non-empty row of the file, with its row number. title_lines: how many rows to look
-    at for a title block and the column names (the reader's own limit). Looked for: a QuickBooks
-    report title above the column names, QuickBooks column names, a "Total for ..." row, a basis
-    footer, or a Profit and Loss summary row (S2).
+    at for a title block and the column names (the reader's own limit). Looked for, in any cell of
+    the top rows (above the first row holding a number or a date): a QuickBooks report title or
+    QuickBooks column names. In any row's first filled cell: a "Total for ..." row, a basis footer or
+    a Profit and Loss summary row (S2).
     """
     signs = []
+    top = True
     for position, (_, cells) in enumerate(table):
         filled = [c.strip() for c in cells if c and c.strip()]
         if not filled:
             continue
         first = filled[0]
-        if position <= title_lines and len(filled) == 1 and QUICKBOOKS_TITLE.match(first):
-            signs.append(f"the title '{_shown(first)}'")
-        if position <= title_lines and len(filled) >= 2:
+        top = top and position <= title_lines and not any(DATA_CELL.match(c) for c in filled)
+        if top:
+            signs += [f"the title '{_shown(c)}'" for c in filled if QUICKBOOKS_TITLE.match(c)]
+        if top and len(filled) >= 2:
             signs += [f"the column '{_shown(c)}'" for c in filled if _text(c) in QUICKBOOKS_COLUMNS]
             names = {_text(c) for c in filled}
             if {"transaction type", "num"} <= names:
@@ -247,12 +255,10 @@ def quickbooks_refusal(table: list[tuple[int, list[str]]], title_lines: int) -> 
     signs = quickbooks_signs(table, title_lines)
     if not signs:
         return None
-    for _, cells in table[:title_lines + 1]:
-        filled = [c.strip() for c in cells if c and c.strip()]
-        if len(filled) == 1 and TRANSACTION_LIST.match(filled[0]):
-            return ("This looks like QuickBooks' \"Transaction List by Customer\" report. It mixes invoices with "
-                    "customer payments, and its totals add both together, so it can't be used as a sales file "
-                    "(and it has no costs). Nothing from this file was used.")
+    if any(TRANSACTION_LIST.match(sign.removeprefix("the title '")) for sign in signs if sign.startswith("the title")):
+        return ("This looks like QuickBooks' \"Transaction List by Customer\" report. It mixes invoices with "
+                "customer payments, and its totals add both together, so it can't be used as a sales file "
+                "(and it has no costs). Nothing from this file was used.")
     return (f"This looks like a QuickBooks report (it has {signs[0]}), and MargenX can't read QuickBooks reports "
             "yet, so nothing from this file was used. For now, upload a plain list with one row per sale or cost, "
             "with columns such as Date, Customer, Job and Amount.")

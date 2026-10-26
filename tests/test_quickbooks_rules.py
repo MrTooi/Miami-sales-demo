@@ -377,6 +377,28 @@ class QuickBooksLookAlikeTests(unittest.TestCase):
         with self.assertRaisesRegex(ji.IntakeError, "looks like a QuickBooks report"):
             ji.read_csv(csv_bytes(cases["the row 'Gross Profit'"]))
 
+    def test_a_title_sharing_its_row_with_other_cells_still_refuses_the_file(self):
+        # Automated review of 1fab20f: a QuickBooks title beside the company name, above an ordinary
+        # invoice list with no other QuickBooks sign, must still be refused before the reader sees it.
+        plain = [["Invoice", "Date", "Customer", "Job", "Amount"], ["INV-1", "10/02/2026", "Bakery (fictional)", "J-1", "40.00"]]
+        for title in (["Profit and Loss Detail", "Example shop (fictional)"], ["Example shop (fictional)", "Sales by Customer Detail"],
+                      ["Profit and Loss Detail", "", "January 1-October 26, 2026"]):
+            for name in ("file.csv", "file.xlsx"):
+                with self.subTest(title=title, name=name):
+                    reason = self.refusal([title, *plain], name)
+                    self.assertIn("This looks like a QuickBooks report (it has the title", reason)
+        for name in ("list.csv", "list.xlsx"):
+            with self.subTest("transaction list", name=name):
+                reason = self.refusal([["Transaction List by Customer", "Example shop (fictional)"], *plain], name)
+                self.assertIn('"Transaction List by Customer"', reason)
+
+    def test_titles_and_column_names_are_looked_for_only_above_the_lines(self):
+        # A line whose description happens to start like a report title isn't a title.
+        rows = [["Invoice", "Date", "Customer", "Description", "Amount"],
+                ["INV-1", "10/02/2026", "Bakery (fictional)", "Balance sheet cleanup", "40.00"],
+                ["INV-2", "10/03/2026", "Bakery (fictional)", "Split", "10.00"]]
+        self.assertEqual([], qr.quickbooks_signs([(n, r) for n, r in enumerate(rows, 1)], ji.MAX_TITLE_LINES))
+
     def test_an_unrecognised_quickbooks_layout_is_refused(self):
         # A QuickBooks look-alike whose title and columns match nothing MargenX knows.
         rows = [["Biscayne Landscaping (fictional)"], ["Customer Income Overview (fictional variant)"], ["All Dates"], [],
