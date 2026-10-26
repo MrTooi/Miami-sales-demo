@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -p
 # Double-click to start MargenX in pilot mode on this Mac, with the latest approved version.
 #
 # Approved means exactly the commit at the tip of main in the MargenX repository on GitHub, at the
@@ -11,17 +11,22 @@
 # (only __pycache__ folders, test caches and Finder files are allowed), and every file must match the
 # approved commit byte for byte, checked by recomputing each object's fingerprint from that commit
 # down. Nothing in the copy is forced or cleaned: a problem stops the launch with a message. Git and
-# the launcher's own Python checks run with every feature that could run another program switched
+# the launcher's own Python checks run with git's features that could run another program switched
 # off. The Python setup is checked against the version's requirements, then MargenX opens at
 # http://localhost:8501, on this laptop only. Close this window (or press Ctrl+C) to stop MargenX.
 #
-# Nothing the launcher is started with changes what runs: every setting below is written here, and
-# the variables git, Python, Streamlit and MargenX read (GIT_*, PYTHON*, STREAMLIT_*, MARGINX_*,
-# MARGENX_*) are removed first. Its tests run a copy with the GitHub address and port swapped.
+# The launcher trusts this Mac itself: its system programs, its Python setup and the user account it
+# runs as. Beyond that, what it is started with doesn't change what runs: bash starts with -p (no
+# BASH_ENV startup file or inherited shell functions), only the system's own programs are used (a
+# fixed PATH), every setting below is written here, and the variables git, Python, Streamlit and
+# MargenX read (GIT_*, PYTHON*, STREAMLIT_*, MARGINX_*, MARGENX_*), and the shell startup files
+# (BASH_ENV, ENV), are removed first, so nothing started from here sees them either. Its tests run a
+# copy with the GitHub address, port and browser opening swapped.
 
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 while IFS= read -r var; do
   unset "$var"
-done < <(compgen -e | grep -E '^(GIT_|PYTHON|STREAMLIT_|MARGINX_|MARGENX_)')
+done < <(compgen -e | grep -E '^(GIT_|PYTHON|STREAMLIT_|MARGINX_|MARGENX_|BASH_ENV$|ENV$)')
 
 APPROVED_URL="https://github.com/MrTooi/Miami-sales-demo.git"
 REPO="$HOME/Documents/GitHub/Miami-sales-demo"

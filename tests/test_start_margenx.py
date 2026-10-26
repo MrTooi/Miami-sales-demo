@@ -77,11 +77,13 @@ class LauncherTests(unittest.TestCase):
             text = text.replace(shipped, test)
         copy = self.root / "start_margenx_test.command"
         copy.write_text(text)
+        copy.chmod(0o755)
         return copy
 
     def launch(self, cwd=None, launcher=None, **extra):
         env = {"HOME": str(self.root), "PATH": os.environ["PATH"], **GIT_ENV, **extra}
-        return subprocess.run(["bash", str(launcher or self.launcher_for_tests())], env=env, input="",
+        # Run as a double-click does: the file itself, so its first line decides how bash starts.
+        return subprocess.run([str(launcher or self.launcher_for_tests())], env=env, input="",
                               capture_output=True, text=True, timeout=60, cwd=cwd)
 
     def started(self):
@@ -337,6 +339,26 @@ class LauncherTests(unittest.TestCase):
                 self.assertEqual(0, run.returncode, run.stdout + run.stderr)
                 self.assertEqual(v, git("rev-parse", "HEAD", cwd=self.app))
                 self.assertEqual("# stand-in\n", (self.app / "marginx_pilot.py").read_text())
+                self.assert_nothing_else_ran()
+                self.record.unlink()
+
+    def test_programs_and_shell_settings_handed_to_the_launcher_never_run(self):
+        # A git earlier on PATH, a BASH_ENV startup file or an inherited shell function named git:
+        # the launcher uses only the system's own programs and ignores the other two.
+        sentinel = self.root / "ran.txt"
+        fake = self.root / "fakebin"
+        fake.mkdir()
+        (fake / "git").write_text(f'#!/bin/sh\necho "fake git ran" >> "{sentinel}"\nexec /usr/bin/git "$@"\n')
+        (fake / "git").chmod(0o755)
+        for name, extra in (
+                ("path", {"PATH": f"{fake}:{os.environ['PATH']}"}),
+                ("bash env", {"BASH_ENV": str(self.helper(self.root / "bin", "bash-env"))}),
+                ("function", {"BASH_FUNC_git%%": f'() {{ echo "git function ran" >> "{sentinel}"; command git "$@"; }}'})):
+            with self.subTest(name):
+                v = self.commit(f"v-{name}")
+                run = self.launch(**extra)
+                self.assertEqual(0, run.returncode, run.stdout + run.stderr)
+                self.assertEqual(v, git("rev-parse", "HEAD", cwd=self.app))
                 self.assert_nothing_else_ran()
                 self.record.unlink()
 
