@@ -287,6 +287,28 @@ class LauncherTests(unittest.TestCase):
                 self.assert_refused(self.launch(), key.lower().split(".")[0])
                 self.assert_nothing_else_ran()
 
+    def test_an_alternate_refs_command_never_runs_during_the_download(self):
+        # core.alternateRefsCommand, with the project borrowing objects from another repository, makes
+        # git run a program during fetch.
+        self.first_start()
+        borrowed = self.root / "borrowed"
+        git("clone", "-q", "--bare", str(self.origin), str(borrowed), cwd=self.root)
+        objects = Path(git("rev-parse", "--git-common-dir", cwd=self.repo))
+        objects = (objects if objects.is_absolute() else self.repo / objects) / "objects" / "info"
+        objects.mkdir(parents=True, exist_ok=True)
+        (objects / "alternates").write_text(str(borrowed / "objects") + "\n")
+        helper = self.helper(self.repo / "__pycache__", "altrefs")
+        git("config", "core.alternateRefsCommand", str(helper), cwd=self.repo)
+        self.commit("v2")
+        self.assert_refused(self.launch(), "core.alternaterefscommand")
+        self.assert_nothing_else_ran()
+
+    def test_only_known_harmless_project_settings_are_accepted(self):
+        # Any setting not on the launcher's short list stops it, even one that seems harmless.
+        self.first_start()
+        git("config", "something.new", "yes", cwd=self.repo)
+        self.assert_refused(self.launch(), "something.new")
+
     def test_this_macs_own_git_settings_are_ignored(self):
         # Git LFS adds filters to the personal git settings (as on the owner's Mac): they are ignored,
         # never run, and don't block MargenX.

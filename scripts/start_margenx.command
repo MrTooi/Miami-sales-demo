@@ -40,18 +40,20 @@ real() { (cd "$1" 2>/dev/null && pwd -P); }
 
 # Git can be set up to run other programs (a file monitor, hooks, filters, credential and transport
 # helpers) or to swap objects (replace refs). Every git command here ignores this Mac's system and
-# personal git settings, ignores replace refs, and runs with those features off; the project's own
-# settings must not name any of them (checked below).
+# personal git settings, ignores replace refs, and runs with those features off. The project's own
+# settings may only be ones known to be harmless (an allow-list, checked below): anything else stops
+# the launch, so a setting git adds or one not thought of here can never run a program.
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_TERMINAL_PROMPT=0
 GIT_SAFE=(-c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.untrackedCache=false
-          -c core.attributesFile=/dev/null "${PROTOCOLS[@]}")
+          -c core.attributesFile=/dev/null -c core.alternateRefsCommand= -c gc.auto=0 -c maintenance.auto=false
+          "${PROTOCOLS[@]}")
 g() { git "${GIT_SAFE[@]}" "$@"; }
 
 check_git_config() {
   local cfg bad
   cfg="$(g -C "$1" config --list --show-scope 2>&1)" || stop "Couldn't read the git settings in $1 ($cfg)."
-  bad="$(printf '%s\n' "$cfg" | awk -F'\t' '$1 != "command" { split($2, kv, "="); print kv[1] }' \
-    | grep -Ei '^(filter\.|core\.(fsmonitor|hookspath|attributesfile|sshcommand|gitproxy|askpass)$|credential\.|include\.|includeif\.|url\.|http\.|protocol\.|uploadpack\.|remote\.[^.]+\.(uploadpack|receivepack|vcs|proxy)$)' \
+  bad="$(printf '%s\n' "$cfg" | awk -F'\t' 'NF && $1 != "command" { split($2, kv, "="); print kv[1] }' \
+    | grep -Eiv '^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)|extensions\.[a-z]+|lfs\.repositoryformatversion|submodule\.active|remote\.[^.]+\.(url|fetch|pushurl|tagopt|prune)|branch\..+\.(remote|merge|rebase)|user\.(name|email)|init\.defaultbranch|pull\.rebase|push\.(default|autosetupremote))$' \
     | sort -u | tr '\n' ' ')"
   [ -z "$bad" ] || stop "$1 has git settings that can run other programs ($bad), so MargenX won't start. Ask Claude Code to check them."
 }
