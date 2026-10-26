@@ -15,18 +15,20 @@
 # off. The Python setup is checked against the version's requirements, then MargenX opens at
 # http://localhost:8501, on this laptop only. Close this window (or press Ctrl+C) to stop MargenX.
 #
-# The MARGENX_* variables below exist for the launcher's tests; leave them unset.
+# Nothing the launcher is started with changes what runs: every setting below is written here, and
+# the variables git, Python, Streamlit and MargenX read (GIT_*, PYTHON*, STREAMLIT_*, MARGINX_*,
+# MARGENX_*) are removed first. Its tests run a copy with the GitHub address and port swapped.
+
+while IFS= read -r var; do
+  unset "$var"
+done < <(compgen -e | grep -E '^(GIT_|PYTHON|STREAMLIT_|MARGINX_|MARGENX_)')
 
 APPROVED_URL="https://github.com/MrTooi/Miami-sales-demo.git"
-REPO="${MARGENX_REPO:-$HOME/Documents/GitHub/Miami-sales-demo}"
-APP="${MARGENX_APP:-$HOME/MargenX-app}"
-VENV="${MARGENX_VENV:-$HOME/.venvs/miami-sales-demo}"
-PORT="${MARGENX_PORT:-8501}"
+REPO="$HOME/Documents/GitHub/Miami-sales-demo"
+APP="$HOME/MargenX-app"
+VENV="$HOME/.venvs/miami-sales-demo"
+PORT=8501
 PROTOCOLS=(-c protocol.allow=never -c protocol.https.allow=always)
-if [ -n "$MARGENX_TEST_URL" ]; then  # tests only: a local repository stands in for GitHub
-  APPROVED_URL="$MARGENX_TEST_URL"
-  PROTOCOLS+=(-c protocol.file.allow=always)
-fi
 
 stop() {
   echo
@@ -225,9 +227,7 @@ PY
 cd "$APP" || stop "Couldn't open $APP."
 echo "Opening MargenX in your browser. Close this window to stop it."
 echo
-if [ -z "$MARGENX_NO_BROWSER" ]; then
-  (sleep 4; open "http://localhost:$PORT") &
-fi
+(sleep 4; open "http://localhost:$PORT") &
 # Python keeps its compiled cache in a fresh folder, never in the copy, so no leftover cache file runs.
 PYTHONPYCACHEPREFIX="$(mktemp -d "${TMPDIR:-/tmp}/margenx-pycache.XXXXXX")" || stop "Couldn't make a cache folder."
 export PYTHONPYCACHEPREFIX

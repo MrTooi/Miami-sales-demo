@@ -1,7 +1,9 @@
 """The double-click launcher: it starts only MargenX's own, unchanged, approved copy in pilot mode.
 
-Each test builds a throwaway "GitHub" repository, a clone of it (the project folder) and a
-stand-in Python setup whose streamlit only records how it was started, then runs the launcher.
+Each test builds a throwaway home with a "GitHub" repository, a clone of it (the project folder) and
+a stand-in Python setup whose streamlit only records how it was started, then runs a copy of the
+launcher with only the GitHub address, the port and the browser opening swapped (the shipped
+launcher takes none of them from its environment).
 """
 import os
 import shutil
@@ -44,10 +46,10 @@ class LauncherTests(unittest.TestCase):
         (self.origin / ".gitignore").write_text("__pycache__/\n*.py[cod]\n.DS_Store\n*.local\n")  # like the project's
         self.v1 = self.commit("v1")
         self.github = str(self.origin)  # stands in for GitHub: what the launcher asks for the approved version
-        self.repo = self.root / "project"
+        self.repo = self.root / "Documents" / "GitHub" / "Miami-sales-demo"  # where the launcher looks, under HOME
         git("clone", "-q", str(self.origin), str(self.repo), cwd=self.root)
         self.app = self.root / "MargenX-app"
-        self.venv = self.root / "venv" / "bin"
+        self.venv = self.root / ".venvs" / "miami-sales-demo" / "bin"
         self.venv.mkdir(parents=True)
         self.record = self.root / "started.txt"
         (self.venv / "python").write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
@@ -63,13 +65,24 @@ class LauncherTests(unittest.TestCase):
         git("commit", "-q", "-m", name, cwd=self.origin)
         return git("rev-parse", "HEAD", cwd=self.origin)
 
-    def launch(self, cwd=None):
-        env = {"HOME": str(self.root), "PATH": os.environ["PATH"], "MARGENX_REPO": str(self.repo),
-               "MARGENX_APP": str(self.app), "MARGENX_VENV": str(self.venv.parent),
-               "MARGENX_PORT": str(free_port()), "MARGENX_NO_BROWSER": "1", "MARGENX_TEST_URL": self.github,
-               **GIT_ENV}
-        return subprocess.run(["bash", str(LAUNCHER)], env=env, input="", capture_output=True, text=True, timeout=60,
-                              cwd=cwd)
+    def launcher_for_tests(self):
+        """The launcher with a local repository standing in for GitHub, a free port and no browser."""
+        text = LAUNCHER.read_text()
+        for shipped, test in (
+                ('APPROVED_URL="https://github.com/MrTooi/Miami-sales-demo.git"\n', f'APPROVED_URL="{self.github}"\n'),
+                ("-c protocol.https.allow=always)\n", "-c protocol.https.allow=always -c protocol.file.allow=always)\n"),
+                ("\nPORT=8501\n", f"\nPORT={free_port()}\n"),
+                ('(sleep 4; open "http://localhost:$PORT") &\n', "")):
+            self.assertEqual(1, text.count(shipped), shipped)
+            text = text.replace(shipped, test)
+        copy = self.root / "start_margenx_test.command"
+        copy.write_text(text)
+        return copy
+
+    def launch(self, cwd=None, launcher=None, **extra):
+        env = {"HOME": str(self.root), "PATH": os.environ["PATH"], **GIT_ENV, **extra}
+        return subprocess.run(["bash", str(launcher or self.launcher_for_tests())], env=env, input="",
+                              capture_output=True, text=True, timeout=60, cwd=cwd)
 
     def started(self):
         return self.record.read_text().splitlines() if self.record.exists() else None
@@ -155,7 +168,7 @@ class LauncherTests(unittest.TestCase):
         self.assert_refused(self.launch(), "isn't MargenX's own copy")
 
     def test_the_project_folder_itself_is_never_used_as_the_copy(self):
-        self.app = self.repo
+        self.app.symlink_to(self.repo)
         self.assert_refused(self.launch(), "isn't MargenX's own copy")
 
     def test_a_changed_copy_is_never_run_or_overwritten(self):
@@ -302,6 +315,44 @@ class LauncherTests(unittest.TestCase):
         self.commit("v2")
         self.assert_refused(self.launch(), "core.alternaterefscommand")
         self.assert_nothing_else_ran()
+
+    def test_git_settings_handed_to_the_launcher_are_ignored(self):
+        # Settings passed in the environment (GIT_CONFIG_COUNT, GIT_CONFIG_PARAMETERS) or another
+        # repository (GIT_DIR) never redirect what is approved or run a program: every inherited GIT_*
+        # variable is removed before git first runs.
+        other = self.root / "other"
+        git("clone", "-q", str(self.origin), str(other), cwd=self.root)
+        (other / "marginx_pilot.py").write_text("print('not approved')\n")
+        git("commit", "-q", "-am", "substitute", cwd=other)
+        helper = self.helper(self.root / "bin", "monitor")
+        rewrite = f"url.{other}.insteadOf"
+        for name, extra in (
+                ("count", {"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": rewrite, "GIT_CONFIG_VALUE_0": self.github,
+                           "GIT_CONFIG_KEY_1": "core.fsmonitor", "GIT_CONFIG_VALUE_1": str(helper)}),
+                ("parameters", {"GIT_CONFIG_PARAMETERS": f"'{rewrite}'='{self.github}' 'core.fsmonitor'='{helper}'"}),
+                ("git dir", {"GIT_DIR": str(other / ".git")})):
+            with self.subTest(name):
+                v = self.commit(f"v-{name}")
+                run = self.launch(**extra)
+                self.assertEqual(0, run.returncode, run.stdout + run.stderr)
+                self.assertEqual(v, git("rev-parse", "HEAD", cwd=self.app))
+                self.assertEqual("# stand-in\n", (self.app / "marginx_pilot.py").read_text())
+                self.assert_nothing_else_ran()
+                self.record.unlink()
+
+    def test_the_shipped_launcher_takes_no_settings_from_its_environment(self):
+        # Only GitHub decides what is approved, and the places used are fixed: the old test variables
+        # (another "GitHub", project, copy or Python setup) are ignored by the launcher as shipped.
+        text = LAUNCHER.read_text()
+        self.assertEqual(1, text.count("APPROVED_URL="))
+        self.assertIn('APPROVED_URL="https://github.com/MrTooi/Miami-sales-demo.git"\n', text)
+        self.assertNotIn("protocol.file", text)
+        self.assertNotIn("$MARGENX_", text)
+        elsewhere = self.root / "elsewhere"
+        shutil.move(str(self.repo), str(elsewhere))
+        run = self.launch(launcher=LAUNCHER, MARGENX_TEST_URL=self.github, MARGENX_REPO=str(elsewhere),
+                          MARGENX_APP=str(self.app), MARGENX_VENV=str(self.venv.parent))
+        self.assert_refused(run, f"Can't find the MargenX project at {self.repo}.")
 
     def test_only_known_harmless_project_settings_are_accepted(self):
         # Any setting not on the launcher's short list stops it, even one that seems harmless.
