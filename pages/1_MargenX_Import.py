@@ -90,7 +90,7 @@ def _release_uploads() -> bool:
 
 
 with st.container(key="mx-bar"):
-    bar_brand, bar_end = st.columns([4, 1.3], vertical_alignment="center")
+    bar_brand, bar_end = st.columns([3.2, 1.6], vertical_alignment="center")
     with bar_brand:
         ui.top_bar(PILOT)
     end_clicked = bar_end.button("End session and clear everything", width="stretch")
