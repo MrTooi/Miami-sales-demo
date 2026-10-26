@@ -4,8 +4,9 @@
 # MargenX runs only from its own copy in ~/MargenX-app: a git worktree of the project, never the
 # project folder itself, so whatever branch the project folder is on doesn't matter. Before
 # starting, the copy must be that registered worktree, byte for byte the approved files with nothing
-# added (only Python and Finder caches are allowed), and on an approved version (one that is on main
-# as last fetched from GitHub); otherwise nothing starts. Each start updates the
+# added (only __pycache__ folders, test caches and Finder files are allowed), and on an approved
+# version (one that is on main as last fetched from GitHub); otherwise nothing starts. The launcher's
+# own Python checks run isolated (python -I, from outside the copy), so they never load a file from it. Each start updates the
 # copy to the latest main when GitHub can be reached, otherwise it says so and uses the copy here.
 # It then checks the Python setup against the version's requirements and opens MargenX at
 # http://localhost:8501, on this laptop only. Close this window (or press Ctrl+C) to stop MargenX.
@@ -32,7 +33,7 @@ real() { (cd "$1" 2>/dev/null && pwd -P); }
 # refused, and every committed file is compared byte for byte with what is on disk. Nothing in the
 # copy is ever changed, forced or cleaned.
 verify_copy() {
-  "$VENV/bin/python" - "$APP" <<'PY' || stop "$APP has been changed or couldn't be checked, so MargenX won't run it. Ask Claude Code to check that folder."
+  (cd / && "$VENV/bin/python" -I - "$APP") <<'PY' || stop "$APP has been changed or couldn't be checked, so MargenX won't run it. Ask Claude Code to check that folder."
 import hashlib
 import os
 import subprocess
@@ -58,9 +59,12 @@ for entry in git("status", "--porcelain=v1", "-z", "--untracked-files=all", "--i
         continue
     code, path = entry[:2].decode(errors="replace"), entry[3:].decode(errors="replace")
     parts = path.rstrip("/").split("/")
-    if code == "!!" and ("__pycache__" in parts or ".pytest_cache" in parts or parts[-1] == ".DS_Store"
-                         or parts[-1].endswith((".pyc", ".pyo"))):
-        continue  # caches: never run (Python's cache goes elsewhere, below)
+    # Only caches that never run: Python reads __pycache__ only beside its approved source file (and,
+    # in pilot mode, not at all: its cache goes elsewhere, below). A .pyc anywhere else can be
+    # imported on its own, so it is refused like any other extra file.
+    if code == "!!" and ("__pycache__" in parts[:-1] or parts[-1] == "__pycache__" or ".pytest_cache" in parts
+                         or parts[-1] == ".DS_Store"):
+        continue
     problems.append(f"{path} is {'not part of the approved version' if code in ('??', '!!') else 'changed'}")
 for record in git("ls-tree", "-r", "-z", "--full-tree", "HEAD").split(b"\0"):
     if not record:
@@ -130,9 +134,9 @@ git -C "$REPO" merge-base --is-ancestor "$head" origin/main || stop "The copy in
 verify_copy  # again, after any update: what runs is exactly the approved files
 echo "MargenX version $(git -C "$APP" log -1 --format='%h from %cd' --date=format:'%b %d, %Y')."
 
-cd "$APP" || stop "Couldn't open $APP."
-# The Python setup must have every package this version needs, at the version it needs.
-"$VENV/bin/python" - requirements.txt <<'PY' || stop "MargenX's Python setup doesn't match this version. In Terminal, run: $VENV/bin/pip install -r $APP/requirements.txt"
+# The Python setup must have every package this version needs, at the version it needs (checked
+# isolated, from outside the copy, so nothing in the copy is imported).
+(cd / && "$VENV/bin/python" -I - "$APP/requirements.txt") <<'PY' || stop "MargenX's Python setup doesn't match this version. In Terminal, run: $VENV/bin/pip install -r $APP/requirements.txt"
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from packaging.requirements import Requirement
@@ -160,6 +164,7 @@ for problem in problems:
 sys.exit(1 if problems else 0)
 PY
 
+cd "$APP" || stop "Couldn't open $APP."
 echo "Opening MargenX in your browser. Close this window to stop it."
 echo
 if [ -z "$MARGENX_NO_BROWSER" ]; then

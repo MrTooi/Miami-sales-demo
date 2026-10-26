@@ -62,11 +62,12 @@ class LauncherTests(unittest.TestCase):
         git("commit", "-q", "-m", name, cwd=self.origin)
         return git("rev-parse", "HEAD", cwd=self.origin)
 
-    def launch(self):
+    def launch(self, cwd=None):
         env = {"HOME": str(self.root), "PATH": os.environ["PATH"], "MARGENX_REPO": str(self.repo),
                "MARGENX_APP": str(self.app), "MARGENX_VENV": str(self.venv.parent),
                "MARGENX_PORT": str(free_port()), "MARGENX_NO_BROWSER": "1", **GIT_ENV}
-        return subprocess.run(["bash", str(LAUNCHER)], env=env, input="", capture_output=True, text=True, timeout=60)
+        return subprocess.run(["bash", str(LAUNCHER)], env=env, input="", capture_output=True, text=True, timeout=60,
+                              cwd=cwd)
 
     def started(self):
         return self.record.read_text().splitlines() if self.record.exists() else None
@@ -177,6 +178,28 @@ class LauncherTests(unittest.TestCase):
         self.record.unlink()
         (self.app / "settings.local").write_text("ignored by git, but not part of MargenX\n")
         self.assert_refused(self.launch(), "settings.local is not part of the approved version")
+
+    def test_a_loose_compiled_python_file_never_runs(self):
+        # Python can import a .pyc with no source beside it. Planted where the launcher's own checks
+        # import from (hashlib, packaging), and with the launcher started from inside the copy, none
+        # may ever run: the checks run isolated, and a loose .pyc stops the launch.
+        import py_compile
+        self.first_start()
+        sentinel = self.root / "ran.txt"
+        planted = {}
+        for module in ("hashlib", "packaging"):
+            source = self.root / f"{module}.py"
+            source.write_text(f"open({str(sentinel)!r}, 'a').write('{module} ran\\n')\n")
+            target = self.app / f"{module}.pyc"
+            py_compile.compile(str(source), cfile=str(target), doraise=True)
+            source.unlink()
+            planted[target] = target.read_bytes()
+        self.assertIn("hashlib.pyc", git("status", "--porcelain", "--ignored", cwd=self.app))  # ignored by git
+        run = self.launch(cwd=self.app)
+        self.assertFalse(sentinel.exists(), "planted code ran: " + (sentinel.read_text() if sentinel.exists() else ""))
+        self.assert_refused(run, "is not part of the approved version")
+        for target, data in planted.items():
+            self.assertEqual(data, target.read_bytes())  # left exactly as it was
 
     def test_a_version_that_is_not_on_main_never_runs(self):
         self.assertEqual(0, self.launch().returncode)
