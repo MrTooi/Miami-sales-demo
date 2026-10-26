@@ -163,6 +163,12 @@ class AppFrameTests(unittest.TestCase):
         self.assertIn("Example data only", self.frame(ui.top_bar, False))
         self.assertIn(ui.TAGLINE, self.frame(ui.top_bar, False))
 
+    def test_the_session_pill_wraps_instead_of_running_off_a_phone_screen(self):
+        # The pill never wraps inside itself, so on a 375px screen the bar has to let it drop to its own line.
+        self.assertIn(".mx-live{margin-left:auto;display:inline-flex;", ui._APP_CSS)
+        self.assertIn("white-space:nowrap}", ui._APP_CSS.split(".mx-live{", 1)[1].split("\n", 1)[0])
+        self.assertIn(".mx-bar{display:flex;flex-wrap:wrap;", ui._APP_CSS)
+
     def test_the_app_frame_loads_nothing_from_outside(self):
         # Icons are drawn inline, the logo is embedded image data, and the frame's style sheet names no
         # font, image or outside address.
