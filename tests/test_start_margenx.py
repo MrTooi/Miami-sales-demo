@@ -43,6 +43,7 @@ class LauncherTests(unittest.TestCase):
         (self.origin / "marginx_pilot.py").write_text("# stand-in\n")
         (self.origin / ".gitignore").write_text("__pycache__/\n*.py[cod]\n.DS_Store\n*.local\n")  # like the project's
         self.v1 = self.commit("v1")
+        self.github = str(self.origin)  # stands in for GitHub: what the launcher asks for the approved version
         self.repo = self.root / "project"
         git("clone", "-q", str(self.origin), str(self.repo), cwd=self.root)
         self.app = self.root / "MargenX-app"
@@ -65,7 +66,8 @@ class LauncherTests(unittest.TestCase):
     def launch(self, cwd=None):
         env = {"HOME": str(self.root), "PATH": os.environ["PATH"], "MARGENX_REPO": str(self.repo),
                "MARGENX_APP": str(self.app), "MARGENX_VENV": str(self.venv.parent),
-               "MARGENX_PORT": str(free_port()), "MARGENX_NO_BROWSER": "1", **GIT_ENV}
+               "MARGENX_PORT": str(free_port()), "MARGENX_NO_BROWSER": "1", "MARGENX_TEST_URL": self.github,
+               **GIT_ENV}
         return subprocess.run(["bash", str(LAUNCHER)], env=env, input="", capture_output=True, text=True, timeout=60,
                               cwd=cwd)
 
@@ -97,18 +99,51 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(0, self.launch().returncode)
         self.assertEqual(v2, git("rev-parse", "HEAD", cwd=self.app))
 
-    def test_offline_it_uses_the_approved_copy_already_here_and_says_so(self):
+    def test_without_github_nothing_starts_even_with_an_approved_copy_here(self):
+        # Which version is approved comes only from GitHub, so offline the launcher never guesses.
         self.assertEqual(0, self.launch().returncode)
-        git("remote", "set-url", "origin", str(self.root / "unreachable"), cwd=self.repo)
+        self.record.unlink()
+        self.go_offline()
+        self.assert_refused(self.launch(), "Couldn't reach GitHub")
+        self.assertEqual(self.v1, git("rev-parse", "HEAD", cwd=self.app))  # the copy is left as it was
+
+    def test_the_projects_own_origin_never_decides_what_is_approved(self):
+        # The project's origin points at another repository with different main code: ignored. The
+        # copy is the commit GitHub says is approved, and nothing from the other repository runs.
+        self.first_start()
+        other = self.root / "other"
+        git("clone", "-q", str(self.origin), str(other), cwd=self.root)
+        (other / "marginx_pilot.py").write_text("print('not approved')\n")
+        git("commit", "-q", "-am", "substitute", cwd=other)
+        git("remote", "set-url", "origin", str(other), cwd=self.repo)
+        git("fetch", "-q", "origin", cwd=self.repo)  # its main is even in the project's refs
+        v2 = self.commit("v2")
         run = self.launch()
         self.assertEqual(0, run.returncode, run.stdout + run.stderr)
-        self.assertIn("Couldn't reach GitHub", run.stdout)
-        self.assertEqual(self.v1, git("rev-parse", "HEAD", cwd=self.app))
+        self.assertEqual(v2, git("rev-parse", "HEAD", cwd=self.app))
+        self.assertEqual("# stand-in\n", (self.app / "marginx_pilot.py").read_text())
 
-    def test_offline_with_no_approved_version_yet_nothing_starts(self):
-        git("remote", "set-url", "origin", str(self.root / "unreachable"), cwd=self.repo)
-        git("update-ref", "-d", "refs/remotes/origin/main", cwd=self.repo)
-        self.assert_refused(self.launch(), "no approved version")
+    def test_an_origin_that_names_a_transport_helper_never_runs_it(self):
+        self.first_start()
+        sentinel = self.root / "ran.txt"
+        git("remote", "set-url", "origin", f"ext::sh -c 'echo ran >> {sentinel}'", cwd=self.repo)
+        run = self.launch()
+        self.assertEqual(0, run.returncode, run.stdout + run.stderr)  # origin isn't used at all
+        self.assertFalse(sentinel.exists())
+
+    def test_a_swapped_object_in_the_project_never_runs(self):
+        # A replace ref makes git show a different file for the approved one: ignored, and every object
+        # the copy is checked against must match its own fingerprint.
+        self.first_start()
+        approved_blob = git("rev-parse", "HEAD:marginx_pilot.py", cwd=self.app)
+        swapped = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=self.repo, input="print('swapped')\n",
+                                 capture_output=True, text=True, check=True).stdout.strip()
+        git("replace", approved_blob, swapped, cwd=self.repo)
+        v2 = self.commit("v2")
+        run = self.launch()
+        self.assertEqual(0, run.returncode, run.stdout + run.stderr)
+        self.assertEqual(v2, git("rev-parse", "HEAD", cwd=self.app))
+        self.assertEqual("# stand-in\n", (self.app / "marginx_pilot.py").read_text())
 
     def test_a_folder_that_is_not_a_repository_never_runs(self):
         self.app.mkdir()
@@ -135,7 +170,7 @@ class LauncherTests(unittest.TestCase):
         self.assert_refused(self.launch(), "has been changed or couldn't be checked")
 
     def go_offline(self):
-        git("remote", "set-url", "origin", str(self.root / "unreachable"), cwd=self.repo)
+        self.github = str(self.root / "unreachable")
 
     def first_start(self):
         self.assertEqual(0, self.launch().returncode)
