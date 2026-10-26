@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 
+import quickbooks_rules as qr
 from finance_engine import MAX_MONEY, money
 
 KINDS = ("invoices", "costs")
@@ -178,6 +179,26 @@ def _is_income_account(name: str) -> bool:
     return bool(words & {"income", "revenue", "revenues", "sales"}) and not words & EXPENSE_ACCOUNT_WORDS
 
 
+# Columns naming the account a sales line is posted to. When a sales file has one, a line counts as a
+# sale only when that account is plainly income: an invoice posted to Cost of Goods Sold or to an
+# expense, a balance-sheet account, unapplied cash or other income is never a sale (issue #128, S1).
+# ("Split" columns name the other side of the entry, so they are never read as the line's account.)
+ACCOUNT_HEADERS = {"account", "account name", "income account", "gl account", "ledger account"}
+NOT_SALES_ACCOUNT_WORDS = EXPENSE_ACCOUNT_WORDS | COST_PARENT_WORDS | BALANCE_SHEET_WORDS | {"unapplied", "other"}
+
+
+def _not_a_sales_account(cells: tuple[str, ...], headers: list[str]) -> str | None:
+    """The account text (or "(blank)") when a sales line's account column doesn't show plain income."""
+    for i, h in enumerate(headers):
+        if _norm(h) not in ACCOUNT_HEADERS:
+            continue
+        parts = [_norm(part) for part in cells[i].split(":")]
+        if not any(parts) or any(set(part.split()) & NOT_SALES_ACCOUNT_WORDS for part in parts) \
+                or not any(_is_income_account(part) for part in parts):
+            return cells[i].strip() or "(blank)"
+    return None
+
+
 # Sales-document names that don't establish an incurred cost when used as a cost category.
 SALES_DOCUMENT_TYPES = INVOICE_LINE_TYPES | {"income", "revenue", "sales income", "estimate", "estimates"}
 # Whole cost types for card purchases: ordinary expenses, though they mention "credit"/"debit".
@@ -212,8 +233,8 @@ MAX_ROWS = 50_000
 MAX_COLUMNS = 100
 # An Excel number is written out in full only up to this many digits before or after the decimal point.
 MAX_NUMBER_DIGITS = 20
-# Report exports (for example QuickBooks Online) put title lines above the column names. The column
-# names are looked for within this many non-empty lines at the top.
+# Report exports put title lines above the column names. The column names are looked for within this
+# many non-empty lines at the top. (A QuickBooks report is refused before that: _refuse_quickbooks.)
 MAX_TITLE_LINES = 12
 
 
@@ -257,6 +278,7 @@ def _is_blank_line(cells: list[str]) -> bool:
 def read_csv(data: bytes) -> tuple[list[str], list[Record]]:
     """Parse CSV bytes into headers and records, refusing anything ambiguous."""
     table = _csv_rows(data)
+    _refuse_quickbooks(table)
     headers = list(table[0][1])  # kept exactly as written, so exports round-trip
     _check_headers(headers)
     return headers, [Record(number, tuple(cells)) for number, cells in table[1:]]
@@ -297,15 +319,17 @@ def _csv_rows(data: bytes) -> list[tuple[int, list[str]]]:
 def read_file(name: str, data: bytes) -> tuple[list[str], list[Record], list[str]]:
     """Read a CSV or Excel (.xlsx) file into headers, records and plain notes on how it was read.
 
-    Report exports (for example from QuickBooks Online) may have title lines above the column
-    names: these are found and skipped, and a note says which lines were skipped. A column whose
-    name is blank in such a report gets a visible placeholder name. Anything else unclear is refused.
+    A file that looks like a QuickBooks report is refused first (issue #128, S2). Other report
+    exports may have title lines above the column names: these are found and skipped, and a note
+    says which lines were skipped. A column whose name is blank in such a report gets a visible
+    placeholder name. Anything else unclear is refused.
     """
     is_xlsx = name.lower().endswith(".xlsx")
     if not (is_xlsx or name.lower().endswith(".csv")) or is_xlsx != data.startswith(b"PK\x03\x04"):
         raise IntakeError("The file's name and contents don't match (an Excel file must end in .xlsx, a CSV file "
                           "in .csv). Export it again as CSV or Excel (.xlsx).")
     table = _xlsx_rows(data) if is_xlsx else _csv_rows(data)
+    _refuse_quickbooks(table)
     start = _header_row(table)
     notes = []
     if start:
@@ -335,6 +359,15 @@ def read_file(name: str, data: bytes) -> tuple[list[str], list[Record], list[str
             cells = cells[:width]  # only empty cells past the last named column
         records.append(Record(number, tuple(cells)))
     return headers, records, notes
+
+
+def _refuse_quickbooks(table: list[tuple[int, list[str]]]) -> None:
+    """A file that looks like a QuickBooks report is refused before anything is read from it: no
+    QuickBooks layout is verified yet, and this reader can't tell an invoice under Cost of Goods
+    Sold from a sale (issue #128, S2)."""
+    refusal = qr.quickbooks_refusal(table, MAX_TITLE_LINES)
+    if refusal:
+        raise IntakeError(refusal)
 
 
 def _column_letter(index: int) -> str:
@@ -890,6 +923,25 @@ def _unrecognized_type(cells: tuple[str, ...], headers: list[str], mapping: dict
     return None
 
 
+def sales_file_refusal(headers: list[str], records: list[Record]) -> str | None:
+    """The plain reason a file can't be a sales file because it holds payments or deposits, else None.
+
+    A report that mixes sales with payments (QuickBooks' "Transaction List by Customer", an invoice
+    list with payment rows) adds the same money in twice, and a payment's type alone never proves it
+    can be left out (issue #128, S1 and S9). So the whole file is refused as a sales file instead of
+    leaving its payment rows out.
+    """
+    columns = [i for i, h in enumerate(headers) if _norm(h) in TYPE_HEADERS]
+    for rec in records:
+        for i in columns:
+            if i < len(rec.cells) and _norm(rec.cells[i]) in CASH_MOVEMENT_TYPES:
+                return (f"This file mixes sales with payments or deposits (row {rec.row} is "
+                        f"'{rec.cells[i].strip()}'). A payment is money received for an invoice, not a new sale, "
+                        "so this file can't be used as a sales file and nothing from it was used. Export only "
+                        "invoices, sales receipts and credit memos, and upload that file.")
+    return None
+
+
 def _credit_memo(cells: tuple[str, ...], type_columns: list[int]) -> str | None:
     """The row's type text when it is a credit memo or note (singular or plural)."""
     for i in type_columns:
@@ -1095,6 +1147,9 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
         raise IntakeError(" ".join(problems))
     if amount_scope not in (None, *AMOUNT_SCOPES):
         raise IntakeError(f"Unknown amount meaning: {amount_scope}")
+    refusal = sales_file_refusal(headers, records) if kind == "invoices" else None
+    if refusal:
+        raise IntakeError(refusal)
     question = amount_scope_question(headers, records, mapping, kind)
     if question and amount_scope is None:
         raise IntakeError(f"Say whether '{mapping['amount']}' is each line's amount or the whole "
@@ -1193,6 +1248,13 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
             reasons.append(f"Type '{unrecognized}' isn't a recognized posted cost (a bill, expense, check, card "
                            "charge or fee), or the row's type columns disagree: it may be money moving, a credit, "
                            "an estimate or an order, so it isn't imported.")
+        account = _not_a_sales_account(rec.cells, headers) if kind == "invoices" else None
+        if account == "(blank)":
+            reasons.append("This line's account is blank, so whether it is a sale can't be told; not imported.")
+        elif account:
+            reasons.append(f"Account '{account}' isn't an income account, so this line isn't counted as a sale "
+                           "(an invoice posted to Cost of Goods Sold or to an expense is a cost entry, not a sale). "
+                           "Check its account where the data comes from.")
         memo = _credit_memo(rec.cells, types)
         if memo and amount is not None and amount > 0:
             # A credit lowers what was billed; a positive one would raise it. Which sign is
