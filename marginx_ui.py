@@ -117,6 +117,72 @@ def apply_brand() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
 
 
+# The app frame (top bar, steps column, consent and upload cards): the import page only, never the
+# static demo page, which has no upload of any kind.
+_APP_CSS = """
+<style>
+/* The app frame: a dark top bar, a steps column and the page beside it (the import page only). */
+.block-container:has(.st-key-mx-bar){max-width:none;padding:0 0 3rem}
+[data-testid="stHeader"]{display:none!important}
+[data-testid="stElementContainer"]:has(>[data-testid="stMarkdown"] style){display:none}
+.st-key-mx-bar{background:#0F1F19;padding:10px 28px;border-bottom:1px solid #1C3329}
+.st-key-mx-bar div.stButton>button{background:transparent!important;color:#E8EFEC!important;border:1px solid #3A5247!important}
+.st-key-mx-bar div.stButton>button:hover{border-color:#1DBA85!important;color:#7FE0B9!important}
+.mx-bar{display:flex;align-items:center;gap:12px;min-height:44px}
+.mx-bar .mx-logo{width:34px;height:36px}
+.mx-bar .name{font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-weight:800;font-size:1.2rem;color:#E8EFEC}.mx-bar .name b{color:#1DBA85}
+.mx-bar .sep{width:1px;height:24px;background:#2A4237}
+.mx-bar .ws{font-size:.9rem;color:#9FB2AB;font-weight:500}
+.mx-live{margin-left:auto;display:inline-flex;align-items:center;gap:8px;font-size:.8rem;color:#7FE0B9;background:rgba(29,186,133,.12);border:1px solid rgba(29,186,133,.3);padding:5px 12px;border-radius:999px;white-space:nowrap}
+.mx-live.demo{color:#F6C978;background:rgba(246,201,120,.1);border-color:rgba(246,201,120,.3)}
+.mx-live i{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 0 4px rgba(29,186,133,.18)}
+.st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]{gap:0!important}
+.st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"]:first-child{background:#F7FBF9;border-right:1px solid #DCE9E2;padding:26px 18px;min-height:calc(100vh - 66px)}
+.st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"]:last-child{padding:26px 40px 0}
+.mx-nav-l{font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;color:#7A8C84;font-weight:600;margin:0 10px 12px}
+.mx-nav{display:flex;gap:12px;align-items:flex-start;padding:11px 10px;border-radius:12px;border:1px solid transparent}
+.mx-nav.on{background:#fff;box-shadow:0 1px 3px rgba(14,36,27,.08);border-color:#DCE9E2}
+.mx-nav .n{flex:0 0 28px;height:28px;border-radius:50%;border:1.5px solid #BFD3C9;color:#7A8C84;display:flex;align-items:center;justify-content:center;font-size:.8rem;font-weight:700}
+.mx-nav.on .n{background:#1DBA85;border-color:#1DBA85;color:#0E241B}.mx-nav.done .n{border-color:#1DBA85;color:#0F7A55}
+.mx-nav .t{font-size:.88rem;font-weight:600;color:#33493F}.mx-nav.on .t{color:#0E241B}.mx-nav .d{font-size:.76rem;color:#7A8C84;margin-top:2px}
+.mx-nav .n svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+.mx-nav-line{width:1.5px;height:12px;background:#D3E2DA;margin:2px 0 2px 23px}
+.mx-get{margin-top:22px;padding:16px;border-radius:14px;background:linear-gradient(160deg,#103026,#0F1F19);color:#D7E4DF}
+.mx-get .h{font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:#7FE0B9;font-weight:600;margin-bottom:6px}
+.mx-get .i{font-size:.82rem;padding:6px 0;display:flex;gap:8px;border-top:1px solid rgba(255,255,255,.07)}.mx-get .i:first-of-type{border-top:0}.mx-get .i span{color:#1DBA85}
+.mx-stephead .c{font-size:.82rem;color:#7A8C84}.mx-stephead h1{font-size:1.75rem!important;margin:2px 0 4px!important;padding:0!important}
+.mx-stephead p{font-size:.95rem;color:#5A6F66;margin:0 0 6px}
+.st-key-mx-consent,.st-key-mx-files{background:#fff;border:1px solid #DCE9E2;border-radius:16px;padding:20px 22px;box-shadow:0 1px 2px rgba(14,36,27,.04)}
+.mx-cardt{font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-weight:700;font-size:1rem;color:var(--mx-ink)}.mx-cards{font-size:.82rem;color:#7A8C84;margin-top:2px}
+.st-key-mx-consent [data-testid="stCheckbox"]{background:#F4FAF7;border:1px solid #E1EEE7;border-radius:12px;padding:14px}
+/* The consent is always shown in full, never cut to one line. */
+.st-key-mx-consent [data-testid="stCheckbox"] [data-testid="stMarkdownContainer"],.st-key-mx-consent [data-testid="stCheckbox"] p{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.55}
+.mx-trust{display:flex;flex-direction:column;gap:10px;border-left:1px solid #E1EEE7;padding-left:22px}
+.mx-trust div{display:flex;gap:10px;align-items:center;font-size:.84rem;color:#33493F}
+.mx-ico2{flex:0 0 28px;width:28px;height:28px;border-radius:8px;background:#E6F6EE;color:#0F7A55;display:flex;align-items:center;justify-content:center}
+.mx-ico2 svg,.mx-drop .big svg,.mx-lock svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.mx-drop,.st-key-mx-files [data-testid="stFileUploaderDropzone"]{border:2px dashed #A9D9C3!important;border-radius:14px!important;background:repeating-linear-gradient(135deg,#FAFDFB 0 14px,#F4FAF7 14px 28px)!important;min-height:230px}
+.mx-drop{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;margin-top:4px}
+.mx-drop .big{width:52px;height:52px;border-radius:15px;background:#0F1F19;color:#1DBA85;display:flex;align-items:center;justify-content:center;margin-bottom:12px;opacity:.8}
+.mx-drop .big svg{width:24px;height:24px}
+.mx-drop .t{font-weight:700;font-size:.95rem;color:#33493F}.mx-drop .d{font-size:.82rem;color:#5A6F66;margin-top:4px}
+.mx-lock{display:inline-flex;gap:6px;align-items:center;font-size:.76rem;color:#9A6A12;background:#FEF4E2;border-radius:999px;padding:4px 10px;margin-top:12px}
+.st-key-mx-files [data-testid="stFileUploaderDropzone"]{flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:12px}
+.st-key-mx-files [data-testid="stFileUploaderDropzone"]::before{content:"Drop your sales and cost reports here";font-weight:700;font-size:.95rem;color:#33493F}
+.st-key-mx-files [data-testid="stFileUploaderDropzoneInstructions"]{flex:0 0 auto!important;justify-content:center;font-size:.82rem;color:#5A6F66}
+.st-key-mx-files [data-testid="stFileUploaderDropzone"] button{background:#0F1F19!important;color:#E8EFEC!important;border:0!important;border-radius:10px!important;padding:8px 18px!important}
+.st-key-mx-files [data-testid="stFileUploaderDropzone"] button:hover{background:#1A3B2F!important;color:#7FE0B9!important}
+.mx-slots{display:flex;gap:12px;margin-top:12px}.mx-slot{flex:1;border:1px solid #E1EEE7;border-radius:12px;padding:10px 12px;font-size:.84rem;color:#7A8C84;display:flex;gap:10px;align-items:center}
+.mx-slot b{color:#0E241B;font-weight:600}.mx-slot.ok{border-color:#BFE3D2;background:#F4FBF7}.mx-slot.ok .mx-ico2{background:#1DBA85;color:#0E241B}
+@media(max-width:900px){.st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"]:first-child{min-height:0}.st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"]:last-child{padding:20px 16px 0}.mx-trust{border-left:0;padding-left:0}.mx-slots{flex-direction:column}.mx-bar .ws{display:none}}
+</style>
+"""
+
+
+def apply_app_frame() -> None:
+    st.markdown(_APP_CSS, unsafe_allow_html=True)
+
+
 _MD_LINK_CHARS = re.compile(r"([\\\[\]!<>])")
 
 
@@ -145,15 +211,88 @@ def header(pilot: bool) -> None:
           f'<div class="mx-kicker">{escape(TAGLINE)}</div>')
 
 
+# Small outline icons drawn inline (no icon font or image is loaded from anywhere).
+_ICONS = {
+    "laptop": '<path d="M4 6h16v10H4z"/><path d="M2 19h20"/>',
+    "trash": '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
+    "hand": '<path d="M8 13V5a1.5 1.5 0 0 1 3 0v6"/><path d="M11 11V4a1.5 1.5 0 0 1 3 0v7"/>'
+            '<path d="M14 11V6a1.5 1.5 0 0 1 3 0v8a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-3l-2-4a1.5 1.5 0 0 1 2.6-1.5L8 13"/>',
+    "upload": '<path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v4h16v-4"/>',
+    "lock": '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+    "file": '<path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4"/>',
+    "check": '<path d="M5 12l5 5 9-10"/>',
+}
+
+
+def _icon(name: str) -> str:
+    return f'<svg viewBox="0 0 24 24" aria-hidden="true">{_ICONS[name]}</svg>'
+
+
+def top_bar(pilot: bool) -> None:
+    """The app's top bar: logo, name, and whether this is a pilot session or made-up data only."""
+    name = escape(BRAND)
+    brand = f"{name[:-1]}<b>{name[-1]}</b>" if name.endswith("X") else name
+    live = ('<span class="mx-live"><i></i>Pilot session · this laptop only</span>' if pilot
+            else '<span class="mx-live demo"><i></i>Example data only</span>')
+    _html(f'<div class="mx-bar"><img class="mx-logo" src="{_LOGO_SRC}" alt="{name} logo"><span class="name">{brand}</span>'
+          f'<span class="sep"></span><span class="ws">{escape(TAGLINE)}</span>{live}</div>')
+
+
+STEPS = (("Add your reports", "Sales and costs"), ("Answer a few questions", "Only if something's unclear"),
+         ("See your money", "Profit by job and customer"))
+
+
 def steps(current: int) -> None:
-    """The three steps, with the current one highlighted (1 add files, 2 answer questions, 3 results)."""
-    labels = ("1  Add your files", "2  Answer a few questions", "3  See where your money is made")
-    parts = []
-    for n, label in enumerate(labels, start=1):
+    """The check-up's three steps, down the side, with the current one highlighted."""
+    rows = []
+    for n, (title, note) in enumerate(STEPS, start=1):
         state = "on" if n == current else ("done" if n < current else "")
-        mark = "✓ " if n < current else ""
-        parts.append(f'<span class="mx-step {state}">{mark}{escape(label)}</span>')
-    _html(f'<div class="mx-steps">{"".join(parts)}</div>')
+        mark = _icon("check") if n < current else str(n)
+        rows.append(f'<div class="mx-nav {state}"><div class="n">{mark}</div><div><div class="t">{escape(title)}</div>'
+                    f'<div class="d">{escape(note)}</div></div></div>')
+    _html('<div class="mx-nav-l">Check-up</div>' + '<div class="mx-nav-line"></div>'.join(rows))
+
+
+def what_you_get() -> None:
+    items = ("Profit on every job", "Jobs that lost money, and why", "Your real profit margin",
+             "Customers worth keeping")
+    _html('<div class="mx-get"><div class="h">You\'ll get</div>'
+          + "".join(f'<div class="i"><span>✓</span>{escape(i)}</div>' for i in items) + "</div>")
+
+
+def step_heading(step: int, title: str, lead: str) -> None:
+    _html(f'<div class="mx-stephead"><div class="c">Step {step} of 3</div><h1>{escape(title)}</h1>'
+          f'<p>{escape(lead)}</p></div>')
+
+
+def card_title(title: str, note: str) -> None:
+    _html(f'<div class="mx-cardt">{escape(title)}</div><div class="mx-cards">{escape(note)}</div>')
+
+
+def privacy_points() -> None:
+    """What happens to the files, in three short lines (the consent box says it in full)."""
+    points = (("laptop", "Stays on this laptop, never sent online"), ("trash", "Forgotten when you press End session"),
+              ("hand", "You can stop at any time"))
+    _html('<div class="mx-trust">' + "".join(f'<div><span class="mx-ico2">{_icon(i)}</span>{escape(t)}</div>'
+                                            for i, t in points) + "</div>")
+
+
+def locked_drop() -> None:
+    """Where the files go, shown locked until the box is ticked: no upload area exists before then."""
+    _html(f'<div class="mx-drop"><div class="big">{_icon("upload")}</div>'
+          '<div class="t">Drop your sales and cost reports here</div><div class="d">CSV or Excel</div>'
+          f'<div class="mx-lock">{_icon("lock")}Tick the box above to choose files.</div></div>')
+
+
+def file_slots(kinds: set[str]) -> None:
+    """Whether a sales report and a cost report have been read (by what MargenX found, not file names)."""
+    slots = []
+    for kind, label in (("invoices", "Sales report"), ("costs", "Cost report")):
+        ok = kind in kinds
+        slots.append(f'<div class="mx-slot{" ok" if ok else ""}"><span class="mx-ico2">'
+                     f'{_icon("check" if ok else "file")}</span><span><b>{label}</b> · {"read" if ok else "waiting"}'
+                     "</span></div>")
+    _html(f'<div class="mx-slots">{"".join(slots)}</div>')
 
 
 def section(title: str) -> None:

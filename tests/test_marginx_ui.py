@@ -139,6 +139,35 @@ class HeadlineTests(unittest.TestCase):
         self.assertIn("Some jobs still need a check, so this may be too high.", html)
 
 
+class AppFrameTests(unittest.TestCase):
+    def frame(self, fn, *args):
+        out = []
+        with mock.patch.object(ui, "_html", out.append):
+            fn(*args)
+        return "\n".join(out)
+
+    def test_steps_mark_the_current_step_and_check_off_earlier_ones(self):
+        html = self.frame(ui.steps, 3)
+        self.assertEqual(2, html.count('<div class="mx-nav done">'))
+        self.assertIn('<div class="mx-nav on"><div class="n">3</div>', html)
+
+    def test_file_status_follows_what_marginx_read(self):
+        self.assertIn("<b>Sales report</b> · read", self.frame(ui.file_slots, {"invoices"}))
+        self.assertIn("<b>Cost report</b> · waiting", self.frame(ui.file_slots, {"invoices"}))
+        both = self.frame(ui.file_slots, {"invoices", "costs"})
+        self.assertEqual(2, both.count('class="mx-slot ok"'))
+
+    def test_the_top_bar_says_which_kind_of_session_it_is(self):
+        self.assertIn("Pilot session · this laptop only", self.frame(ui.top_bar, True))
+        self.assertIn("Example data only", self.frame(ui.top_bar, False))
+        self.assertIn(ui.TAGLINE, self.frame(ui.top_bar, False))
+
+    def test_the_app_frame_loads_nothing_from_outside(self):
+        # Icons are drawn inline and the frame's style sheet names no font, image or outside address.
+        for markup in (ui._APP_CSS, self.frame(ui.privacy_points), self.frame(ui.locked_drop)):
+            self.assertNotRegex(markup, r"https?://|@import|url\(")
+
+
 class SafetyTests(unittest.TestCase):
     def test_values_from_a_file_are_escaped(self):
         html = render(report_from(

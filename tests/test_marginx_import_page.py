@@ -630,6 +630,12 @@ class MargenXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertEqual("Not sure yet", self.answered(at))
 
+    def test_the_step_heading_leaves_once_results_show(self):
+        at = self.run_page("demo")
+        html = " ".join(m.value for m in at.markdown)
+        self.assertNotIn("<h1>Add your reports</h1>", html)
+        self.assertIn('<div class="mx-nav on"><div class="n">3</div>', html)  # results: step 3
+
     def test_the_demos_never_ask_which_job(self):
         # Owners are shown the finished product: every demo cost has a job number or is clear overhead,
         # so the "Which job was each cost for?" step never appears in a demo.

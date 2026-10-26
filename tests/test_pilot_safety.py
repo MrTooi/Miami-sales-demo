@@ -215,6 +215,20 @@ class PilotPageTests(unittest.TestCase):
         self.assertEqual([ps.CONSENT_TEXT], [c.label for c in at.checkbox])
         self.assertEqual(0, len(at.get("file_uploader")))  # no upload area until the owner agrees
 
+    def test_pilot_start_screen_shows_the_check_up_frame_with_the_upload_locked(self):
+        at = self.run_page({"MARGINX_PILOT": "1"}, "localhost")
+        html = " ".join(m.value for m in at.markdown)
+        self.assertIn('<span class="mx-live"><i></i>Pilot session · this laptop only</span>', html)
+        self.assertIn("<h1>Add your reports</h1>", html)  # step 1 heading, before any file
+        self.assertIn('<div class="mx-nav on"><div class="n">1</div>', html)  # step 1 is the current step
+        self.assertIn("Tick the box above to choose files.", html)  # a locked drop area, not an upload
+        self.assertEqual(0, len(at.get("file_uploader")))
+        self.assertIn("<b>Sales report</b> · waiting", html)
+        self.assertIn("<b>Cost report</b> · waiting", html)
+        self.assertIn("Forgotten when you press End session", html)
+        # The consent is shown in full: the app's style sheet never cuts the checkbox label to one line.
+        self.assertIn("never cut to one line", html)
+
     def test_a_proxied_or_tunneled_request_is_never_pilot_mode(self):
         at = self.run_page({"MARGINX_PILOT": "1"}, "localhost", local_request=False)
         self.assertIn("made-up data only", at.warning[0].value)
