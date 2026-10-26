@@ -1,5 +1,6 @@
 """What the MargenX results screen says: headline coverage, the after-costs line, escaping, no outside requests."""
 from pathlib import Path
+import re
 import unittest
 from unittest import mock
 
@@ -163,9 +164,15 @@ class AppFrameTests(unittest.TestCase):
         self.assertIn(ui.TAGLINE, self.frame(ui.top_bar, False))
 
     def test_the_app_frame_loads_nothing_from_outside(self):
-        # Icons are drawn inline and the frame's style sheet names no font, image or outside address.
-        for markup in (ui._APP_CSS, self.frame(ui.privacy_points), self.frame(ui.locked_drop)):
-            self.assertNotRegex(markup, r"https?://|@import|url\(")
+        # Icons are drawn inline, the logo is embedded image data, and the frame's style sheet names no
+        # font, image or outside address.
+        bars = [self.frame(ui.top_bar, True), self.frame(ui.top_bar, False)]
+        for markup in (ui._APP_CSS, self.frame(ui.privacy_points), self.frame(ui.locked_drop),
+                       self.frame(ui.steps, 2), self.frame(ui.what_you_get), self.frame(ui.file_slots, set()), *bars):
+            outside = re.sub(r"data:image/png;base64,[A-Za-z0-9+/=]+", "", markup)  # the embedded logo
+            self.assertNotRegex(outside, r"https?://|@import|url\(|//[a-z]")
+        for bar in bars:
+            self.assertEqual(["data:image/png;base64,"], [m[:22] for m in re.findall(r'src="([^"]+)"', bar)])
 
 
 class SafetyTests(unittest.TestCase):

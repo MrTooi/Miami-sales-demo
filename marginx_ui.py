@@ -254,8 +254,10 @@ def steps(current: int) -> None:
 
 
 def what_you_get() -> None:
-    items = ("Profit on every job", "Jobs that lost money, and why", "Your real profit margin",
-             "Customers worth keeping")
+    # What the results show, without promising more: a figure is withheld or marked "Needs a check"
+    # when costs are missing, and the margin is after job costs, before overhead.
+    items = ("Profit by job and customer", "Jobs that lost money, and why", "Your margin after job costs",
+             "Missing costs flagged, never guessed")
     _html('<div class="mx-get"><div class="h">You\'ll get</div>'
           + "".join(f'<div class="i"><span>✓</span>{escape(i)}</div>' for i in items) + "</div>")
 

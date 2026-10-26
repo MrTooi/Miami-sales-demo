@@ -226,8 +226,11 @@ class PilotPageTests(unittest.TestCase):
         self.assertIn("<b>Sales report</b> · waiting", html)
         self.assertIn("<b>Cost report</b> · waiting", html)
         self.assertIn("Forgotten when you press End session", html)
-        # The consent is shown in full: the app's style sheet never cuts the checkbox label to one line.
-        self.assertIn("never cut to one line", html)
+        # The consent is shown in full: AppTest can't render, so this checks the style rule that undoes
+        # Streamlit's one-line cut-off for checkbox labels in columns (checked by eye in the browser).
+        self.assertIn('.st-key-mx-consent [data-testid="stCheckbox"] p{white-space:normal!important;'
+                      "overflow:visible!important;text-overflow:clip!important", html)
+        self.assertEqual([ps.CONSENT_TEXT], [c.label for c in at.checkbox])  # the whole consent, unchanged
 
     def test_a_proxied_or_tunneled_request_is_never_pilot_mode(self):
         at = self.run_page({"MARGINX_PILOT": "1"}, "localhost", local_request=False)
