@@ -40,6 +40,10 @@ stop() {
 
 real() { (cd "$1" 2>/dev/null && pwd -P); }
 
+# Everything runs from a fixed place, so the folder the launcher is started from (and any git
+# settings there) never affects what it does.
+cd / || stop "Couldn't open the top folder of this Mac."
+
 # Git can be set up to run other programs (a file monitor, hooks, filters, credential and transport
 # helpers) or to swap objects (replace refs). Every git command here ignores this Mac's system and
 # personal git settings, ignores replace refs, and runs with those features off. The project's own

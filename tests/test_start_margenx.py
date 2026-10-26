@@ -340,6 +340,21 @@ class LauncherTests(unittest.TestCase):
                 self.assert_nothing_else_ran()
                 self.record.unlink()
 
+    def test_the_folder_it_is_started_from_never_affects_git(self):
+        # Started from inside another repository, that repository's settings (a URL rewrite to other
+        # code, a credential helper) are never read: every git command runs from a fixed place.
+        other = self.root / "other"
+        git("clone", "-q", str(self.origin), str(other), cwd=self.root)
+        (other / "marginx_pilot.py").write_text("print('not approved')\n")
+        git("commit", "-q", "-am", "substitute", cwd=other)
+        git("config", f"url.{other}.insteadOf", self.github, cwd=other)
+        git("config", "credential.helper", str(self.helper(self.root / "bin")), cwd=other)
+        run = self.launch(cwd=other)
+        self.assertEqual(0, run.returncode, run.stdout + run.stderr)
+        self.assertEqual(self.v1, git("rev-parse", "HEAD", cwd=self.app))
+        self.assertEqual("# stand-in\n", (self.app / "marginx_pilot.py").read_text())
+        self.assert_nothing_else_ran()
+
     def test_the_shipped_launcher_takes_no_settings_from_its_environment(self):
         # Only GitHub decides what is approved, and the places used are fixed: the old test variables
         # (another "GitHub", project, copy or Python setup) are ignored by the launcher as shipped.
