@@ -147,7 +147,7 @@ with main:
             # The box comes first: the upload area isn't shown, so no file can be received, until it is ticked.
             confirmed = consent_col.checkbox(ps.CONSENT_TEXT if PILOT else ps.MADE_UP_TEXT, key=f"confirm-{session}")
             with points_col:
-                ui.privacy_points()
+                ui.privacy_points(PILOT)
         with st.container(key="mx-files"):
             ui.card_title("Drop your reports", "Both files at once, or one at a time.")
             if not confirmed:

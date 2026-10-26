@@ -271,10 +271,16 @@ def card_title(title: str, note: str) -> None:
     _html(f'<div class="mx-cardt">{escape(title)}</div><div class="mx-cards">{escape(note)}</div>')
 
 
-def privacy_points() -> None:
-    """What happens to the files, in three short lines (the consent box says it in full)."""
-    points = (("laptop", "Stays on this laptop, never sent online"), ("trash", "Forgotten when you press End session"),
-              ("hand", "You can stop at any time"))
+def privacy_points(pilot: bool) -> None:
+    """What happens to the files, in three short lines (the consent box says it in full).
+
+    "Stays on this laptop" is said only in a pilot session, which pilot_safety has verified runs on
+    this laptop for a local browser. End session is an instruction, not a promise: when it can't
+    confirm the files were cleared, the page says so.
+    """
+    first = (("laptop", "Stays on this laptop, never sent online") if pilot else ("file", "Made-up files only"))
+    points = (first, ("lock", "Read in memory, never saved" if pilot else "Checked in memory, never saved"),
+              ("trash", "Press End session to clear it all"))
     _html('<div class="mx-trust">' + "".join(f'<div><span class="mx-ico2">{_icon(i)}</span>{escape(t)}</div>'
                                             for i, t in points) + "</div>")
 

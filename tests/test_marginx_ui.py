@@ -167,7 +167,8 @@ class AppFrameTests(unittest.TestCase):
         # Icons are drawn inline, the logo is embedded image data, and the frame's style sheet names no
         # font, image or outside address.
         bars = [self.frame(ui.top_bar, True), self.frame(ui.top_bar, False)]
-        for markup in (ui._APP_CSS, self.frame(ui.privacy_points), self.frame(ui.locked_drop),
+        for markup in (ui._APP_CSS, self.frame(ui.privacy_points, True), self.frame(ui.privacy_points, False),
+                       self.frame(ui.locked_drop),
                        self.frame(ui.steps, 2), self.frame(ui.what_you_get), self.frame(ui.file_slots, set()), *bars):
             outside = re.sub(r"data:image/png;base64,[A-Za-z0-9+/=]+", "", markup)  # the embedded logo
             self.assertNotRegex(outside, r"https?://|@import|url\(|//[a-z]")

@@ -225,12 +225,25 @@ class PilotPageTests(unittest.TestCase):
         self.assertEqual(0, len(at.get("file_uploader")))
         self.assertIn("<b>Sales report</b> · waiting", html)
         self.assertIn("<b>Cost report</b> · waiting", html)
-        self.assertIn("Forgotten when you press End session", html)
+        self.assertIn("Stays on this laptop, never sent online", html)  # a verified local pilot session
+        self.assertIn("Press End session to clear it all", html)
         # The consent is shown in full: AppTest can't render, so this checks the style rule that undoes
         # Streamlit's one-line cut-off for checkbox labels in columns (checked by eye in the browser).
         self.assertIn('.st-key-mx-consent [data-testid="stCheckbox"] p{white-space:normal!important;'
                       "overflow:visible!important;text-overflow:clip!important", html)
         self.assertEqual([ps.CONSENT_TEXT], [c.label for c in at.checkbox])  # the whole consent, unchanged
+
+    def test_outside_a_verified_pilot_the_privacy_points_never_claim_this_laptop(self):
+        # Pilot switched on but not a local-only address, or a proxied request: the app may not be on this
+        # laptop, so the start screen never says the files stay on it.
+        for address, local in ((None, True), ("localhost", False)):
+            with self.subTest(address=address, local=local):
+                at = self.run_page({"MARGINX_PILOT": "1"}, address, local_request=local)
+                at.toggle[0].set_value(False).run()
+                html = " ".join(m.value for m in at.markdown)
+                self.assertIn("Made-up files only", html)
+                self.assertNotIn("this laptop, never sent online", html)
+                self.assertNotIn("Pilot session · this laptop only", html)
 
     def test_a_proxied_or_tunneled_request_is_never_pilot_mode(self):
         at = self.run_page({"MARGINX_PILOT": "1"}, "localhost", local_request=False)
