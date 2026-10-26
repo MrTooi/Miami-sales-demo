@@ -41,7 +41,7 @@ class LauncherTests(unittest.TestCase):
         import packaging
         (self.origin / "requirements.txt").write_text(f"packaging=={packaging.__version__}\n")
         (self.origin / "marginx_pilot.py").write_text("# stand-in\n")
-        (self.origin / ".gitignore").write_text("__pycache__/\n")
+        (self.origin / ".gitignore").write_text("__pycache__/\n*.py[cod]\n.DS_Store\n*.local\n")  # like the project's
         self.v1 = self.commit("v1")
         self.repo = self.root / "project"
         git("clone", "-q", str(self.origin), str(self.repo), cwd=self.root)
@@ -51,7 +51,8 @@ class LauncherTests(unittest.TestCase):
         self.record = self.root / "started.txt"
         (self.venv / "python").write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
         (self.venv / "streamlit").write_text(
-            f'#!/bin/bash\n{{ pwd -P; echo "pilot=$MARGINX_PILOT"; echo "$@"; }} > "{self.record}"\n')
+            f'#!/bin/bash\n{{ pwd -P; echo "pilot=$MARGINX_PILOT"; echo "$@"; echo "cache=$PYTHONPYCACHEPREFIX"; }}'
+            f' > "{self.record}"\n')
         for f in ("python", "streamlit"):
             (self.venv / f).chmod(0o755)
 
@@ -79,12 +80,15 @@ class LauncherTests(unittest.TestCase):
     def test_first_start_sets_up_the_copy_at_main_and_starts_pilot_mode_on_localhost(self):
         run = self.launch()
         self.assertEqual(0, run.returncode, run.stdout + run.stderr)
-        where, pilot, args = self.started()
+        where, pilot, args, cache = self.started()
         self.assertEqual(str(self.app.resolve()), where)
         self.assertEqual("pilot=1", pilot)
         self.assertIn("run marginx_pilot.py --server.address localhost", args)
         self.assertIn("--browser.gatherUsageStats false", args)
         self.assertEqual(self.v1, git("rev-parse", "HEAD", cwd=self.app))
+        # Python's compiled cache goes to a fresh folder outside the copy.
+        self.assertTrue(cache.startswith("cache=") and len(cache) > 6)
+        self.assertNotIn(str(self.app.resolve()), cache)
 
     def test_a_later_start_updates_the_copy_to_the_new_main(self):
         self.assertEqual(0, self.launch().returncode)
@@ -123,11 +127,56 @@ class LauncherTests(unittest.TestCase):
         self.record.unlink()
         (self.app / "marginx_pilot.py").write_text("print('changed')\n")
         self.commit("v2")
-        self.assert_refused(self.launch(), "has been changed")
+        self.assert_refused(self.launch(), "has been changed or couldn't be checked")
         self.assertEqual("print('changed')\n", (self.app / "marginx_pilot.py").read_text())  # left as it was
         (self.app / "marginx_pilot.py").write_text("# stand-in\n")
         (self.app / "extra.py").write_text("print('new file')\n")  # an untracked file counts too
-        self.assert_refused(self.launch(), "has been changed")
+        self.assert_refused(self.launch(), "has been changed or couldn't be checked")
+
+    def go_offline(self):
+        git("remote", "set-url", "origin", str(self.root / "unreachable"), cwd=self.repo)
+
+    def first_start(self):
+        self.assertEqual(0, self.launch().returncode)
+        self.record.unlink()
+
+    def test_a_copy_git_can_not_check_never_runs(self):
+        # A corrupted index makes `git status` fail with nothing on its output: that is never "clean".
+        self.first_start()
+        index = Path(git("rev-parse", "--git-dir", cwd=self.app))
+        index = (index if index.is_absolute() else self.app / index) / "index"
+        index.write_bytes(index.read_bytes()[:10])
+        self.go_offline()
+        before = (self.app / "marginx_pilot.py").read_text()
+        run = self.launch()
+        self.assert_refused(run, "has been changed or couldn't be checked")
+        self.assertIn("failed", run.stdout)
+        self.assertEqual(before, (self.app / "marginx_pilot.py").read_text())
+
+    def test_edits_hidden_from_git_never_run(self):
+        # assume-unchanged and skip-worktree make `git status` show nothing for an edited file.
+        for flag in ("--assume-unchanged", "--skip-worktree"):
+            with self.subTest(flag=flag):
+                self.setUp()
+                self.first_start()
+                git("update-index", flag, "marginx_pilot.py", cwd=self.app)
+                (self.app / "marginx_pilot.py").write_text("print('not approved')\n")
+                self.assertEqual("", git("status", "--porcelain", cwd=self.app))  # git sees nothing
+                self.go_offline()
+                run = self.launch()
+                self.assert_refused(run, "has been changed or couldn't be checked")
+                self.assertIn("marginx_pilot.py", run.stdout)
+                self.assertEqual("print('not approved')\n", (self.app / "marginx_pilot.py").read_text())
+
+    def test_extra_ignored_files_never_run_but_caches_are_fine(self):
+        self.first_start()
+        (self.app / "__pycache__").mkdir()
+        (self.app / "__pycache__" / "marginx_pilot.cpython-311.pyc").write_bytes(b"cache")
+        (self.app / ".DS_Store").write_bytes(b"finder")
+        self.assertEqual(0, self.launch().returncode)  # caches are allowed (and never used)
+        self.record.unlink()
+        (self.app / "settings.local").write_text("ignored by git, but not part of MargenX\n")
+        self.assert_refused(self.launch(), "settings.local is not part of the approved version")
 
     def test_a_version_that_is_not_on_main_never_runs(self):
         self.assertEqual(0, self.launch().returncode)
