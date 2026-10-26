@@ -395,20 +395,31 @@ class QuickBooksLookAlikeTests(unittest.TestCase):
     def test_a_number_beside_a_title_or_among_the_column_names_doesnt_hide_them(self):
         # Automated review of fba2bff: one numeric cell on the title row or the column-name row.
         line = ["INV-1", "10/02/2026", "Bakery (fictional)", "Invoice", "1001", "", "40.00"]
-        cases = {"the columns 'Transaction type' and 'Num'": [["Invoice", "Date", "Customer", "Transaction type", "Num", "2026",
-                                                               "Amount"], line],
-                 "the title 'Profit and Loss Detail'": [["Profit and Loss Detail", "10/26/2026"],
-                                                        ["Invoice", "Date", "Customer", "Type", "Ref", "Note", "Amount"], line]}
-        for sign, rows in cases.items():
+        cases = [("the columns 'Transaction type' and 'Num'", [["Invoice", "Date", "Customer", "Transaction type", "Num", "2026",
+                                                               "Amount"], line]),
+                 ("the title 'Profit and Loss Detail'", [["Profit and Loss Detail", "10/26/2026"],
+                                                        ["Invoice", "Date", "Customer", "Type", "Ref", "Note", "Amount"], line]),
+                 # Automated review of a496aae: two numeric column names beside QuickBooks ones.
+                 ("the column 'Memo/Description'", [["Invoice", "Date", "Customer", "Transaction type", "Num",
+                                                    "Memo/Description", "2025", "2026", "Amount"],
+                                                   ["INV-1", "10/02/2026", "Bakery (fictional)", "Invoice", "1001", "Sign",
+                                                    "1.00", "2.00", "40.00"]]),
+                 ("the columns 'Transaction type' and 'Num'", [["Invoice", "Date", "Customer", "Transaction type", "Num",
+                                                               "2025", "2026", "Amount"],
+                                                              ["INV-1", "10/02/2026", "Bakery (fictional)", "Invoice", "1001",
+                                                               "1.00", "2.00", "40.00"]])]
+        for sign, rows in cases:
             for name in ("file.csv", "file.xlsx"):
                 with self.subTest(sign, name=name):
                     self.assertIn(f"it has {sign}", self.refusal(rows, name))
+            with self.subTest(sign, name="read_csv"), self.assertRaisesRegex(ji.IntakeError, "looks like a QuickBooks report"):
+                ji.read_csv(csv_bytes(rows))
 
-    def test_titles_and_column_names_are_looked_for_only_above_the_lines(self):
+    def test_titles_are_looked_for_only_above_the_lines(self):
         # A line whose description happens to start like a report title isn't a title.
         rows = [["Invoice", "Date", "Customer", "Description", "Amount"],
                 ["INV-1", "10/02/2026", "Bakery (fictional)", "Balance sheet cleanup", "40.00"],
-                ["INV-2", "10/03/2026", "Bakery (fictional)", "Split", "10.00"]]
+                ["INV-2", "10/03/2026", "Bakery (fictional)", "Profit and loss review", "10.00"]]
         self.assertEqual([], qr.quickbooks_signs([(n, r) for n, r in enumerate(rows, 1)], ji.MAX_TITLE_LINES))
 
     def test_an_unrecognised_quickbooks_layout_is_refused(self):

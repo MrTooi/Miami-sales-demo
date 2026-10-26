@@ -201,8 +201,9 @@ QUICKBOOKS_COLUMNS = frozenset({
 TOTAL_FOR = re.compile(r"(?i)^total for\s+\S")
 BASIS_FOOTER = re.compile(r"(?i)^(accrual|cash) basis\b")
 # A cell that is only a number or a date ("40.00", "10/02/2026", "(12.50)"). The first row holding two
-# or more (a line always has a date and an amount) is where the lines start, so titles and column names
-# are looked for only above it. A single number (a "2026" column name, a date beside a title) doesn't stop it.
+# or more (a line always has a date and an amount) is where the lines start, so titles are looked for
+# only above it: a line's description ("Balance sheet cleanup") is never taken for a title. A single
+# number (a date beside a title) doesn't stop it.
 DATA_CELL = re.compile(r"^[\s$+\-(]*\d[\d,.\s/:-]*\)?$")
 SUMMARY_ROWS = frozenset({"gross profit", "net ordinary income", "net operating income", "net other income",
                           "net income"})
@@ -217,20 +218,23 @@ def quickbooks_signs(table: list[tuple[int, list[str]]], title_lines: int) -> li
     """What makes a file look like a QuickBooks report, in plain words; empty when nothing does.
 
     table: every non-empty row of the file, with its row number. title_lines: how many rows to look
-    at for a title block and the column names (the reader's own limit). Looked for, in any cell of
-    the top rows (above the first row holding two numbers or dates): a QuickBooks report title or
-    QuickBooks column names. In any row's first filled cell: a "Total for ..." row, a basis footer or
-    a Profit and Loss summary row (S2).
+    at for a title block and the column names (the reader's own limit). Looked for:
+    - in any cell of the first title_lines + 1 rows, whatever else the row holds: QuickBooks column
+      names (an exact cell match), or "Transaction type" together with "Num";
+    - in any cell above the first row holding two numbers or dates: a QuickBooks report title;
+    - in any row's first filled cell: a "Total for ..." row, a basis footer or a Profit and Loss
+      summary row (S2).
     """
     signs = []
-    top = True
+    above_lines = True
     for position, (_, cells) in enumerate(table):
         filled = [c.strip() for c in cells if c and c.strip()]
         if not filled:
             continue
         first = filled[0]
-        top = top and position <= title_lines and sum(1 for c in filled if DATA_CELL.match(c)) < 2
-        if top:
+        top = position <= title_lines
+        above_lines = above_lines and top and sum(1 for c in filled if DATA_CELL.match(c)) < 2
+        if above_lines:
             signs += [f"the title '{_shown(c)}'" for c in filled if QUICKBOOKS_TITLE.match(c)]
         if top and len(filled) >= 2:
             signs += [f"the column '{_shown(c)}'" for c in filled if _text(c) in QUICKBOOKS_COLUMNS]
