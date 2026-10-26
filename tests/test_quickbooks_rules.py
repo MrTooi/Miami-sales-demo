@@ -392,6 +392,18 @@ class QuickBooksLookAlikeTests(unittest.TestCase):
                 reason = self.refusal([["Transaction List by Customer", "Example shop (fictional)"], *plain], name)
                 self.assertIn('"Transaction List by Customer"', reason)
 
+    def test_a_number_beside_a_title_or_among_the_column_names_doesnt_hide_them(self):
+        # Automated review of fba2bff: one numeric cell on the title row or the column-name row.
+        line = ["INV-1", "10/02/2026", "Bakery (fictional)", "Invoice", "1001", "", "40.00"]
+        cases = {"the columns 'Transaction type' and 'Num'": [["Invoice", "Date", "Customer", "Transaction type", "Num", "2026",
+                                                               "Amount"], line],
+                 "the title 'Profit and Loss Detail'": [["Profit and Loss Detail", "10/26/2026"],
+                                                        ["Invoice", "Date", "Customer", "Type", "Ref", "Note", "Amount"], line]}
+        for sign, rows in cases.items():
+            for name in ("file.csv", "file.xlsx"):
+                with self.subTest(sign, name=name):
+                    self.assertIn(f"it has {sign}", self.refusal(rows, name))
+
     def test_titles_and_column_names_are_looked_for_only_above_the_lines(self):
         # A line whose description happens to start like a report title isn't a title.
         rows = [["Invoice", "Date", "Customer", "Description", "Amount"],

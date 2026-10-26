@@ -200,8 +200,9 @@ QUICKBOOKS_COLUMNS = frozenset({
 # October 26, 2026 07:04 PM GMTZ") and Profit and Loss summary rows, in a row's first filled cell.
 TOTAL_FOR = re.compile(r"(?i)^total for\s+\S")
 BASIS_FOOTER = re.compile(r"(?i)^(accrual|cash) basis\b")
-# A cell that is only a number or a date ("40.00", "10/02/2026", "(12.50)"): the first row holding one
-# is where the lines start, so titles and column names are looked for only above it.
+# A cell that is only a number or a date ("40.00", "10/02/2026", "(12.50)"). The first row holding two
+# or more (a line always has a date and an amount) is where the lines start, so titles and column names
+# are looked for only above it. A single number (a "2026" column name, a date beside a title) doesn't stop it.
 DATA_CELL = re.compile(r"^[\s$+\-(]*\d[\d,.\s/:-]*\)?$")
 SUMMARY_ROWS = frozenset({"gross profit", "net ordinary income", "net operating income", "net other income",
                           "net income"})
@@ -217,7 +218,7 @@ def quickbooks_signs(table: list[tuple[int, list[str]]], title_lines: int) -> li
 
     table: every non-empty row of the file, with its row number. title_lines: how many rows to look
     at for a title block and the column names (the reader's own limit). Looked for, in any cell of
-    the top rows (above the first row holding a number or a date): a QuickBooks report title or
+    the top rows (above the first row holding two numbers or dates): a QuickBooks report title or
     QuickBooks column names. In any row's first filled cell: a "Total for ..." row, a basis footer or
     a Profit and Loss summary row (S2).
     """
@@ -228,7 +229,7 @@ def quickbooks_signs(table: list[tuple[int, list[str]]], title_lines: int) -> li
         if not filled:
             continue
         first = filled[0]
-        top = top and position <= title_lines and not any(DATA_CELL.match(c) for c in filled)
+        top = top and position <= title_lines and sum(1 for c in filled if DATA_CELL.match(c)) < 2
         if top:
             signs += [f"the title '{_shown(c)}'" for c in filled if QUICKBOOKS_TITLE.match(c)]
         if top and len(filled) >= 2:
