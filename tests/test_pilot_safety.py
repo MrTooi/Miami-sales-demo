@@ -226,7 +226,7 @@ class PilotPageTests(unittest.TestCase):
         self.assertIn("<b>Sales report</b> · waiting", html)
         self.assertIn("<b>Cost report</b> · waiting", html)
         self.assertIn("Stays on this laptop, never sent online", html)  # a verified local pilot session
-        self.assertIn("Press End session to clear it all", html)
+        self.assertIn("End session clears the app&#x27;s data", html)
         # The consent is shown in full: AppTest can't render, so this checks the style rule that undoes
         # Streamlit's one-line cut-off for checkbox labels in columns (checked by eye in the browser).
         self.assertIn('.st-key-mx-consent [data-testid="stCheckbox"] p{white-space:normal!important;'

@@ -19,7 +19,9 @@ How the pilot works: Alex or Abrey visits the shop and runs MargenX on a team la
 - [ ] **Practice once with the sample files** so the visit goes quickly.
 
 ## Starting MargenX in pilot mode
-Run this in the project folder.
+**Easiest on the Mac:** double-click **Start MargenX** on the Desktop (a copy of `scripts/start_margenx.command`). It runs MargenX from its own copy in `~/MargenX-app`, never from the project folder, so the project folder's branch doesn't matter. It updates that copy to the latest approved version (`main`) when GitHub can be reached, otherwise it says so and uses the copy already there. It shows the version, starts pilot mode on this laptop only, and opens `http://localhost:8501`. Close its Terminal window to stop MargenX.
+
+Or run this in the project folder, checked out on `main`.
 
 Mac:
 ```bash

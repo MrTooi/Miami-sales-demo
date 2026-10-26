@@ -128,6 +128,9 @@ _APP_CSS = """
 .st-key-mx-bar{background:#0F1F19;padding:10px 28px;border-bottom:1px solid #1C3329}
 .st-key-mx-bar div.stButton>button{background:transparent!important;color:#E8EFEC!important;border:1px solid #3A5247!important}
 .st-key-mx-bar div.stButton>button:hover{border-color:#1DBA85!important;color:#7FE0B9!important}
+/* The End session label is never cut off: it wraps onto two lines on a narrow screen. */
+.st-key-mx-bar div.stButton>button p{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.2;font-size:.85rem}
+@media(max-width:1250px){.mx-bar .ws,.mx-bar .sep{display:none}}
 .mx-bar{display:flex;align-items:center;gap:12px;min-height:44px}
 .mx-bar .mx-logo{width:34px;height:36px}
 .mx-bar .name{font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-weight:800;font-size:1.2rem;color:#E8EFEC}.mx-bar .name b{color:#1DBA85}
@@ -280,7 +283,7 @@ def privacy_points(pilot: bool) -> None:
     """
     first = (("laptop", "Stays on this laptop, never sent online") if pilot else ("file", "Made-up files only"))
     points = (first, ("lock", "Read in memory, never saved" if pilot else "Checked in memory, never saved"),
-              ("trash", "Press End session to clear it all"))
+              ("trash", "End session clears the app's data"))
     _html('<div class="mx-trust">' + "".join(f'<div><span class="mx-ico2">{_icon(i)}</span>{escape(t)}</div>'
                                             for i, t in points) + "</div>")
 
