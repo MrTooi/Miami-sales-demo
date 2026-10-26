@@ -163,6 +163,25 @@ class AppFrameTests(unittest.TestCase):
         self.assertIn("Example data only", self.frame(ui.top_bar, False))
         self.assertIn(ui.TAGLINE, self.frame(ui.top_bar, False))
 
+    def test_the_session_pill_wraps_instead_of_running_off_a_phone_screen(self):
+        # The pill never wraps inside itself, so on a 375px screen the bar has to let it drop to its own line.
+        self.assertIn(".mx-live{margin-left:auto;display:inline-flex;", ui._APP_CSS)
+        self.assertIn("white-space:nowrap}", ui._APP_CSS.split(".mx-live{", 1)[1].split("\n", 1)[0])
+        self.assertIn(".mx-bar{display:flex;flex-wrap:wrap;", ui._APP_CSS)
+
+    def test_a_phone_still_says_which_jobs_need_a_check(self):
+        # The status column moves under the job name on a narrow screen; it is never hidden.
+        self.assertNotIn(".tagc{display:none}", ui._CSS)
+        self.assertIn(".mx-job .tagc{grid-column:2;grid-row:2}", ui._CSS)
+
+    def test_end_session_stays_in_reach_while_scrolling_on_a_laptop(self):
+        self.assertIn('@media(min-width:701px){[data-testid="stLayoutWrapper"]:has(>.st-key-mx-bar)'
+                      '{position:sticky;top:0;', ui._APP_CSS)
+
+    def test_long_dropdown_choices_stay_readable(self):
+        self.assertIn('[data-testid="stSelectbox"] input{text-overflow:ellipsis}', ui._APP_CSS)
+        self.assertIn('[data-testid="stSelectboxVirtualDropdown"] [role="option"]>div{white-space:normal;', ui._APP_CSS)
+
     def test_the_app_frame_loads_nothing_from_outside(self):
         # Icons are drawn inline, the logo is embedded image data, and the frame's style sheet names no
         # font, image or outside address.

@@ -100,6 +100,24 @@ if end_clicked:
     st.session_state["session_number"] = session + 1
     st.session_state["just_ended"] = "released" if released else "unconfirmed"
     st.rerun()
+# The "session ended" message goes right under the top bar, above the steps, so it's the first thing seen
+# on a phone too (where the steps column sits above the page).
+ended = st.session_state.pop("just_ended", None)
+if ended:
+    with st.container(key="mx-ended"):
+        if ended == "released":
+            st.success("Session ended. The uploaded files were removed from MargenX's upload storage, and the answers "
+                       "and results were cleared from this session. Close this browser tab and stop MargenX to finish "
+                       "the visit. The original files on this laptop (Downloads, AirDrop, USB) must still be deleted "
+                       "by hand.")
+        else:
+            # Never claim a deletion that couldn't be checked.
+            st.warning("Answers and results were cleared, but MargenX couldn't confirm the uploaded files were deleted "
+                       "from memory. Close this browser tab now and stop MargenX (Ctrl+C) to finish clearing.")
+        # End session can be pressed from far down the results (the bar stays on screen): scroll back up to the
+        # message. A fixed line of script, nothing from any file.
+        st.html('<script>document.querySelector(\'[data-testid="stMain"]\')?.scrollTo(0, 0)</script>',
+                unsafe_allow_javascript=True)
 with st.container(key="mx-shell"):
     side, main = st.columns([1, 3.7])
 nav = side.empty()  # the steps, filled in once the page knows which step it's on
@@ -118,15 +136,6 @@ with main:
             "**Pilot preview: use the sample files or made-up data only.** Don't upload real customer, invoice or bank "
             "files yet. Files are checked in memory for this session and never saved."
         )
-    ended = st.session_state.pop("just_ended", None)
-    if ended == "released":
-        st.success("Session ended. The uploaded files were removed from MargenX's upload storage, and the answers and "
-                   "results were cleared from this session. Close this browser tab and stop MargenX to finish the visit. "
-                   "The original files on this laptop (Downloads, AirDrop, USB) must still be deleted by hand.")
-    elif ended:
-        # Never claim a deletion that couldn't be checked.
-        st.warning("Answers and results were cleared, but MargenX couldn't confirm the uploaded files were deleted "
-                   "from memory. Close this browser tab now and stop MargenX (Ctrl+C) to finish clearing.")
     st.session_state["session_number"] = session
 
     use_samples = st.toggle("Try it with the made-up sample files", value=not PILOT, key=f"samples-{session}")
@@ -372,8 +381,15 @@ with main:
         invoices = [r for r in results if r.kind == "invoices"]
         costs = [r for r in results if r.kind == "costs"]
         if len(invoices) != 1 or len(costs) != 1:
-            st.info("Profit by job needs exactly one sales file and one costs file, each fully read below. "
-                    "Answer any questions below, or upload one of each.")
+            # Every file is read by now (nothing pending), so say what's missing or extra, not "answer questions".
+            missing = [name for name, found in (("sales report", invoices), ("cost report", costs)) if not found]
+            extra = [name for name, found in (("sales", invoices), ("cost", costs)) if len(found) > 1]
+            if missing:
+                st.info("Profit by job needs one sales report and one cost report. Add your "
+                        + " and ".join(missing) + ".")
+            else:
+                st.info("Profit by job needs exactly one sales report and one cost report. Remove the extra "
+                        + " and ".join(extra) + " file" + ("s" if len(extra) > 1 else "") + " below.")
             return False
         sources = (SOURCE_KEYS[id(invoices[0])], SOURCE_KEYS[id(costs[0])])
         report = jp.job_profit(invoices[0], which_job(invoices[0], costs[0], sources))
