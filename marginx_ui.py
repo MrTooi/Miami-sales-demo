@@ -149,7 +149,7 @@ _APP_CSS = """
 /* Dropdowns (the "which job" step): a long choice ends in "…" instead of a hard cut, and on a phone each choice in
    the open list gets two smaller lines. The list's rows are a fixed 40px, so two lines is the most that fits. */
 [data-testid="stSelectbox"] input{text-overflow:ellipsis}
-@media(max-width:700px){[data-testid="stSelectboxVirtualDropdown"] [role="option"]>div{white-space:normal;overflow:hidden;font-size:.8rem;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}}
+@media(max-width:700px){[data-testid="stSelectboxVirtualDropdown"] [role="option"]>div{white-space:normal;overflow:hidden;font-size:.75rem;line-height:1.15;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}}
 .st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]{gap:0!important}
 .st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"]:first-child{background:#F7FBF9;border-right:1px solid #DCE9E2;padding:26px 18px;min-height:calc(100vh - 66px)}
 .st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"]:last-child{padding:26px 40px 0}
