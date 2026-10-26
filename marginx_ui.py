@@ -103,7 +103,8 @@ div[data-testid="stExpander"]{border:1px solid var(--mx-line)!important;border-r
 .stAlert{border-radius:14px!important}
 div[data-testid="stAlertContentWarning"]{font-size:.88rem}
 @media(max-width:700px){.mx-title{font-size:1.6rem}.mx-metric{padding:12px 14px}.mx-metric .v{font-size:1.3rem}.mx-row{grid-template-columns:minmax(0,1.2fr) repeat(3,minmax(0,1fr));gap:8px;font-size:.88rem}
-.mx-job{grid-template-columns:12px minmax(0,1fr) 96px}.mx-job .tagc{display:none}}
+/* A phone has no room for the status column, so "Needs a check" moves under the job name: never hidden. */
+.mx-job{grid-template-columns:12px minmax(0,1fr) 96px;row-gap:4px}.mx-job .tagc{grid-column:2;grid-row:2}}
 </style>
 """
 
@@ -126,6 +127,10 @@ _APP_CSS = """
 [data-testid="stHeader"]{display:none!important}
 [data-testid="stElementContainer"]:has(>[data-testid="stMarkdown"] style){display:none}
 .st-key-mx-bar{background:#0F1F19;padding:10px 28px;border-bottom:1px solid #1C3329}
+/* On a laptop or tablet the bar stays at the top while the page scrolls, so End session is always one click
+   away. Streamlit wraps the bar in a box of its own height, so that box is what sticks. Not on a phone: there
+   the bar takes three lines and would cover a sixth of the screen. */
+@media(min-width:701px){[data-testid="stLayoutWrapper"]:has(>.st-key-mx-bar){position:sticky;top:0;z-index:999}}
 .st-key-mx-bar div.stButton>button{background:transparent!important;color:#E8EFEC!important;border:1px solid #3A5247!important}
 .st-key-mx-bar div.stButton>button:hover{border-color:#1DBA85!important;color:#7FE0B9!important}
 /* The End session label is never cut off: it wraps onto two lines on a narrow screen. */
@@ -140,6 +145,11 @@ _APP_CSS = """
 .mx-live{margin-left:auto;display:inline-flex;align-items:center;gap:8px;font-size:.8rem;color:#7FE0B9;background:rgba(29,186,133,.12);border:1px solid rgba(29,186,133,.3);padding:5px 12px;border-radius:999px;white-space:nowrap}
 .mx-live.demo{color:#F6C978;background:rgba(246,201,120,.1);border-color:rgba(246,201,120,.3)}
 .mx-live i{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 0 4px rgba(29,186,133,.18)}
+.st-key-mx-ended{padding:16px 40px 0}
+/* Dropdowns (the "which job" step): a long choice ends in "…" instead of a hard cut, and on a phone each choice in
+   the open list gets two smaller lines. The list's rows are a fixed 40px, so two lines is the most that fits. */
+[data-testid="stSelectbox"] input{text-overflow:ellipsis}
+@media(max-width:700px){[data-testid="stSelectboxVirtualDropdown"] [role="option"]>div{white-space:normal;overflow:hidden;font-size:.8rem;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}}
 .st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]{gap:0!important}
 .st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"]:first-child{background:#F7FBF9;border-right:1px solid #DCE9E2;padding:26px 18px;min-height:calc(100vh - 66px)}
 .st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"]:last-child{padding:26px 40px 0}
@@ -178,7 +188,7 @@ _APP_CSS = """
 .st-key-mx-files [data-testid="stFileUploaderDropzone"] button:hover{background:#1A3B2F!important;color:#7FE0B9!important}
 .mx-slots{display:flex;gap:12px;margin-top:12px}.mx-slot{flex:1;border:1px solid #E1EEE7;border-radius:12px;padding:10px 12px;font-size:.84rem;color:#7A8C84;display:flex;gap:10px;align-items:center}
 .mx-slot b{color:#0E241B;font-weight:600}.mx-slot.ok{border-color:#BFE3D2;background:#F4FBF7}.mx-slot.ok .mx-ico2{background:#1DBA85;color:#0E241B}
-@media(max-width:900px){.st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"]:first-child{min-height:0}.st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"]:last-child{padding:20px 16px 0}.mx-trust{border-left:0;padding-left:0}.mx-slots{flex-direction:column}.mx-bar .ws{display:none}}
+@media(max-width:900px){.st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"]:first-child{min-height:0}.st-key-mx-shell>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"]:last-child{padding:20px 16px 0}.mx-trust{border-left:0;padding-left:0}.mx-slots{flex-direction:column}.mx-bar .ws{display:none}.st-key-mx-ended{padding:12px 16px 0}}
 </style>
 """
 

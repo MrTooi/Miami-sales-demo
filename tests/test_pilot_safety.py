@@ -263,6 +263,8 @@ class PilotPageTests(unittest.TestCase):
         self.assertFalse(any("removed from MargenX's upload storage" in s.value for s in at.success))
         self.assertTrue(at.toggle[0].value)  # back to the samples: the previous answers are gone
         self.assertEqual(1, at.session_state["session_number"])
+        # The message comes first, above the steps and the pilot warning, so a phone shows it without scrolling.
+        self.assertIn("couldn't confirm the uploaded files were deleted", at.warning[0].value)
 
     def test_end_session_removes_shown_results_and_answers(self):
         # Results from files (here the samples; AppTest can't upload) and every answer are gone after

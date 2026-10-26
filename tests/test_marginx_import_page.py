@@ -266,6 +266,13 @@ class MargenXImportPageTests(unittest.TestCase):
         self.assertEqual(["fictional_costs.csv is identical to fictional_invoices.csv. Its rows are the same rows, "
                           "not new ones; upload it only once."], [w.value for w in at.warning[1:]])
 
+    def test_a_missing_report_is_named_instead_of_asking_for_answers(self):
+        # Two cost files and no sales file: every file is read, so there is no question left to answer.
+        at = self.with_files("Date,Vendor,Amount\n10/31/2026,A,1.00\n", "Date,Vendor,Amount\n10/30/2026,B,2.00\n")
+        self.assertIn("Profit by job needs one sales report and one cost report. Add your sales report.",
+                      [i.value for i in at.info])
+        self.assertFalse(any("Answer any questions" in i.value for i in at.info))
+
     def test_different_files_are_not_flagged_as_identical(self):
         self.assertEqual(1, len(self.run_page().warning))  # only the pilot warning
 
