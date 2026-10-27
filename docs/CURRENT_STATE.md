@@ -1,11 +1,11 @@
 # Current State — SNAPSHOT (stale-able)
 
-**Snapshot taken: 2026-10-24,** from GitHub (`main` at `14f80b9`, after PR #123; open PRs, issue and PR comments) and the owner's decisions in Claude Code sessions. **[unverified]** marks anything not read from GitHub or `main`.
+**Snapshot taken: 2026-10-26 (evening, Miami time),** from GitHub (`main` at `0d1478f`, after PR #129; open PRs, issue and PR comments) and the owner's decisions in Claude Code sessions. **[unverified]** marks anything not read from GitHub or `main`.
 
 > **This file is a snapshot, not a source of truth.** Before acting, refresh from live GitHub and `main`. If anything here disagrees with them, GitHub/`main` wins. Say so in your handoff, and refresh this file in a docs-only PR. **New sessions: read this file, `AGENTS.md`, `docs/DECISIONS.md` and `docs/MVP_SPEC.md` first.** Don't rely on chat history or summaries.
 
 ## The product in one paragraph
-**MargenX** (renamed from Ledger on 2026-10-18; the owner settled the spelling **MargenX**, one word, matching the website, on 2026-10-20 in PR #109) shows small Miami **job-based businesses** which jobs and customers make or lose money. It uses the sales/invoice and cost/bill files they already export from QuickBooks or Square, as CSV or Excel (.xlsx), including report-style exports (#116). **Target (D-007, owner decision 2026-10-22, recorded in #122):**
+**MargenX** (renamed from Ledger on 2026-10-18; the owner settled the spelling **MargenX**, one word, matching the website, on 2026-10-20 in PR #109) shows small Miami **job-based businesses** which jobs and customers make or lose money. It uses the sales/invoice and cost/bill files they already export from QuickBooks or Square, as CSV or Excel (.xlsx), including report-style exports (#116). Since #129, files that look like **QuickBooks reports are refused** with a plain message until they can be read safely (the plan is issue #128). **Target (D-007, owner decision 2026-10-22, recorded in #122):**
 - print, sign and apparel shops
 - trade contractors (remodeling, flooring and similar)
 - custom makers and installers (cabinets, metal work and similar)
@@ -19,6 +19,7 @@ It isn't a product for every business. This replaces the 2026-10-20 "print shops
   - **Alex runs every meeting** and presents the slides and the demo page for that kind of business.
   - The plan, a starter lead list and the scorecard (decision date **Nov 13**) are in a claude.ai document shared with Abrey. They aren't in this repository.
   - The business contact email on the decks is margenxtech@gmail.com.
+  - Abrey marks call outcomes with cell colours in the leads tab, not its Status column. His own Claude can't read that Claude Doc, so on 2026-10-26 he was emailed the doc's own Word export **[unverified]**.
 - **Claude Code:** builds, tests and writes the reviews' fix lists. **ChatGPT:** independent review (D-004).
 
 ## How work is done
@@ -50,6 +51,11 @@ Branch → tests (`~/.venvs/miami-sales-demo/bin/python -m unittest discover -s 
 | **Demos for each target group, and a clearer results page:** made-up remodeling contractor and cabinet/metal shop demos (in the app and as static pages); new tagline; **Profit margin** card; customer **table** instead of bars; margin on the after-overhead line; D-007 | `sample_data/marginx/demo_contractor_*`, `demo_custom_shop_*`, `marginx_ui.py`, `scripts/build_demo_page.py`, `docs/DECISIONS.md` | Merged (#122). ChatGPT manual review FAIL→fixed, then re-review **PASS WITH WARNINGS**. 746 tests. |
 | **"Which job was this for?":** costs with no job number that may belong to a job are listed for the owner to match to a job, mark "Not for a job", or leave "Not sure yet" (the default; MargenX never picks). A costs file with no job column is read instead of refused. Answers are tied to both files' identity (name, exact bytes, every reading choice) and reset when either changes. The notes disclose every owner answer | `job_matching.py`, `job_profit.py`, `pages/1_MargenX_Import.py` | Merged (#123). ChatGPT manual review FAIL (answers could survive a file change) → fixed → re-review PASS WITH WARNINGS → final **PASS**. 774 tests. |
 | **Excel (.xlsx) and report-style files:** numbers read from the exact stored text, never rounded while reading; title lines skipped; total, heading and footer rows skipped only when proven, everything unclear rejected as possibly missing money; size, unpacked-size and shape limits | `job_intake.py` (`read_file`), `tests/test_file_reading.py` | Merged (#116). Tested on made-up files only. Automated review FAIL on one item (numbered title lines like "Paid 500"); ChatGPT manual review **PASS WITH WARNINGS**, no blockers; the owner accepted that item as a D-005 follow-up. 723 tests. |
+| **Negative-sales margin test:** a job whose refunds exceed its sales shows no margin percentage and says why | `tests/test_marginx_ui.py` | Merged (#124), with the 2026-10-24 refresh of this file. |
+| **App redesign:** dark top bar (logo, "Pilot session · this laptop only" light, End session), a steps column (Add your reports → Answer a few questions → See your money), and consent and upload cards. The owner asked for software, not a website, with no filler content | `marginx_ui.py`, `pages/1_MargenX_Import.py` | Merged (#125). |
+| **"Start MargenX" launcher:** double-click to start pilot mode from the approved tip of `main` on GitHub (it needs the internet). It runs only from its own copy in `~/MargenX-app`, after checking every file byte for byte against the approved commit. It runs git with its program-running features (hooks, file monitors, helpers) switched off, ignores git and Python settings handed to it, and uses only the Mac's own system programs. It trusts the Mac itself; the details and limits are in the script's comments and #126. Also: the End session label never cut off; wording "End session clears the app's data" | `scripts/start_margenx.command` (a copy is on the owner's Desktop) | Merged (#126). Six manual review rounds on the launcher's safety; the last was PASS WITH WARNINGS. 808 tests. |
+| **Phone and narrow screens, plus a real upload test:** the "Pilot session" label is never cut off on phones, End session stays in reach, clearer wording. Display and wording only; no figure, rule or clearing step changed. A real browser upload of all 4 made-up file sets matched the sample switch, and End session cleared everything | `marginx_ui.py`, `pages/1_MargenX_Import.py` | Merged (#127). |
+| **QuickBooks step 1 (issue #128):** a file that looks like a QuickBooks report is refused with a plain message, so the $405 Cost-of-Goods-Sold-as-sales mistake can't happen. A sales file that mixes in payments or deposits is refused. New QuickBooks line rules are written and tested but **not connected to a reader yet** (a COGS Invoice is never a sale; payments, deposits and unapplied cash are never counted automatically) | `quickbooks_rules.py`, `job_intake.py`, `tests/test_quickbooks_rules.py` | Merged (#129). ChatGPT manual review **PASS WITH WARNINGS**, 0 blockers; its follow-ups are on #128. 847 tests. |
 
 ### What the results page shows (#108, updated in #122)
 As implemented and tested in #108 and #122 (regression tests in `tests/test_marginx_ui.py`, `tests/test_marginx_insights.py`, `tests/test_marginx_import_page.py`), and reviewed in the ChatGPT manual review round 2. This summary is not itself evidence. The rule behind it: **a number that is incomplete says so, or isn't shown.**
@@ -69,7 +75,7 @@ Internal code names (`marginx_ui.py`, `marginx_insights.py`, `marginx_pilot.py`,
 ## What is NOT proven or handled yet
 - **No real shop export has ever been run.** Everything is tested on fictional files, and "what owners want" is our assumption until conversations confirm it.
 - Known gaps (see `docs/MARGINX_REAL_EXPORT_FOLLOWUPS.md`):
-  - the exact QuickBooks/Square layouts. Excel and report-style reading (#116) is built and tested on made-up files only: the QuickBooks Online test drive was down, so no real report has been seen. The checks to do on a real file are in item 6 of that doc.
+  - the exact QuickBooks/Square layouts. On 2026-10-26 the owner exported three reports from QuickBooks Online's made-up practice company. MargenX read them wrongly (0 of 122 lines from Sales by Customer Detail; $405 of Cost of Goods Sold counted as sales from Profit and Loss Detail). Since #129 those reports are refused. Reading them correctly is the approved plan in issue #128, steps 2–7, which are paused (see below). No real shop's export has been seen.
   - bills without job numbers: handled since #123 by asking the owner (never guessed); untested on real exports
   - labor paid as wages, not per job (would make most jobs "needs a check")
   - sales tax
@@ -84,17 +90,23 @@ Internal code names (`marginx_ui.py`, `marginx_insights.py`, `marginx_pilot.py`,
 - **Real customer data is prohibited** until step 3b is done and the owner records the real-data decision (**D-008 or later**, since D-007 is the wider target; real data approved for a named pilot shop).
 
 ## Next actions, in order
-1. **Customer outreach** per the 2026-10-22 plan **[unverified]**: Abrey's short calls → meetings with Alex. Each call asks whether invoices carry a job number and whether costs are marked by job. The scorecard decides on Nov 13 which groups to keep.
-2. **Step 3b**, the real export layouts plus the high-priority follow-ups, guided by what shops actually use. Get one real QuickBooks Online report **layout** first (the column names and row shapes, for example from the QuickBooks test drive or an export filled only with made-up entries, **not** a shop's real records): it confirms or corrects #116. Real customer data stays prohibited until the owner's real-data decision is recorded. Candidates to validate in conversations first: labor hours × rate (as an estimate), how-to-export instructions, profit by product type, quoted vs. actual.
+1. **Get the first real shop meeting.** Customer outreach per the 2026-10-22 plan **[unverified]**: Abrey's short calls → meetings with Alex. Owner decision 2026-10-26 (recorded on issue #128): **nothing more is built until after the first real meeting.** Questions worth answering there:
+   - QuickBooks Online, QuickBooks Desktop or Excel?
+   - Are jobs tracked in it (QuickBooks sub-customers or Projects)?
+   - Would the owner download a report?
+2. **Then decide how to continue issue #128** (reading QuickBooks reports). Its plan v7 passed a manual review with no blockers, and Alex chose Profit and Loss Detail as the sales source when both reports are uploaded (both recorded on #128). Steps 2–7 are paused.
+   - The owner's direction (2026-10-26, from a Claude Code session) **[unverified]** is to **give shops the software** rather than have them send files. Options: an app on their computer, a website, or a "Connect to QuickBooks" button. To be decided after meetings; production deployment and live integrations need separate owner decisions.
 3. Small follow-ups (non-blocking):
-   - optional test additions from the #113 and #115 reviews (see those PRs)
-   - **owner decision:** whether to update `docs/CHATGPT_REVIEW_INSTRUCTIONS.md` to the new name (it still says "MarginX" once)
+   - the #129 review's follow-ups, listed on #128 for the step that needs each;
+   - optional test additions from the #113 and #115 reviews (see those PRs);
+   - **owner decision:** whether to update `docs/CHATGPT_REVIEW_INSTRUCTIONS.md` to the new name (it still says "MarginX" once).
 4. Other owner decisions pending:
-   - whether to build the Opportunity Radar **evidence store** (issue #1, open), proposed so conversation notes become scored evidence
-   - Abrey logs leads and what owners said in the plan document's "Starter leads" tab **[unverified]**; whether that later moves into the repository (for example the evidence store) is the owner's call
-5. The real-data decision (D-008 or later), then the first sit-down pilot visit, following `docs/PILOT_VISIT_CHECKLIST.md`. Repeat the real upload-and-delete browser test before it, now with an Excel file too.
+   - whether to build the Opportunity Radar **evidence store** (issue #1, open), proposed so conversation notes become scored evidence;
+   - Abrey logs leads and what owners said in the plan document's "Starter leads" tab **[unverified]**. Whether that later moves into the repository (for example the evidence store) is the owner's call.
+5. The real-data decision (D-008 or later), then the first sit-down pilot visit, following `docs/PILOT_VISIT_CHECKLIST.md`. Start MargenX with the Desktop "Start MargenX" launcher. Repeat the real upload-and-delete browser test before it, now with an Excel file too.
 
 ## Paused or background
 - **AI-team readiness gate** (Suites A/B/C, #11/#69/#35): paused by the owner's choice (focus on MargenX). The run details below are from an earlier snapshot and weren't re-checked on 2026-10-24; #69 is still open. The round-3 Suite A scheduled run `39175749268` (2026-10-18, at `34e43ee`) **failed** and is **not recorded on #69**. Every scheduled run since refuses at "Require reviewed hardening change" (expected; no paid call). A→B→C successes: 0. Unattended agents stay disabled.
+- **QuickBooks report reading** (issue #128, steps 2–7): paused by the owner until after the first real shop meeting. Step 1 (#129) is merged.
 - **Opportunity Radar:** the scoring foundation is on `main` (`opportunity_radar/`); the evidence store (issue #1) isn't built.
 - Draft PRs #16 (old LEDGER website), #39/#62/#63/#64 (trial evidence) and #67/#70 (old readiness drafts) stay unmerged on purpose.
