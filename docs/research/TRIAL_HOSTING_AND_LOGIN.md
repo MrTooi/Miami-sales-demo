@@ -3,8 +3,9 @@
 - **Date:** 2026-10-27. **Author:** Claude Code, step R of the reviewed plan in issue #131 (plan v7, manual review PASS WITH WARNINGS).
 - **What this is:** desk research from the providers' **official documentation and pricing pages** only, plus one memory measurement with made-up files. Nothing was signed up for, bought or set up. No real shop data was used.
 - **What this isn't:** proof that the design works. Everything marked **To test** must be shown on a real test setup in P2 or P4, as the plan says. Prices are list prices seen on 2026-10-27; they must be checked again before anything is bought.
-- **Labels:** **Verified** = the provider's own page says it plainly. **Unclear** = the page is silent or contradicts itself. **Not available** = not on the plan we'd use.
+- **Labels:** **Verified** = the provider's own page says it plainly. **Unclear** = the page is silent or contradicts itself. **Not available** = not on the plan we'd use. **Unresolved** = a release condition that this research can't settle; it blocks real files until written provider evidence or a live test settles it. **Provisional** = a working assumption to be replaced by a measurement or a fresh price.
 - Sources are links to the providers' own pages. Quotes are kept short; everything else is paraphrased.
+- **Revised after the manual review of this PR (FAIL at ce7c228, 5 blockers):** the earlier draft stated the retention gate, the logout timing, the end-of-trial order, the memory size and the cost more firmly than the evidence supports. Those are now marked **Unresolved** or **Provisional**, with what would settle each one.
 - **How it was checked:** two research passes read the official pages and labelled each answer. Claude then re-read the most important ones itself on 2026-10-27:
   - Cloudflare: session management (logout, cancellation, renewal, timing); the June 2026 change of the default login method; Enterprise-only WAF payload logging; the default cache list;
   - Render: that background workers receive no incoming traffic, and its worker sizes;
@@ -12,14 +13,14 @@
   Render's prices couldn't be read by that re-check (the page didn't show them) and are marked so. Every other row has its link, so the reviewer can check it.
 
 ## Summary (plain words)
-- **The login gate: Cloudflare Access, free plan** (up to 50 users). It has the emailed code, a tunnel with no open port, and a documented "cancel this person's login everywhere" call. **We must switch on the emailed code ourselves**: since June 2026 it's no longer the default.
-- **The server: Render, a "background worker" with 2 GB of memory, in a US region.** A background worker **can't receive traffic from the internet at all**, so the only way in is the tunnel. It has a dashboard stop button for emergencies, and automatic deploys can be switched off. List price about **$25 a month** (check before buying). **Cheaper option:** Fly.io at about **$13.39 a month** for 2 GB, but it's run mostly from the command line, and staying private depends on getting its settings exactly right.
-- **Memory:** MargenX needs about 160 MB at rest and up to about 280 MB while reading one of the largest files it accepts (made-up files, measured). **512 MB is too small** for several shops at once; 2 GB is comfortable.
-- **The retention gate** (no provider keeps file contents): **met on paper for Cloudflare** (no body logging on the free plan, no bodies in request logs, caching can be switched off). **For Render, two things aren't documented: swap and crash dumps.** We ask Render support in writing before P4. If Render can't confirm, the gate isn't met there, and we use Fly.io, where swap is switched on only by a setting (implied by its docs; to confirm).
-- **Domain:** the free Cloudflare plan needs the **whole domain** managed by Cloudflare. **Recommended: a separate small domain just for MargenX**, so Abrey's website and email aren't touched. That is a question for Alex and Abrey before P4.
-- **No deal-breaker found.** Section 4 lists the details that change in the later steps (none changes the design). Section 5 lists what only a live test can prove.
-- **Estimated running cost for a trial month:** about $25 (Render 2 GB) + $0 (Cloudflare free) + a domain (price to check, paid yearly). Nothing is bought until Alex approves a budget.
-
+- **Proposed login gate: Cloudflare Access, free plan** (up to 50 users). It has the emailed code, a tunnel with no open port, and a documented "cancel this person's login everywhere" call. **We must switch on the emailed code ourselves**: since June 2026 it's no longer the default.
+- **Proposed server: Render, a "background worker", in a US region.** A background worker **can't receive traffic from the internet at all**, so the only way in is the tunnel. It has a dashboard stop button, and automatic deploys can be switched off. **Fly.io** is the other candidate. **Both are conditional** (next point).
+- **Three things are Unresolved, and each blocks real files until settled:**
+  1. **The retention gate (no provider keeps file contents): Unresolved for Cloudflare, Render and Fly.io.** What we found lowers the risk: no body logging on Cloudflare's free plan, no bodies in its request logs, caching can be switched off, no public traffic to the server. But several provider surfaces aren't documented: memory and buffering while files pass through, security processing, internal diagnostics and crash handling, swap, and staff access. Section 1.7 and section 2.2 list them. **Written evidence from each chosen provider, surface by surface, is needed before real files.** A canary test can't replace it. If a provider can't give it, that provider can't be used for real files; if none can, real files stay off and Alex decides.
+  2. **Logout: Unresolved.** The per-person cancellation exists, but Cloudflare doesn't document how long it takes to reach every device. Nothing here proves that a new emailed code is required everywhere afterwards. Section 1.4 sets a fail-closed rule for the door and what P2 and P4 must prove. If it can't be proven, the plan's fallback applies: a weaker, honestly worded logout promise, Alex's choice.
+  3. **Server size and cost: Provisional.** One measurement on the Mac suggests 512 MB may be too small and 2 GB has room, but that isn't established. The real container must be measured at the worst-case workload, and prices checked fresh, before a size is chosen or anything is bought (sections 3 and 6).
+- **Domain and account (proposals for Alex and Abrey, not decisions):** the free Cloudflare plan needs the **whole domain** managed by Cloudflare. A separate small domain just for MargenX would avoid touching Abrey's website and email. A separate Cloudflare account would keep logouts away from anything else.
+- **Nothing found yet rules the design out.** Section 4 lists the details for the later steps; section 5 lists what only a live test or a provider's written answer can settle.
 
 ## 1. The login gate: Cloudflare Access (Zero Trust)
 
@@ -41,16 +42,21 @@
 ### 1.3 Sessions and renewal
 - Three lengths: the **overall (global) session** (15 minutes to 1 month, default 24 hours), the **app session**, and an optional **rule (policy) session**. The most specific one wins. Verified: [Session management](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/).
 - **Renewal:** when an app token expires, Access quietly issues a new one if the overall session is still valid and the person still passes the rule. Otherwise they log in again, which for us means a new emailed code. Verified: same page.
-- **For P4:** set the overall and app sessions to match (the plan's working-day length), so a login never outlives what the guide says.
+- **For P4:** set the overall and app sessions to match (the plan's working-day length). **That is a setting, not evidence:** while the overall session is valid, Access can quietly renew an app token. So matching lengths doesn't prove that a cancelled person must enter a new code on every device. That is proven only by the P4 test in section 1.4.
 
 ### 1.4 Logout and person-wide cancellation (the plan's logout design)
 - **Per-person cancellation exists:** an API call (`POST /accounts/{account_id}/access/organizations/revoke_user`, with the email) revokes that person's Access tokens **across all apps in the account**. Verified: [revoke_user API](https://developers.cloudflare.com/api/resources/zero_trust/subresources/organizations/methods/revoke_users/), [Session management](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/).
-- **What its answer confirms:** only that the request was accepted (`"success": true`), not when every session has ended. **So in the plan, "the gate confirms" can only mean "the gate accepted the cancellation".** The door's own refusal must cover the time it takes to apply. Verified (response format); timing Unclear.
-- **Timing:** after a cancellation, the person can't log back in for up to 1 minute. After a logout, tokens already issued keep working for 20–30 seconds. Verified: [Session management](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/). **Consequence for P2:** the door's refusal after a logout must be **at least 2 minutes**, not the 60 seconds in the plan, so it outlasts both documented delays with a margin. This is a detail inside P2 (test requirement 8), not a design change.
-- **A cancellation isn't a ban.** The page says a person whose identity is still active can start a new session. With emailed codes, "active" means their email is still on the allow rule. So **logging back in after a cancellation should need a new emailed code**, but the page doesn't say so outright. **To test** in P4 (test requirement 21), with two devices.
-- **To remove someone for good** (trial end, early end): take the email off the allow rule **first**, then cancel. Verified (that order): same page.
+- **What its answer confirms:** only that the request was accepted (`"success": true`), not when every session has ended. **So in the plan, "the gate confirms" can only mean "the gate accepted the cancellation"**, and the page may say "You're logged out" only after that acceptance. Verified (response format); timing Unclear.
+- **Timing (documented for other actions, not for this call):** after an administrator cancels a person in the dashboard, they can't log back in for up to 1 minute. After the logout address is visited, tokens already issued keep being accepted for 20–30 seconds. Verified: [Session management](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/). **Neither figure is documented for the API call**, and neither says when every old token stops working. **Unclear.**
+- **So the door can't rely on a fixed wait. The fail-closed rule for P2:**
+  - when the gate accepts a person's cancellation, the door records a **"not before" moment** for that person. It then **refuses every token for that person issued before that moment, for as long as such a token could still be valid** (until its own expiry), not just for a few minutes;
+  - **after a restart** the door has lost those records, so it refuses **every token issued before the restart** (the plan's quarantine rule), which includes every token from before any cancellation;
+  - **what remains Unresolved:** a token issued after the restart, from a gate login the cancellation hasn't reached yet. The API's propagation time isn't documented. **P2 and P4 must show**, on the live setup with two devices, that after an accepted cancellation no device gets back in without a new emailed code, including across a restart. If that can't be shown, the plan's fallback applies (a weaker, honestly worded promise, Alex's choice);
+  - the 2-minute quarantine stays as a **minimum** backup, not as proof.
+- **A cancellation isn't a ban.** The page says a person whose identity is still active can start a new session. With emailed codes, being active likely means the email is still on the allow rule, but the page doesn't say so. Whether logging back in needs a new emailed code is **Unclear; to test** in P4 (test requirement 21), with two devices.
+- **Removing someone for good (trial end, early end):** Cloudflare's page says to disable the person **at their identity provider** first, then revoke the session. Verified: [Session management](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/). With emailed codes there's no separate identity-provider account. **Our proposed equivalent** is to take the email off the allow rule first, then cancel. **Unverified:** the page doesn't describe this, so its effect on existing tokens and on renewal must be tested in P4 before it becomes the end-of-trial procedure.
 - **The logout address** (`/cdn-cgi/access/logout`) ends the person's session **in all apps of that account**. That is one more reason for **a separate Cloudflare account just for MargenX** (section 1.8). Verified: same page.
-- **The narrowest key:** a "Access: Organizations Revoke" permission was added on 2026-01-22. The API page still lists the broader "Organizations, Identity Providers, and Groups Write". Whether the narrow one is accepted is **Unclear; to test** first in P4. If only the broad one works, the key could change login settings, so it must be kept as carefully as a password. Sources: [changelog 2026-01-22](https://developers.cloudflare.com/changelog/post/2026-01-22-granular-api-token-permissions/), [permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/).
+- **The narrowest key:** a "Access: Organizations Revoke" permission was added on 2026-01-22. The API page still lists the broader "Organizations, Identity Providers, and Groups Write". Whether the narrow one is accepted is **Unclear; to test** first in P4. **If only the broad permission works,** the key could change login settings. That is a bigger credential than the plan assumed, so it needs **Alex's explicit yes and a security review** before use, not just careful storage. Sources: [changelog 2026-01-22](https://developers.cloudflare.com/changelog/post/2026-01-22-granular-api-token-permissions/), [permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/).
 
 ### 1.5 The signed token the door checks
 - The door checks the `Cf-Access-Jwt-Assertion` header (not the cookie): RS256 signature, audience (the app's AUD tag), issuer (`https://<team>.cloudflareaccess.com`) and expiry. Keys are fetched from the team's `certs` address and matched by `kid`. Verified: [Validating the token](https://developers.cloudflare.com/cloudflare-one/identity/authorization-cookie/validating-json/).
@@ -72,19 +78,26 @@
 | Memory while passing through | Not documented. Nothing found suggests storage. | Unclear | — |
 | Login records | Email, user ID, IP, country, app, allow/deny, time. Kept 24 hours on Free. User records (emails) **can't be deleted**, even after a seat is removed. | Verified | [Audit logs](https://developers.cloudflare.com/cloudflare-one/insights/logs/audit-logs/), [Seat management](https://developers.cloudflare.com/cloudflare-one/team-and-resources/users/seat-management/) |
 
-**Retention-gate verdict for Cloudflare (desk research):** it **can be met** on Free. Body logging isn't offered on Free, request logs carry no bodies, and caching can be switched off for the address. P4 still records the actual settings, and the privacy notice names Cloudflare for passing copies in memory and for the emails it keeps.
+**Retention-gate verdict for Cloudflare: Unresolved.** The findings above lower the risk, but they don't establish that file contents are never persistently recorded. These surfaces aren't covered by any page found:
+- the edge servers' memory while traffic is decrypted and passed on;
+- request buffering ("Standard" inspects the start of a body when a security feature needs it; "Full" holds the whole body);
+- security processing such as managed firewall rules and bot and DDoS protection: whether any of it keeps samples;
+- internal diagnostics and crash handling on the edge servers;
+- staff access.
+
+**What would settle it:** a written statement from Cloudflare, surface by surface (a support or sales answer, or a contract or DPA clause). P4 also records the settings as set. **Practical limit:** the free plan has community support only, so getting a written answer may need a sales contact or a paid plan, an open question for Alex. Until it's settled, real files stay off (the plan's retention gate). A canary test can't settle it.
 
 ### 1.8 Domain, account and where data is processed
 - **The domain must be fully on Cloudflare.** The MargenX address must be in a domain whose name servers point to Cloudflare, **in the same Cloudflare account**. A partial setup that moves only one address needs the **Business** plan, and sub-domain zones need Enterprise. Verified: [Partial setup](https://developers.cloudflare.com/dns/zone-setups/partial-setup/), [Subdomain setup](https://developers.cloudflare.com/dns/zone-setups/subdomain-setup/), [Tunnel DNS](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/dns/).
-- **What that means for Abrey's website** (for the website questions before P4): using our existing domain would mean moving **the whole domain's** name servers to Cloudflare, which touches the website and email settings. **A separate small domain just for MargenX**, in its own Cloudflare account, avoids touching Abrey's site at all. Abrey's site would just get a "Log in" link. **Recommended**, to confirm with Alex and Abrey before P4.
-- **A separate Cloudflare account for MargenX** keeps logouts and cancellations (which act on the whole account) away from anything else. Recommended.
+- **What that means for Abrey's website** (for the website questions before P4): using our existing domain would mean moving **the whole domain's** name servers to Cloudflare, which touches the website and email settings. **A separate small domain just for MargenX**, in its own Cloudflare account, avoids touching Abrey's site at all. Abrey's site would just get a "Log in" link. **A proposal**, for Alex and Abrey to decide before P4.
+- **A separate Cloudflare account for MargenX** keeps logouts and cancellations (which act on the whole account) away from anything else. A proposal; Alex decides.
 - **Where data is processed:** encrypted traffic is opened at whichever Cloudflare data center receives it. Keeping it in one region needs the Data Localization Suite, an **Enterprise** add-on. So **no "US-only" claim** can be made for the gate. Sources: [Data localization](https://developers.cloudflare.com/data-localization/), [Regional services](https://developers.cloudflare.com/data-localization/regional-services/).
 - **Contract terms:** Cloudflare is a processor under its data processing agreement (DPA, v6.4), and the terms keep ownership of content with us. **Whether the DPA applies to a Free account without a separate step is Unclear**; to check before T. Sources: [DPA](https://www.cloudflare.com/cloudflare-customer-dpa/), [Terms](https://www.cloudflare.com/terms/).
 
 ### 1.9 Alternatives compared
 - **oauth2-proxy** (run by us): a gate in front of the app, but it has **no emailed code** of its own. It needs a separate login provider, its own route in, and certificates we manage, and no cancellation API is documented. More moving parts. [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/), [session storage](https://oauth2-proxy.github.io/oauth2-proxy/configuration/session_storage)
 - **Pomerium:** the same "signed token to the door" pattern, but it also needs our own login provider for emailed codes, and its pricing wasn't found in its docs. [Pomerium docs](https://www.pomerium.com/docs)
-- **Choice:** **Cloudflare Access**. It bundles the gate, the emailed code, the tunnel and a documented per-person cancellation. Its weak spots are already handled by the plan: open connections (the door closes them), no regional processing (no US-only claim), and 24-hour log retention.
+- **Proposed:** **Cloudflare Access**. It bundles the gate, the emailed code, the tunnel and a documented per-person cancellation. Its weak spots are handled by the plan: the door closes open connections, there's no US-only claim, and logs are kept 24 hours. **It's still conditional** on the retention evidence (section 1.7) and the logout proof (section 1.4).
 
 ## 2. The server (hosting)
 Compared: **Render**, **Fly.io** and **Railway**, from their official docs and pricing pages. A plain virtual server (VPS) wasn't chosen: we would have to run and patch the operating system ourselves.
@@ -105,15 +118,15 @@ Compared: **Render**, **Fly.io** and **Railway**, from their official docs and p
 | DPA and certifications | DPA part of the terms; SOC 2 Type II and ISO 27001 (reports not on Hobby). [DPA](https://render.com/dpa), [Security](https://render.com/security) | DPA to sign and return; SOC 2 report only with the $99/month package. [Security questionnaire](https://fly.io/legal/security-questionnaire/) | — |
 | Ease for Alex | Mostly dashboard | Mostly command line | — |
 
-### 2.2 Recommendation: Render, background worker, 2 GB, Virginia or Ohio
-- **Why:** it can't be given a public address by mistake, it has a dashboard stop button (the plan's first emergency step), deploys can be locked to one exact commit, and it's run from a dashboard Alex can use.
-- **Main cost:** 2 GB at about $25 a month, the top of the plan's $5–$25 estimate, because Render has no 1 GB size and 512 MB is too small (section 3).
-- **What must be confirmed before P4** (Alex sends the questions to Render support; Claude drafts them):
-  - is swap ever used for a worker;
-  - are crash dumps or core files ever kept;
-  - do staff ever access a running service's memory.
-  **If Render can't confirm, the retention gate isn't met there, and we switch to Fly.io** (swap only when set, 2 GB at $13.39), after asking Fly the same questions, and with the stricter config discipline it needs.
-- **Not recommended: Railway** (forced redeploys, longer log keeping, staff-access wording).
+### 2.2 Proposed: Render, background worker, US region. Both Render and Fly.io are conditional
+- **Why Render first:** it can't be given a public address by mistake, it has a dashboard stop button (the plan's first emergency step), deploys can be locked to one exact commit, and it's run from a dashboard Alex can use.
+- **Neither provider passes the retention gate on paper.** Undocumented surfaces:
+  - **Render:** swap, crash dumps or core files, and staff access to a running service's memory;
+  - **Fly.io:** crash dumps, and whether swap is off unless set (its page only says the setting enables swap). Staff access is described as for security, maintenance or support with consent.
+- **What's needed before real files:** a written answer from the chosen provider covering each of these surfaces. Claude drafts the questions; Alex sends them.
+  - **If the answer covers every surface:** that provider can be used, still subject to the P4 settings check.
+  - **If not:** that provider can't be used for real files. If neither can, real files stay off, and Alex decides what to do next (for example the installed-app fallback in #131).
+- **Not recommended: Railway** (Railway-started redeploys, longer log keeping, staff-access wording).
 
 ### 2.3 Details for the later steps (none changes the design)
 - **Two copies during each Render deploy:** for a short time the new copy starts before the old one stops, so two tunnel connections run at once. Verified: [Deploys](https://render.com/docs/deploys). P4 rule: deploy only when no trial user is active. The restart quarantine then applies to the new copy.
@@ -132,41 +145,59 @@ Measured on 2026-10-27 on the Mac, with Python 3.11 and the pinned packages. Eac
 | Made-up CSV sales file read and checked | 4.2 MB | 49,000 | about 250 MB |
 | Made-up Excel sales file read and checked | 1.9 MB | 49,000 | about 280 MB |
 
-- **What it means:** one large file adds roughly 90–120 MB on top of the base. Add the Streamlit server, the door and `cloudflared`, and several shops at once with large files can pass 1 GB. **512 MB is too small; 2 GB is comfortable.**
-- **Limits:** this is one process on a Mac, not the running server. P3 sets the total and per-session limits, and P4 measures the real container.
+- **What it suggests (Provisional):** one large file added roughly 90–120 MB on top of the base in this one test. Several shops at once with several large files, plus the Streamlit server, the door and `cloudflared`, **could** pass 512 MB, and 2 GB **likely** has room. **Neither is established.**
+- **Limits:** this is one process on a Mac, reading one file. It isn't the running container, it doesn't include several sessions or four files per session, and it didn't measure the door, the tunnel or the server overhead.
+- **The assumed worst-case workload for P3 and P4** (the plan's own proposed limits): up to 10 sessions in total and 3 per person, each with up to 4 files of up to 5 MB (20 MB per session), each file within the 50,000-line limit, plus the door and `cloudflared`.
+- **Before a size is chosen:** P3 enforces those limits, and P4 measures the real container at that worst case. It also checks what happens when memory runs out: the service must stop or refuse safely, not lose a session's data to another session. Only then is a size, and so a price, chosen.
 
 
 ## 4. What changes in the later steps (details only)
 | Finding | Step | What it means |
 |---|---|---|
-| The gate's cancellation answer only says "accepted", and it can take up to 1 minute; old tokens work for 20–30 seconds after a logout | P2 | "The gate confirms" means it accepted the cancellation. The door's refusal after a logout is **at least 2 minutes** (not 60 seconds), and a new emailed code after logout is proven in P4 (test requirement 21) |
-| A cancellation isn't a ban | P5, 1d | Trial end and early end: **take the email off the allow rule first, then cancel** |
+| The cancellation answer only means "accepted"; propagation time for the API isn't documented | P2, P4 | The fail-closed "not before" rule and the restart rule (section 1.4); "You're logged out" only after acceptance; P2 and P4 prove a new emailed code on every device, or the weaker promise applies |
+| A cancellation isn't a ban; Cloudflare's documented order is "disable at the identity provider, then revoke" | P4, P5 | Our proposed equivalent, "remove from the allow rule, then cancel", is **Unverified**: test its effect on existing tokens and renewal before it becomes the end-of-trial procedure |
 | The emailed code isn't the default | P4 | Add it; make it the app's only login method; "instant authentication" on |
 | CSV and Excel files are cached by default | P4 | A "bypass cache" rule for the whole MargenX address, plus "don't store" (already planned) |
-| Logout and cancellation act on the whole Cloudflare account | P4 | A **separate Cloudflare account** just for MargenX |
-| The domain must be fully on Cloudflare (free plan) | Before P4 | **A separate small domain for MargenX** is recommended, so Abrey's site and email aren't touched; ask Alex and Abrey |
-| The narrow "Revoke" key permission may not work on that call | P4 | Test it first; if only the broad permission works, the key is guarded like a password and kept only in Render's secret settings |
+| Logout and cancellation act on the whole Cloudflare account | Before P4 | Proposal: a **separate Cloudflare account** just for MargenX (Alex decides) |
+| The domain must be fully on Cloudflare (free plan) | Before P4 | Proposal: **a separate small domain for MargenX**, so Abrey's site and email aren't touched (Alex and Abrey decide) |
+| The narrow "Revoke" key permission may not work on that call | P4 | Test it first. If only the broad permission works, it needs Alex's explicit yes and a security review before use |
 | Open connections aren't cut by Cloudflare | P2 | Confirms the door's design: the door closes them |
 | Whether the DPA covers a free Cloudflare account | T | Check with Cloudflare before the trial terms are finalised |
-| Render swap, crash dumps, staff access | Before P4 | Ask Render support in writing; if not confirmed, use Fly.io |
+| Undocumented retention surfaces at Cloudflare, Render and Fly.io | Before P4, F | Written provider evidence, surface by surface; otherwise that provider isn't used for real files |
 | Render runs two copies briefly at each deploy | P4, P5 | Deploy only when no trial user is active |
-| Render secret files enter the Docker build folder | P3, P4 | List them in `.dockerignore` |
+| Render secret files enter the Docker build folder | P3, P4 | List them in `.dockerignore`; test that no secret is inside the built image |
 | Login records keep emails, and user records can't be deleted at Cloudflare | T | Say so in the privacy notice (the plan already allows for it) |
 
-## 5. What only a live test can prove (P2, P4, F)
-- After a logout or a cancellation, logging back in **needs a new emailed code**, on every device (test requirement 21).
+## 5. What only a live test or a provider's written answer can settle (before real files)
+- **Retention, in writing:** each chosen provider's answer for every surface in sections 1.7 and 2.2.
+- **Logout:** after an accepted cancellation, no device gets back in without a new emailed code, including across a restart (test requirement 21). Also how long after a cancellation old tokens are refused at the gate.
+- **Removal:** "remove from the allow rule, then cancel" works on existing tokens and on renewal.
 - The narrow "Revoke" key permission works on the cancellation call.
-- How long after a cancellation old tokens are refused at the gate.
 - Whether an open live connection survives a cancellation at the gate (the door closes it anyway).
 - Whether the free plan can change request buffering.
-- The tunnel over `http2` on Render.
-- The real memory of the running container.
+- The tunnel over `http2` on the chosen host.
+- **Memory:** the real container at the worst-case workload, and what happens when memory runs out.
+- **Prices:** fresh prices on the day of purchase.
 
 ## 6. Decisions for Alex (when we reach P0 and P4; not now)
-1. **Server:** Render 2 GB (about $25/month, simpler, dashboard) or Fly.io 2 GB (about $13.39/month, command line). *Recommended: Render, if its support confirms swap, crash dumps and staff access.*
-2. **Domain:** a separate small domain just for MargenX (recommended), or move our existing domain's settings to Cloudflare (touches Abrey's website and email).
-3. **A separate Cloudflare account** for MargenX. *Recommended: yes.*
-4. **Budget:** about $25 a month for the server, plus a domain per year. Nothing is bought before Alex approves it.
+1. **Server:** Render or Fly.io, **only if its written retention answers cover every surface**. *Proposed: Render first, because it's run from a dashboard and can't be made public by mistake.*
+2. **Domain:** a separate small domain just for MargenX, or move our existing domain's settings to Cloudflare (that touches Abrey's website and email). *Proposal; Alex and Abrey decide.*
+3. **A separate Cloudflare account** for MargenX. *Proposal; Alex decides.*
+4. **Getting Cloudflare's written answers:** the free plan has community support only, so Alex may need a sales contact or a paid plan to get them.
+5. **Budget (Provisional; nothing is bought on it).** Its parts, with list prices seen on 2026-10-27:
+
+   | Part | Render | Fly.io |
+   |---|---|---|
+   | Server | 512 MB $7 or 2 GB $25 a month ([pricing](https://render.com/pricing); not re-read by Claude) | 1 GB $6.70 or 2 GB $13.39 a month ([pricing](https://docs.fly.io/about/pricing)) |
+   | Account or workspace fee | Hobby $0 (Pro $25 a month if ever needed) | None |
+   | Outbound traffic | 5 GB a month included, then $0.15 per GB | $0.02 per GB from North America |
+   | Builds | 500 build minutes a month included | — |
+   | Taxes | not stated | not stated |
+
+   The outbound-traffic and build figures come from the research pass ([Render FAQ](https://render.com/docs/faq), [Fly.io pricing](https://docs.fly.io/about/pricing)); Claude didn't re-read them.
+
+   Plus the domain (paid yearly, price to check), Cloudflare $0 for up to 50 users, and possibly the cost of getting Cloudflare's written answers. **The size, and so the server price, is chosen only after P4's container measurement**, with fresh prices on the day.
+
 
 Building still waits until after the first real shop meeting (Alex, 2026-10-27).
 
