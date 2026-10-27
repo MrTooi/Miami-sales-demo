@@ -17,7 +17,7 @@ The owner renamed the product from Ledger to **MarginX** on 2026-10-18, and sett
 | Labor hours per job | Optional | Time sheet or spreadsheet |
 | Payment processor or bank deposits | Optional | Square, bank |
 
-- **Formats:** CSV and Excel (.xlsx), one sheet per file. Excel was pulled forward from step 4 on 2026-10-20 because QuickBooks Online exports reports as Excel. Report-style files are read too: title lines above the column names are skipped, and total and heading rows are listed as skipped, never counted. Several files at once and saved per-shop column mappings still come in a later reviewed step, once coverage and provenance rules are defined.
+- **Formats:** CSV and Excel (.xlsx), one sheet per file. Excel was pulled forward from step 4 on 2026-10-20 because QuickBooks Online exports reports as Excel. Report-style files from other programs are read too: title lines above the column names are skipped, and total rows are listed as skipped, never counted. A file that looks like a QuickBooks report (a QuickBooks title, QuickBooks column names, "Total for …" rows or a basis footer) is refused with a plain reason until its layout is verified (issue #128, rule S2). Several files at once and saved per-shop column mappings still come in a later reviewed step, once coverage and provenance rules are defined.
 - **Columns:** the owner maps unfamiliar columns to ours, and the mapping is validated before any value is used.
 - **Bank and card exports:** these are never automatically treated as revenue or costs. Provider movements, fees, transfers and genuine expenses are told apart first, so nothing is double-counted (`LAUNCH_RISK_REGISTER.md`).
 

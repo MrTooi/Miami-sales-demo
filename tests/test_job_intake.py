@@ -190,16 +190,32 @@ class MappingTests(unittest.TestCase):
         self.assertEqual("invoices", ji.detect_kind(headers))
         self.assertIn(Decimal("-45.00"), [r["amount"] for r in ji.intake(headers, rows, mapping, "invoices", "MM/DD/YYYY", "line").accepted])
 
-    def test_payment_rows_in_an_invoice_file_are_rejected_not_imported_as_sales(self):
+    def test_a_sales_file_with_payment_rows_is_refused_whole(self):
+        # Before issue #128 the payment row was left out and the rest counted. A payment's type alone
+        # never proves it can be left out (S9), and a file mixing sales with payments adds the same
+        # money twice, so the whole file is refused as a sales file (S1, step 1).
         headers, rows = ji.read_csv(b"Invoice,Date,Customer,Type,Amount\n"
                                     b"INV-1,10/31/2026,Acme,Invoice,100.00\nINV-1,10/31/2026,Acme,Payment,100.00\n"
                                     b"INV-2,10/31/2026,Acme,Credit Memo,-20.00\n")
-        self.assertEqual("invoices", ji.detect_kind(headers))  # an ordinary file, no extra question
-        result = ji.intake(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
-        self.assertEqual([2, 4], [r["row"] for r in result.accepted])  # the invoice line and the credit memo
-        self.assertEqual([Decimal("100.00"), Decimal("-20.00")], [r["amount"] for r in result.accepted])
-        self.assertEqual([3], [r["row"] for r in result.rejected])
-        self.assertIn("Type 'Payment' is a payment, transfer or deposit", " ".join(result.rejected[0]["reasons"]))
+        self.assertEqual("invoices", ji.detect_kind(headers))
+        reason = ji.sales_file_refusal(headers, rows)
+        self.assertIn("mixes sales with payments or deposits (row 3 is 'Payment')", reason)
+        self.assertIn("nothing from it was used", reason)
+        with self.assertRaisesRegex(ji.IntakeError, "mixes sales with payments"):
+            ji.intake(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        # The same rule in every type column, and for deposits, transfers and bank credits too.
+        for header, value in (("Transaction Type", "Deposit"), ("Txn Type", "Receive Payment"), ("Type", "Bank Credit"),
+                              ("Type", "Transfer"), ("Type", "Bill Payment (Check)")):
+            headers, rows = ji.read_csv(f"Invoice,Date,Customer,{header},Amount\nI-1,10/31/2026,Acme,Invoice,1.00\n"
+                                        f"I-2,10/31/2026,Acme,{value},1.00\n".encode())
+            with self.subTest(value), self.assertRaisesRegex(ji.IntakeError, "mixes sales with payments"):
+                ji.intake(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
+        # A costs file keeps its own rule: a transfer row is listed, never counted (as before).
+        headers, rows = ji.read_csv(b"Date,Vendor,Type,Amount\n10/31/2026,Bank,Transfer,500.00\n")
+        self.assertEqual([], ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY").accepted)
+        # A sales file with no payment rows is read as before.
+        headers, rows = ji.read_csv(b"Invoice,Date,Customer,Type,Amount\nI-1,10/31/2026,Acme,Invoice,1.00\n")
+        self.assertIsNone(ji.sales_file_refusal(headers, rows))
 
     def test_transfer_rows_in_a_cost_file_are_rejected_not_imported_as_expenses(self):
         headers, rows = ji.read_csv(b"Date,Vendor,Type,Amount\n10/31/2026,Paper Co,Transfer,500.00\n"
@@ -217,14 +233,14 @@ class MappingTests(unittest.TestCase):
 
     def test_bank_credit_rows_are_rejected_but_credit_memos_and_card_charges_stay(self):
         headers, rows = ji.read_csv(b"Invoice,Date,Customer,Type,Amount\n"
-                                    b"INV-1,10/31/2026,Demo,Invoice,100.00\nINV-2,10/31/2026,Demo,Bank Credit,100.00\n"
+                                    b"INV-1,10/31/2026,Demo,Invoice,100.00\n"
                                     b"INV-3,10/31/2026,Demo,Credit,50.00\nINV-4,10/31/2026,Demo,Credit Memo,-20.00\n"
                                     b"INV-5,10/31/2026,Demo,Credit Note,-5.00\n")
         result = ji.intake(headers, rows, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
-        self.assertEqual([2, 5, 6], [r["row"] for r in result.accepted])
-        self.assertEqual([3, 4], [r["row"] for r in result.rejected])
-        # A bank credit is not a line (nothing missing); a bare "Credit" is unclear (money may be missing).
-        self.assertEqual([False, True], [r["money_missing"] for r in result.rejected])
+        self.assertEqual([2, 4, 5], [r["row"] for r in result.accepted])
+        # A bare "Credit" is unclear (money may be missing). (A bank credit in a sales file refuses the
+        # whole file: test_a_sales_file_with_payment_rows_is_refused_whole.)
+        self.assertEqual([(3, True)], [(r["row"], r["money_missing"]) for r in result.rejected])
         headers, rows = ji.read_csv(b"Date,Vendor,Type,Amount\n10/31/2026,Paper Co,Credit Card Charge,80.00\n"
                                     b"10/31/2026,Bank,Credit,500.00\n")
         result = ji.intake(headers, rows, ji.suggest_mapping(headers, "costs"), "costs", "MM/DD/YYYY")

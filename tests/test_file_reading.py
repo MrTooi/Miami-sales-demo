@@ -1,10 +1,9 @@
-"""Reading CSV and Excel (.xlsx) files, including report-style exports with title, heading and total rows.
+"""Reading CSV and Excel (.xlsx) files, including report-style exports with title and total rows.
 
-Every file here is made up and built in memory. The report layout follows what QuickBooks Online's
-help pages describe for exported reports (title lines on top, rows grouped under a heading, "Total
-for ..." rows and a grand total). The exact column names of real exports are not assumed: the
-tests check that MargenX finds the column-name row, skips only rows that can't be a sale or cost,
-and counts every real line once.
+Every file here is made up and built in memory. The tests check that MargenX finds the column-name
+row, skips only rows that can't be a sale or cost, and counts every real line once. A file that looks
+like a QuickBooks report ("Total for ..." rows, a basis footer, a QuickBooks title or column names)
+is refused instead (issue #128, S2): tests/test_quickbooks_rules.py covers those.
 """
 from datetime import date, datetime
 from decimal import Decimal
@@ -71,8 +70,8 @@ def intake(name, data, kind, date_format):
     return ji.intake(headers, records, ji.suggest_mapping(headers, kind), kind, date_format), notes
 
 
-# A sales report laid out like an accounting export: title lines, a blank first column name,
-# customer headings, lines, "Total for" rows, a grand total and a footer.
+# A sales report laid out like a QuickBooks export: title lines, a blank first column name,
+# customer headings, lines, "Total for" rows, a grand total and a footer. Refused (S2).
 REPORT = [
     ["Biscayne Signs (fictional)"],
     ["Sales by Customer Detail"],
@@ -90,6 +89,21 @@ REPORT = [
     ["TOTAL", None, None, None, None, None, 3617.5],
     [],
     ["Accrual basis Tuesday, October 20, 2026 10:00 AM GMT-04:00"],
+]
+
+# The same sales as a plain report from another program: title lines, a blank first column name, the
+# lines and a grand total, with nothing QuickBooks-specific. Read by the reader for plain lists.
+PLAIN_REPORT = [
+    ["Biscayne Signs (fictional)"],
+    ["Sales by job"],
+    ["October 2026"],
+    [],
+    [None, "Date", "Invoice", "Customer", "Job", "Description", "Amount"],
+    [None, date(2026, 10, 2), "INV-1", "Coastal Bakery (fictional)", "J-1", "Storefront sign", 2400.0],
+    [None, date(2026, 10, 9), "INV-2", "Coastal Bakery (fictional)", "J-2", "Menu board", 312.5],
+    [None, date(2026, 10, 12), "INV-3", "Palm Gym (fictional)", "J-3", "Window vinyl", 950.0],
+    [None, date(2026, 10, 14), "INV-4", "Palm Gym (fictional)", "J-3", "Refund for a scratched panel", -45.0],
+    ["TOTAL", None, None, None, None, None, 3617.5],
 ]
 
 
@@ -278,26 +292,30 @@ class ExcelReadingTests(unittest.TestCase):
 
 
 class ReportLayoutTests(unittest.TestCase):
-    def test_report_title_lines_headings_and_totals_are_handled(self):
-        result, notes = intake("sales.xlsx", xlsx(REPORT), "invoices", "YYYY-MM-DD")
+    def test_report_title_lines_and_totals_are_handled(self):
+        result, notes = intake("sales.xlsx", xlsx(PLAIN_REPORT), "invoices", "YYYY-MM-DD")
         self.assertIn("Skipped 3 title lines above the column names: Biscayne Signs (fictional) / "
-                      "Sales by Customer Detail / October 2026.", notes)
+                      "Sales by job / October 2026.", notes)
         self.assertIn("(no name, column A)", " ".join(notes))
         # Every real line is imported once; nothing is rejected.
         self.assertEqual([], result.rejected)
         self.assertEqual(["INV-1", "INV-2", "INV-3", "INV-4"], [r["invoice_id"] for r in result.accepted])
         self.assertEqual(Decimal("3617.5"), sum(r["amount"] for r in result.accepted))
-        # Headings, totals and the footer are listed as skipped, with their reason.
-        reasons = {r["row"]: r["reason"] for r in result.skipped}
-        self.assertEqual({6, 9, 10, 13, 14, 16}, set(reasons))
-        self.assertIn("A total row ('Total for Coastal Bakery (fictional)')", reasons[9])
-        self.assertIn("A total row ('TOTAL')", reasons[14])
-        self.assertIn("A heading ('Palm Gym (fictional)'), closed by the total row on row 13", reasons[10])
-        self.assertIn("The report's footer ('Accrual basis", reasons[16])
+        # The grand total is listed as skipped, with its reason.
+        self.assertEqual([(10, "A total row ('TOTAL')")], [(r["row"], r["reason"][:21]) for r in result.skipped])
         self.assertTrue(any("total or heading row" in i["text"] for i in ji.missing_report(result)))
 
+    def test_a_quickbooks_style_report_is_refused_not_read(self):
+        # Headings, "Total for" rows and a basis footer: a QuickBooks look-alike. Before issue #128 this
+        # layout was read by the reader for plain lists; now nothing from it is used (S2).
+        for name, data in (("sales.xlsx", xlsx(REPORT)), ("sales.csv", b"Sales report (fictional)\n"
+                           b",Date,Invoice,Customer,Job,Amount\nBakery (fictional)\n,10/02/2026,INV-1,Bakery (fictional),J-1,40.00\n"
+                           b"Total for Bakery (fictional),,,,,40.00\n")):
+            with self.subTest(name), self.assertRaisesRegex(ji.IntakeError, "looks like a QuickBooks report"):
+                ji.read_file(name, data)
+
     def test_totals_are_never_counted_again_in_profit(self):
-        sales, _ = intake("sales.xlsx", xlsx(REPORT), "invoices", "YYYY-MM-DD")
+        sales, _ = intake("sales.xlsx", xlsx(PLAIN_REPORT), "invoices", "YYYY-MM-DD")
         costs, _ = intake("costs.xlsx", xlsx([
             ["Biscayne Signs (fictional)"], ["Expenses by job"], [],
             [None, "Bill", "Date", "Vendor", "Job", "Type", "Amount"],
@@ -313,17 +331,16 @@ class ReportLayoutTests(unittest.TestCase):
         self.assertEqual((0, 0), (report.rejected_sales_lines, report.rejected_cost_lines))
 
     def test_the_same_report_as_csv_is_read_the_same_way(self):
-        lines = ["Biscayne Signs (fictional)", "Sales by Customer Detail", "",
+        lines = ["Biscayne Signs (fictional)", "Sales by job", "",
                  ",Date,Invoice,Customer,Job,Description,Amount",
-                 "Coastal Bakery (fictional),,,,,,",
                  ",10/02/2026,INV-1,Coastal Bakery (fictional),J-1,Storefront sign,\"2,400.00\"",
-                 "Total for Coastal Bakery (fictional),,,,,,\"2,400.00\"", "TOTAL,,,,,,\"2,400.00\""]
+                 "TOTAL,,,,,,\"2,400.00\""]
         headers, records, notes = ji.read_file("sales.csv", "\n".join(lines).encode())
         result = ji.intake(headers, records, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
         self.assertIn("Skipped 2 title lines", " ".join(notes))
         self.assertEqual([Decimal("2400.00")], [r["amount"] for r in result.accepted])
         self.assertEqual([], result.rejected)
-        self.assertEqual(3, len(result.skipped))
+        self.assertEqual(1, len(result.skipped))
 
     def test_rows_that_could_hold_money_are_never_skipped(self):
         # Only a proven total, heading or footer is skipped. Every row below is shaped a bit like
@@ -494,11 +511,11 @@ class ReportLayoutTests(unittest.TestCase):
 
     def test_a_line_of_only_separators_above_the_column_names_is_skipped_as_empty(self):
         # Manual review warning 3: this used to crash with StopIteration instead of reading the file.
-        data = b"Sales by Customer Detail\n,,,,,\n,Date,Invoice,Customer,Job,Amount\n" \
+        data = b"Sales report (fictional)\n,,,,,\n,Date,Invoice,Customer,Job,Amount\n" \
                b",10/02/2026,INV-1,Bakery (fictional),J-1,40.00\n"
         headers, records, notes = ji.read_file("sales.csv", data)
         self.assertEqual(["Date", "Invoice"], headers[1:3])
-        self.assertEqual(["Skipped 1 title line and 1 empty line above the column names: Sales by Customer Detail."], notes[:1])
+        self.assertEqual(["Skipped 1 title line and 1 empty line above the column names: Sales report (fictional)."], notes[:1])
         result = ji.intake(headers, records, ji.suggest_mapping(headers, "invoices"), "invoices", "MM/DD/YYYY")
         self.assertEqual(([Decimal("40.00")], []), ([r["amount"] for r in result.accepted], result.rejected))
         # Only separators above the column names, with no title at all, reads the same way.
@@ -536,7 +553,7 @@ class PageTests(unittest.TestCase):
                  [None, "B-2", date(2026, 10, 2), "Crew (fictional)", "J-1", "Labor", 480.25],
                  ["Total", None, None, None, None, None, 1080.25]]
         with tempfile.TemporaryDirectory() as tmp:
-            Path(tmp, "sales.xlsx").write_bytes(xlsx(REPORT))
+            Path(tmp, "sales.xlsx").write_bytes(xlsx(PLAIN_REPORT))
             Path(tmp, "costs.xlsx").write_bytes(xlsx(costs))
             source = page.read_text(encoding="utf-8").replace(
                 'SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"', f"SAMPLES = Path({tmp!r})").replace(
@@ -550,7 +567,7 @@ class PageTests(unittest.TestCase):
         self.assertIn("$3,617.50", page_html)  # every real sales line once; no total counted again
         captions = " ".join(c.value for c in at.caption)
         self.assertIn("Skipped 3 title lines above the column names", captions)
-        self.assertTrue(any(e.label.startswith("Report lines skipped: totals and headings (6)") for e in at.expander))
+        self.assertTrue(any(e.label.startswith("Report lines skipped: totals and headings (1)") for e in at.expander))
         self.assertFalse(any(e.label.startswith("Rows that couldn't be used") for e in at.expander))
 
 

@@ -415,19 +415,21 @@ class MargenXImportPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertIn("1 row of 2 couldn't be imported", page_text(at))
 
-    def test_mixed_invoice_and_payment_rows_import_only_the_invoice_line(self):
+    def test_a_sales_file_with_payment_rows_is_refused_and_no_results_are_shown(self):
+        # Issue #128: a sales file mixing invoices with payments is refused whole, with a plain reason.
         at = self.with_files("Invoice,Date,Customer,Type,Amount\nINV-1,10/31/2026,X (fictional),Invoice,100.00\n"
                              "INV-1,10/31/2026,X (fictional),Payment,100.00\n",
                              "Date,Vendor,Type,Amount\n10/31/2026,Paper Co (fictional),Transfer,500.00\n"
                              "10/31/2026,Paper Co (fictional),Materials,80.00\n")
         self.assertFalse(at.exception, at.exception)
+        errors = " ".join(e.value for e in at.error)
+        self.assertIn("This file mixes sales with payments or deposits (row 3 is 'Payment')", errors)
         text = page_text(at)
-        self.assertIn("1 invoice line imported (1 invoice)", text)
+        self.assertNotIn("invoice line imported", text)
+        self.assertNotIn("Here's where your money was made", " ".join(m.value for m in at.markdown))
+        # The costs file is still read with its own rule: the transfer is listed, never counted.
         self.assertIn("1 cost line imported", text)
-        self.assertEqual(2, text.count("1 row of 2 couldn't be imported"))  # the payment and the transfer
-        reasons = " ".join(" ".join(d.value["Why"]) for d in at.dataframe)
-        self.assertIn("Type 'Payment'", reasons)
-        self.assertIn("Type 'Transfer'", reasons)
+        self.assertIn("Type 'Transfer'", " ".join(" ".join(d.value["Why"]) for d in at.dataframe))
 
     def test_subtotal_under_line_amount_is_listed_not_imported(self):
         at = self.with_files("Invoice,Date,Customer,Description,Line Amount\n"

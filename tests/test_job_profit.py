@@ -173,11 +173,12 @@ class CompletenessTests(unittest.TestCase):
         self.assertEqual("provisional", job.status)  # a supplier credit and a customer credit may be missing
         self.assertIn("1 of its sales lines couldn't be imported", " ".join(job.reasons))
         self.assertIn("1 of its cost lines couldn't be imported", " ".join(job.reasons))
-        # An explicit bank credit is a cash movement: rejected, and nothing is missing.
-        report = self.report(costs.replace(b"Vendor Credit", b"Materials"),
-                             b"Invoice,Date,Customer,Job,Type,Amount\nI-1,10/01/2026,Bakery,J-1,Invoice,50.00\n"
-                             b"I-2,10/01/2026,Bank,J-1,Bank Credit,10.00\n")
-        self.assertEqual("complete", report.jobs[0].status)
+        # An explicit bank credit in a sales file refuses the whole file: it never gives a Complete job
+        # by being left out (issue #128, S1 and S9).
+        with self.assertRaisesRegex(ji.IntakeError, "mixes sales with payments"):
+            self.report(costs.replace(b"Vendor Credit", b"Materials"),
+                        b"Invoice,Date,Customer,Job,Type,Amount\nI-1,10/01/2026,Bakery,J-1,Invoice,50.00\n"
+                        b"I-2,10/01/2026,Bank,J-1,Bank Credit,10.00\n")
 
     def test_failed_lines_naming_another_customer_make_the_job_shared(self):
         costs = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,10.00\n"
@@ -413,16 +414,13 @@ class CompletenessTests(unittest.TestCase):
     def test_conflicting_type_columns_are_unresolved(self):
         costs = (b"Bill,Date,Vendor,Job,Type,Amount\nB-1,10/01/2026,Crew,J-1,Labor,20.00\n"
                  b"B-2,10/01/2026,Paper Co,J-1,Materials,30.00\n")
-        report = self.report(costs, b"Invoice,Date,Customer,Job,Type,Transaction Type,Amount\n"
-                                    b"I-1,10/01/2026,Bakery,J-1,Invoice,Invoice,100.00\n"
-                                    b"I-2,10/01/2026,Bakery,J-1,Invoice,Payment,40.00\n")
-        self.assertEqual((Decimal("100.00"), "provisional"), (report.jobs[0].sales, report.jobs[0].status))
-        self.assertEqual("provisional", report.customers[0].status)
-        # Both columns saying payment is plainly a payment: left out, nothing missing.
-        report = self.report(costs, b"Invoice,Date,Customer,Job,Type,Transaction Type,Amount\n"
-                                    b"I-1,10/01/2026,Bakery,J-1,Invoice,Invoice,100.00\n"
-                                    b"I-2,10/01/2026,Bakery,J-1,Payment,Payment,40.00\n")
-        self.assertEqual("complete", report.jobs[0].status)
+        # A sales file where any type column says payment is refused whole, whether the other column
+        # agrees or not: it is never left out to make a job Complete (issue #128, S1 and S9).
+        for types in (b"Invoice,Payment", b"Payment,Payment"):
+            with self.subTest(types), self.assertRaisesRegex(ji.IntakeError, "mixes sales with payments"):
+                self.report(costs, b"Invoice,Date,Customer,Job,Type,Transaction Type,Amount\n"
+                                   b"I-1,10/01/2026,Bakery,J-1,Invoice,Invoice,100.00\n"
+                                   b"I-2,10/01/2026,Bakery,J-1," + types + b",40.00\n")
         # Costs file: a "Payment" transaction on a "Materials" category row is unresolved.
         report = self.report(b"Bill,Date,Vendor,Job,Transaction Type,Category,Amount\n"
                              b"B-1,10/01/2026,Crew,J-1,Bill,Labor,20.00\nB-2,10/01/2026,Paper Co,J-1,Bill,Materials,30.00\n"
@@ -452,7 +450,8 @@ class CompletenessTests(unittest.TestCase):
     def test_payment_with_a_blank_transaction_type_is_unresolved(self):
         invoices = (b"Invoice,Date,Customer,Job,Type,Transaction Type,Amount\n"
                     b"I-1,10/01/2026,Bakery,J-1,Invoice,Invoice,100.00\nI-2,10/01/2026,Bakery,J-1,Payment,,40.00\n")
-        self.assert_job(self.report(self.LINKED, invoices), Decimal("100.00"), Decimal("50.00"), "provisional")
+        with self.assertRaisesRegex(ji.IntakeError, "mixes sales with payments"):  # issue #128: refused whole
+            self.report(self.LINKED, invoices)
         costs = (b"Bill,Date,Vendor,Job,Txn Type,Transaction Type,Category,Amount\n"
                  b"B-1,10/01/2026,Crew,J-1,Bill,Bill,Labor,20.00\nB-2,10/01/2026,Paper Co,J-1,Bill,Bill,Materials,30.00\n"
                  b"B-3,10/01/2026,Bank,J-1,Payment,,,40.00\n")

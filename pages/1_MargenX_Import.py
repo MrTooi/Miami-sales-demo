@@ -237,6 +237,11 @@ with main:
         if kind == "bank":
             st.info(BANK_MESSAGE)
             return EXCLUDED
+        refusal = ji.sales_file_refusal(headers, records) if kind == "invoices" else None
+        if refusal:
+            # A sales file holding payments would add the same money twice (issue #128): refused whole.
+            st.error(ui.md_text(refusal))
+            return
 
         # Columns: suggested automatically; the owner is asked for required ones MargenX can't
         # find, and for optional ones where two columns could fit (e.g. "Job" and "Project").
