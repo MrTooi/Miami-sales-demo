@@ -1,6 +1,6 @@
 # Current State — SNAPSHOT (stale-able)
 
-**Snapshot taken: 2026-10-26 (evening, Miami time),** from GitHub (`main` at `0d1478f`, after PR #129; open PRs, issue and PR comments) and the owner's decisions in Claude Code sessions. **[unverified]** marks anything not read from GitHub or `main`.
+**Snapshot taken: 2026-10-27 (evening, Miami time),** from GitHub (`main` at `b36661b`, after PRs #130 and #132; open PRs, issue and PR comments) and the owner's decisions in Claude Code sessions. **[unverified]** marks anything not read from GitHub or `main`.
 
 > **This file is a snapshot, not a source of truth.** Before acting, refresh from live GitHub and `main`. If anything here disagrees with them, GitHub/`main` wins. Say so in your handoff, and refresh this file in a docs-only PR. **New sessions: read this file, `AGENTS.md`, `docs/DECISIONS.md` and `docs/MVP_SPEC.md` first.** Don't rely on chat history or summaries.
 
@@ -56,6 +56,7 @@ Branch → tests (`~/.venvs/miami-sales-demo/bin/python -m unittest discover -s 
 | **"Start MargenX" launcher:** double-click to start pilot mode from the approved tip of `main` on GitHub (it needs the internet). It runs only from its own copy in `~/MargenX-app`, after checking every file byte for byte against the approved commit. It runs git with its program-running features (hooks, file monitors, helpers) switched off, ignores git and Python settings handed to it, and uses only the Mac's own system programs. It trusts the Mac itself; the details and limits are in the script's comments and #126. Also: the End session label never cut off; wording "End session clears the app's data" | `scripts/start_margenx.command` (a copy is on the owner's Desktop) | Merged (#126). Six manual review rounds on the launcher's safety; the last was PASS WITH WARNINGS. 808 tests. |
 | **Phone and narrow screens, plus a real upload test:** the "Pilot session" label is never cut off on phones, End session stays in reach, clearer wording. Display and wording only; no figure, rule or clearing step changed. A real browser upload of all 4 made-up file sets matched the sample switch, and End session cleared everything | `marginx_ui.py`, `pages/1_MargenX_Import.py` | Merged (#127). |
 | **QuickBooks step 1 (issue #128):** a file that looks like a QuickBooks report is refused with a plain message, so the $405 Cost-of-Goods-Sold-as-sales mistake can't happen. A sales file that mixes in payments or deposits is refused. New QuickBooks line rules are written and tested but **not connected to a reader yet** (a COGS Invoice is never a sale; payments, deposits and unapplied cash are never counted automatically) | `quickbooks_rules.py`, `job_intake.py`, `tests/test_quickbooks_rules.py` | Merged (#129). ChatGPT manual review **PASS WITH WARNINGS**, 0 blockers; its follow-ups are on #128. 847 tests. |
+| **Self-use trial plan (issue #131) and step R research:** a plan for a two-week trial on a private, invite-only MargenX website (a login gate in front, our own checking program on the server, MargenX itself; exact end moments; no stored files). Step R compared login and hosting companies from their official pages: it proposes Cloudflare Access and a Render background worker, both conditional. Docs only; nothing is built, bought or deployed | `docs/research/TRIAL_HOSTING_AND_LOGIN.md`; the plan is the body of #131 | Plan v7: manual review **PASS WITH WARNINGS** (2026-10-27, after five failed rounds, v2–v6). Research: merged in #132 (b36661b) after four manual rounds; the last was PASS WITH WARNINGS. |
 
 ### What the results page shows (#108, updated in #122)
 As implemented and tested in #108 and #122 (regression tests in `tests/test_marginx_ui.py`, `tests/test_marginx_insights.py`, `tests/test_marginx_import_page.py`), and reviewed in the ChatGPT manual review round 2. This summary is not itself evidence. The rule behind it: **a number that is incomplete says so, or isn't shown.**
@@ -87,26 +88,40 @@ Internal code names (`marginx_ui.py`, `marginx_insights.py`, `marginx_pilot.py`,
   - Spanish
 - **"Complete" means complete per the imported files** (sales, labor, and materials or outsourced work present, nothing rejected), not reconciled business profit. MargenX can't know about costs that were never recorded.
 - The website draft claims things MargenX doesn't do yet (labor hours, quoted vs. actual, card fees, the "change what happened" sliders). Fix them before it goes public. Excel reading now exists (#116), but only on made-up files.
+- **The website trial (#131) is a plan only.** No login service or server has been set up. The #132 research leaves three release conditions **unresolved**:
+  - written provider evidence that uploaded files aren't kept anywhere (the plan's retention gate);
+  - proof behind the strong logout promise, or Alex's explicit approval of the weaker one;
+  - the server size and cost, from a real container measurement.
 - **Real customer data is prohibited** until step 3b is done and the owner records the real-data decision (**D-008 or later**, since D-007 is the wider target; real data approved for a named pilot shop).
 
 ## Next actions, in order
-1. **Get the first real shop meeting.** Customer outreach per the 2026-10-22 plan **[unverified]**: Abrey's short calls → meetings with Alex. Owner decision 2026-10-26 (recorded on issue #128): **nothing more is built until after the first real meeting.** Questions worth answering there:
+1. **Get the first real shop meeting.** Customer outreach per the 2026-10-22 plan **[unverified]**: Abrey's short calls → meetings with Alex. Owner decisions: QuickBooks steps 2–7 (#128) are paused until after the first real meeting (2026-10-26, recorded on #128). **Building the website trial (#131, P1 onward) also waits until after it** (2026-10-27, recorded on #131). Research and docs may continue. Questions worth answering at the meeting:
    - QuickBooks Online, QuickBooks Desktop or Excel?
    - Are jobs tracked in it (QuickBooks sub-customers or Projects)?
    - Would the owner download a report?
+   - Would the owner use MargenX on their own for two weeks, on a private website with an emailed login code?
+   - Until the trial is built and approved, the only real-data offer is the sit-down pilot, and only after the real-data decision. The self-use trial shouldn't be promised to shops yet.
 2. **Then decide how to continue issue #128** (reading QuickBooks reports). Its plan v7 passed a manual review with no blockers, and Alex chose Profit and Loss Detail as the sales source when both reports are uploaded (both recorded on #128). Steps 2–7 are paused.
-   - The owner's direction (2026-10-26, from a Claude Code session) **[unverified]** is to **give shops the software** rather than have them send files. Options: an app on their computer, a website, or a "Connect to QuickBooks" button. To be decided after meetings; production deployment and live integrations need separate owner decisions.
-3. Small follow-ups (non-blocking):
+3. **The self-use website trial (issue #131).**
+   - **How shops get it:** Alex chose a private MargenX website with a login (2026-10-26, recorded on #131), so each trial can be ended on its date. An installed app is kept as the fallback.
+   - **Status:** plan v7 passed its manual review. Step R, the research, is merged (#132).
+   - **Next owner inputs:**
+     - the 14 questions (a comment on #131), before step P0, which records D-008 and D-009;
+     - the website details (what Abrey's site is built with, where the domain is registered, who has the logins), which Claude asks for just before P4.
+   - Production deployment, any purchase and real data each still need their own owner decision. The plan records them as D-008 and D-009, active only at go-live.
+   - **Plan reviews:** for #131's plan reviews, Alex set a limit on 2026-10-27, recorded on #131: only design problems fail the plan, and details become test requirements in the step they name. It isn't in `docs/DECISIONS.md` and doesn't change D-004 or D-005: every PR still gets its own reviews and Alex's yes.
+4. Small follow-ups (non-blocking):
    - the #129 review's follow-ups, listed on #128 for the step that needs each;
    - optional test additions from the #113 and #115 reviews (see those PRs);
    - **owner decision:** whether to update `docs/CHATGPT_REVIEW_INSTRUCTIONS.md` to the new name (it still says "MarginX" once).
-4. Other owner decisions pending:
+5. Other owner decisions pending:
    - whether to build the Opportunity Radar **evidence store** (issue #1, open), proposed so conversation notes become scored evidence;
    - Abrey logs leads and what owners said in the plan document's "Starter leads" tab **[unverified]**. Whether that later moves into the repository (for example the evidence store) is the owner's call.
-5. The real-data decision (D-008 or later), then the first sit-down pilot visit, following `docs/PILOT_VISIT_CHECKLIST.md`. Start MargenX with the Desktop "Start MargenX" launcher. Repeat the real upload-and-delete browser test before it, now with an Excel file too.
+6. The real-data decision (D-008 or later), then the first sit-down pilot visit, following `docs/PILOT_VISIT_CHECKLIST.md`. Start MargenX with the Desktop "Start MargenX" launcher. Repeat the real upload-and-delete browser test before it, now with an Excel file too.
 
 ## Paused or background
 - **AI-team readiness gate** (Suites A/B/C, #11/#69/#35): paused by the owner's choice (focus on MargenX). The run details below are from an earlier snapshot and weren't re-checked on 2026-10-24; #69 is still open. The round-3 Suite A scheduled run `39175749268` (2026-10-18, at `34e43ee`) **failed** and is **not recorded on #69**. Every scheduled run since refuses at "Require reviewed hardening change" (expected; no paid call). A→B→C successes: 0. Unattended agents stay disabled.
 - **QuickBooks report reading** (issue #128, steps 2–7): paused by the owner until after the first real shop meeting. Step 1 (#129) is merged.
+- **Building the website trial** (issue #131, P1 onward): paused by the owner until after the first real shop meeting. Step R (#132) is merged.
 - **Opportunity Radar:** the scoring foundation is on `main` (`opportunity_radar/`); the evidence store (issue #1) isn't built.
 - Draft PRs #16 (old LEDGER website), #39/#62/#63/#64 (trial evidence) and #67/#70 (old readiness drafts) stay unmerged on purpose.
