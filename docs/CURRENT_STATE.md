@@ -108,8 +108,17 @@ Internal code names (`marginx_ui.py`, `marginx_insights.py`, `marginx_pilot.py`,
    - **Next owner inputs:**
      - the 14 questions (a comment on #131), before step P0, which records D-008 and D-009;
      - the website details (what Abrey's site is built with, where the domain is registered, who has the logins), which Claude asks for just before P4.
-   - Production deployment, any purchase and real data each still need their own owner decision. The plan records them as D-008 and D-009, active only at go-live.
-   - **Plan reviews:** for #131's plan reviews, Alex set a limit on 2026-10-27, recorded on #131: only design problems fail the plan, and details become test requirements in the step they name. It isn't in `docs/DECISIONS.md` and doesn't change D-004 or D-005: every PR still gets its own reviews and Alex's yes.
+   - **Owner decisions still needed:**
+     - real data is D-008, and going live is D-009. Both are recorded in step P0, after Alex answers the questions;
+     - **D-009 part 1** allows only a made-up-data test website, from P0 on, with only Alex's own test emails invited;
+     - **D-008 and D-009 part 2** (real shops) become active only at go-live (G), for one named shop at a time, after the final release check and signed trial terms;
+     - **no purchase** (server, domain, anything else) happens before Alex approves a budget.
+   - **Plan reviews:** for #131's plan reviews only, Alex set a limit on 2026-10-27; the full wording is on #131.
+     - **Still blockers:**
+       - any design problem: something in the approach, order, decisions or promises that is wrong or unsafe and couldn't be put right inside the build step. The recorded examples are real files let in before approval, a shop getting access before its checks, a promise the design can't keep, an unsafe step order, and anything that could show a wrong figure as Complete;
+       - anything the reviewer is unsure about.
+     - **Not blockers for the plan:** narrower details that a named build step can handle within the design, such as a specific edge case, an extra test or an exact setting. They become **required** tests in that step, and that step's own manual review must confirm them before it can merge.
+     - **Unchanged:** the money-safety rules; no real shop data before D-008 is active at G; the standing rules in `AGENTS.md`; D-004 and D-005; every PR still gets its own reviews and Alex's yes. The limit isn't in `docs/DECISIONS.md`.
 4. Small follow-ups (non-blocking):
    - the #129 review's follow-ups, listed on #128 for the step that needs each;
    - optional test additions from the #113 and #115 reviews (see those PRs);
