@@ -169,7 +169,7 @@ Compared: **Render**, **Fly.io** and **Railway**, from their official docs and p
 | Logs and metrics | Where they are stored isn't stated. The sub-processors listed are all US entities (AWS, Google Cloud, Cloudflare, ClickHouse), which suggests the US but doesn't prove it ([Security](https://render.com/security)) | **Processed in the US**, whatever the app's region (platform logs, metrics, proxy traces, image builds) ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
 | Control systems (accounts, settings, secrets) | Not stated | Held in the US ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
 | Security monitoring | Not stated | AWS OpenSearch and object storage; region not stated ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
-| Backups | None for us (no disk) | None for us (no volume). Volume snapshots would be in AWS us-east-1 ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
+| Backups | No disk or volume snapshots configured. That doesn't by itself rule out other provider-controlled copies, which stay subject to the retention evidence | No volume snapshots configured (volume snapshots would be in AWS us-east-1). Same caveat ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
 | Staff and support access | Not stated | A **"globally distributed team"**; no country list; no access from sanctioned countries ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
 | Contract (DPA) location wording | The research pass read Render's DPA as saying primary processing is in the US. **Claude's re-check couldn't read that page's text**, so this is unconfirmed ([DPA](https://render.com/dpa)) | DPA from the Trust Center, signed and returned ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
 | The login gate in front | Cloudflare decrypts traffic wherever its network receives it; no regional option on the free plan (section 1.8) | Same |
@@ -178,16 +178,17 @@ Compared: **Render**, **Fly.io** and **Railway**, from their official docs and p
 - **For step T:** the privacy notice describes these locations as documented, with the unknowns as unknowns. It never says "US-only" unless every row is confirmed. Staff access from other countries (Fly.io's wording) and Cloudflare's worldwide edge mean an international-processing statement is likely needed.
 
 ## 3. Memory measured with made-up files
-Measured on 2026-10-27 on the Mac, with Python 3.11 and the pinned packages. Each figure is one Python process: MargenX's reading code, with Streamlit, pandas, openpyxl and altair loaded. The files were generated made-up data near MargenX's 50,000-line limit.
+Measured on 2026-10-27 on the Mac, with Python 3.11 and the pinned packages. The made-up files are made **in a separate process first**, with every amount built from whole cents. Each figure is then one fresh Python process that loads Streamlit, pandas, openpyxl and altair, reads one file and runs MargenX's checks on it. The files are near MargenX's 50,000-line limit, and **every line was read** (49,000 of 49,000, none rejected), so the figures reflect a full file.
 
 | Case | File size | Lines | Peak memory |
 |---|---|---|---|
-| Libraries loaded, nothing read | — | — | about 157–162 MB |
-| Made-up CSV sales file read and checked | 4.2 MB | 49,000 | about 251–272 MB (two runs) |
-| Made-up Excel sales file read and checked | 1.9 MB | 49,000 | about 277–283 MB (two runs) |
+| Libraries loaded, nothing read | — | — | about 157–159 MB (two runs) |
+| Made-up CSV sales file read and checked | 4.3 MB | 49,000 | about 268–271 MB (two runs) |
+| Made-up Excel sales file read and checked | 1.9 MB | 49,000 | about 248 MB (two runs) |
 
-- **How:** the script and its output are in the appendix at the end, so anyone can re-run it.
-- **What it suggests (Provisional):** one large file added roughly 90–125 MB on top of the base in these runs, and the figures vary between runs. Several shops at once with several large files, plus the Streamlit server, the door and `cloudflared`, **could** pass 512 MB, and 2 GB **likely** has room. **Neither is established.**
+- **How:** the two scripts and their output are in the appendix at the end, so anyone can re-run them.
+- **Found on the way** (for the real-export follow-ups, not a money error): the Excel library used to make the test file writes some amounts with 17 digits (for example `934.6900000000001`). Excel itself stores the short form (`934.69`). MargenX refused those lines safely (923 of 49,000 in a first try), as it should for an amount with more than two decimals. The final test file stores Excel's short form. If a real program's export stores amounts like that library does, those lines would be refused, never misread. That is worth checking in the layout checks.
+- **What it suggests (Provisional):** one large file added roughly 90–115 MB on top of the base in these runs. Several shops at once with several large files, plus the Streamlit server, the door and `cloudflared`, **could** pass 512 MB, and 2 GB **likely** has room. **Neither is established.**
 - **Limits:** this is one process on a Mac, reading one file. It isn't the running container, it doesn't include several sessions or four files per session, and it didn't measure the door, the tunnel or the server overhead.
 - **The assumed worst-case workload for P3 and P4** (the plan's own proposed limits): up to 10 sessions in total and 3 per person, each with up to 4 files of up to 5 MB (20 MB per session), each file within the 50,000-line limit, plus the door and `cloudflared`.
 - **Before a size is chosen:** P3 enforces those limits, and P4 measures the real container at that worst case. It also checks what happens when memory runs out: the service must stop or refuse safely, not lose a session's data to another session. Only then is a size, and so a price, chosen.
@@ -222,7 +223,7 @@ Measured on 2026-10-27 on the Mac, with Python 3.11 and the pinned packages. Eac
 - **Prices:** fresh prices on the day of purchase.
 
 ## 6. Decisions for Alex (when we reach P0 and P4; not now)
-1. **Server:** Render or Fly.io, **only if its written retention answers cover every surface**. *Proposed: Render first, because it's run from a dashboard and can't be made public by mistake.*
+1. **Server:** Render or Fly.io, **only if its written evidence establishes that uploaded contents aren't persistently recorded in any surface of section 2.2** (an answer that merely covers each surface isn't enough). *Proposed: Render first, because it's run from a dashboard and can't be made public by mistake.*
 2. **Domain:** a separate small domain just for MargenX, or move our existing domain's settings to Cloudflare (that touches Abrey's website and email). *Proposal; Alex and Abrey decide.*
 3. **A separate Cloudflare account** for MargenX. *Proposal; Alex decides.*
 4. **Getting Cloudflare's written answers:** the free plan has community support only, so Alex may need a sales contact or a paid plan to get them.
@@ -244,59 +245,92 @@ Measured on 2026-10-27 on the Mac, with Python 3.11 and the pinned packages. Eac
 Building still waits until after the first real shop meeting (Alex, 2026-10-27).
 
 ## Appendix: how the memory was measured
-Run from the repository root, with the project's Python setup. The script makes its own **made-up** files; it reads no real data.
+Run from the repository root, with the project's Python setup. The first script makes **made-up** files only (amounts from whole cents); the second measures one file per fresh process. Neither reads real data.
 
 ```bash
-for case in base csv xlsx; do python -I measure.py "$PWD" "$case"; done
+d=$(mktemp -d)
+python -I make_files.py "$d"
+for f in base "$d/made_up.csv" "$d/made_up.xlsx"; do python -I measure.py "$PWD" "$f"; done
+```
+
+`make_files.py`:
+
+```python
+"""Write two made-up MargenX sales files (no real data). Money is made from whole cents."""
+import csv, random, re, sys, zipfile
+
+out_dir, n = sys.argv[1], 49_000
+rnd = random.Random(7)
+rows = []
+for i in range(n):
+    cents = rnd.randint(5_000, 500_099)               # $50.00 to $5,000.99, exact integer cents
+    rows.append([f"FIC-{i}", f"10/{rnd.randint(1, 28):02d}/2026", f"Example Customer {i % 300} (fictional)",
+                 f"J-{i % 2000}", f"Made-up item {i}", cents])
+header = ["Invoice #", "Date", "Customer Name", "Job No", "Description", "Total"]
+
+def dollars(cents):                                   # exact two-decimal text from integer cents
+    return f"{cents // 100}.{cents % 100:02d}"
+
+with open(f"{out_dir}/made_up.csv", "w", newline="") as f:
+    w = csv.writer(f); w.writerow(header)
+    for r in rows:
+        w.writerow(r[:5] + [dollars(r[5])])
+
+import openpyxl
+wb = openpyxl.Workbook(); ws = wb.active; ws.append(header)
+for r in rows:
+    ws.append(r)                                      # column F holds integer cents for now
+path = f"{out_dir}/made_up.xlsx"
+wb.save(path)
+# openpyxl writes floats with 17 digits (934.6900000000001); Excel itself stores the short form
+# (934.69). So rewrite each column-F number to its exact two-decimal text, as Excel would save it.
+with zipfile.ZipFile(path) as z:
+    parts = {name: z.read(name) for name in z.namelist()}
+sheet = parts["xl/worksheets/sheet1.xml"].decode()
+fixed, count = re.subn(r'(<c r="F(\d+)"[^>]*t="n"[^>]*><v>)(\d+)(</v>)',
+                       lambda m: m.group(1) + dollars(int(m.group(3))) + m.group(4), sheet)
+assert count == n, count
+parts["xl/worksheets/sheet1.xml"] = fixed.encode()
+with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+    for name, data in parts.items():
+        z.writestr(name, data)
+print(f"wrote {n} made-up rows to made_up.csv and made_up.xlsx")
 ```
 
 `measure.py`:
 
 ```python
-"""Peak memory of one Python process reading made-up MargenX files (no real data)."""
-import io, resource, sys, random, os
-sys.path.insert(0, sys.argv[1])
-scenario = sys.argv[2]
+"""Peak memory of one Python process reading one made-up MargenX file (made in another process)."""
+import collections, resource, sys
+repo, path = sys.argv[1], sys.argv[2]
+sys.path.insert(0, repo)
 def peak_mb():
     r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return r / 1e6 if sys.platform == "darwin" else r / 1e3
 import streamlit, pandas, openpyxl, altair  # what the app loads
-import job_intake as ji, job_profit
+import job_intake as ji
 base = peak_mb()
-def made_up_csv(n):
-    rnd = random.Random(7); out = io.StringIO()
-    out.write("Invoice #,Date,Customer Name,Job No,Description,Total\n")
-    for i in range(n):
-        out.write(f"FIC-{i},10/{rnd.randint(1,28):02d}/2026,Example Customer {i%300} (fictional),J-{i%2000},Made-up item {i},{rnd.randint(50,5000)}.{rnd.randint(0,99):02d}\n")
-    return out.getvalue().encode()
-def made_up_xlsx(n):
-    wb = openpyxl.Workbook(); ws = wb.active
-    ws.append(["Invoice #","Date","Customer Name","Job No","Description","Total"])
-    rnd = random.Random(7)
-    for i in range(n):
-        ws.append([f"FIC-{i}", f"10/{rnd.randint(1,28):02d}/2026", f"Example Customer {i%300} (fictional)", f"J-{i%2000}", f"Made-up item {i}", rnd.randint(50,5000)+rnd.randint(0,99)/100])
-    b = io.BytesIO(); wb.save(b); return b.getvalue()
-n = 49_000
-data = made_up_csv(n) if scenario == "csv" else made_up_xlsx(n) if scenario == "xlsx" else None
-if data is None:
+if path == "base":
     print(f"baseline peak {base:.0f} MB"); sys.exit()
-before = peak_mb()
-headers, records, notes = ji.read_file("made_up." + scenario, data)
+data = open(path, "rb").read()
+headers, records, notes = ji.read_file(path.rsplit("/", 1)[-1], data)
 kind = ji.detect_kind(headers) or "invoices"
 mapping = ji.suggest_mapping(headers, kind)
-try:
-    fmt = ji.suggest_date_format(ji.column_values(headers, records, mapping["date"]))
-    res = ji.intake(headers, records, mapping, kind, fmt, "line", {})
-    ok = f"intake done: {getattr(res,'accepted',None) if isinstance(getattr(res,'accepted',None),int) else len(getattr(res,'accepted',[]) or [])} accepted"
-except Exception as e:
-    ok = f"intake not run ({type(e).__name__}: {str(e)[:80]})"
-print(f"{scenario}: {len(data)/1e6:.1f} MB file, {len(records)} rows, peak {peak_mb():.0f} MB (baseline {base:.0f} MB), {ok}")
+fmt = ji.suggest_date_format(ji.column_values(headers, records, mapping["date"]))
+res = ji.intake(headers, records, mapping, kind, fmt, "line", {})
+reasons = collections.Counter(r for row in res.rejected for r in row["reasons"])
+print(f"{path.rsplit('/', 1)[-1]}: {len(data)/1e6:.1f} MB, {len(records)} rows, peak {peak_mb():.0f} MB "
+      f"(baseline {base:.0f} MB), {len(res.accepted)} accepted, {len(res.rejected)} rejected"
+      + (f", reasons: {dict(reasons.most_common(3))}" if reasons else ""))
 ```
 
-Output on 2026-10-27 (macOS, Python 3.11; `ru_maxrss` is the process's peak resident memory):
+Output on 2026-10-27 (macOS, Python 3.11; `ru_maxrss` is the process's peak resident memory), two runs:
 
 ```text
 baseline peak 157 MB
-csv: 4.2 MB file, 49000 rows, peak 272 MB (baseline 160 MB), intake done: 49000 accepted
-xlsx: 1.9 MB file, 49000 rows, peak 283 MB (baseline 159 MB), intake done: 48074 accepted
+made_up.csv: 4.3 MB, 49000 rows, peak 271 MB (baseline 158 MB), 49000 accepted, 0 rejected
+made_up.xlsx: 1.9 MB, 49000 rows, peak 248 MB (baseline 157 MB), 49000 accepted, 0 rejected
+baseline peak 159 MB
+made_up.csv: 4.3 MB, 49000 rows, peak 268 MB (baseline 158 MB), 49000 accepted, 0 rejected
+made_up.xlsx: 1.9 MB, 49000 rows, peak 248 MB (baseline 159 MB), 49000 accepted, 0 rejected
 ```
