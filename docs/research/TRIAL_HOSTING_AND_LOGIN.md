@@ -5,7 +5,9 @@
 - **What this isn't:** proof that the design works. Everything marked **To test** must be shown on a real test setup in P2 or P4, as the plan says. Prices are list prices seen on 2026-10-27; they must be checked again before anything is bought.
 - **Labels:** **Verified** = the provider's own page says it plainly. **Unclear** = the page is silent or contradicts itself. **Not available** = not on the plan we'd use. **Unresolved** = a release condition that this research can't settle; it blocks real files until written provider evidence or a live test settles it. **Provisional** = a working assumption to be replaced by a measurement or a fresh price.
 - Sources are links to the providers' own pages. Quotes are kept short; everything else is paraphrased.
-- **Revised after the manual review of this PR (FAIL at ce7c228, 5 blockers):** the earlier draft stated the retention gate, the logout timing, the end-of-trial order, the memory size and the cost more firmly than the evidence supports. Those are now marked **Unresolved** or **Provisional**, with what would settle each one.
+- **Revised twice after the manual reviews of this PR.**
+  - **Round 1** (FAIL at ce7c228, 5 blockers): the retention gate, the logout timing, the end-of-trial order, the memory size and the cost had been stated more firmly than the evidence supports. They are now **Unresolved** or **Provisional**, with what would settle each one.
+  - **Round 2** (FAIL at db09d41, 2 blockers): the hosting retention inventory was incomplete, and where each host processes data was missing. Sections 2.2 and 2.4 now cover both.
 - **How it was checked:** two research passes read the official pages and labelled each answer. Claude then re-read the most important ones itself on 2026-10-27:
   - Cloudflare: session management (logout, cancellation, renewal, timing); the June 2026 change of the default login method; Enterprise-only WAF payload logging; the default cache list;
   - Render: that background workers receive no incoming traffic, and its worker sizes;
@@ -16,8 +18,13 @@
 - **Proposed login gate: Cloudflare Access, free plan** (up to 50 users). It has the emailed code, a tunnel with no open port, and a documented "cancel this person's login everywhere" call. **We must switch on the emailed code ourselves**: since June 2026 it's no longer the default.
 - **Proposed server: Render, a "background worker", in a US region.** A background worker **can't receive traffic from the internet at all**, so the only way in is the tunnel. It has a dashboard stop button, and automatic deploys can be switched off. **Fly.io** is the other candidate. **Both are conditional** (next point).
 - **Three things are Unresolved, and each blocks real files until settled:**
-  1. **The retention gate (no provider keeps file contents): Unresolved for Cloudflare, Render and Fly.io.** What we found lowers the risk: no body logging on Cloudflare's free plan, no bodies in its request logs, caching can be switched off, no public traffic to the server. But several provider surfaces aren't documented: memory and buffering while files pass through, security processing, internal diagnostics and crash handling, swap, and staff access. Section 1.7 and section 2.2 list them. **Written evidence from each chosen provider, surface by surface, is needed before real files.** A canary test can't replace it. If a provider can't give it, that provider can't be used for real files; if none can, real files stay off and Alex decides.
-  2. **Logout: Unresolved.** The per-person cancellation exists, but Cloudflare doesn't document how long it takes to reach every device. Nothing here proves that a new emailed code is required everywhere afterwards. Section 1.4 sets a fail-closed rule for the door and what P2 and P4 must prove. If it can't be proven, the plan's fallback applies: a weaker, honestly worded logout promise, Alex's choice.
+  1. **The retention gate (no provider keeps file contents): Unresolved for Cloudflare, Render and Fly.io.** Some findings lower the risk:
+     - Cloudflare's customer-configurable WAF payload logging isn't available on the free plan;
+     - its request-log fields have no body field;
+     - caching can be switched off for the address;
+     - the server gets no public traffic.
+     None of that shows a provider keeps nothing. Many surfaces aren't documented: memory and buffering while files pass through, security processing and telemetry, temporary files, diagnostics and crash handling, swap, and staff access. Section 1.7 lists them for Cloudflare and section 2.2 for each host. **Before real files, each chosen provider must give written evidence that uploaded contents aren't persistently recorded in any of them.** A canary test can't replace it. If a provider can't, it can't be used for real files; if none can, real files stay off and Alex decides.
+  2. **Logout: Unresolved, and tests alone can't settle it.** The per-person cancellation exists, but Cloudflare doesn't document how long it takes to reach every device. A two-device test can't rule out the timing gap where an old gate login gets a new app token. **The strong promise ("a new emailed code on every device") stays blocked** until there is either Cloudflare's documented or written limit on that timing, or a mechanism that forces a fresh emailed code regardless of it (section 1.4). Otherwise, before release, Alex must explicitly approve the plan's weaker, honestly worded promise, and the guide and terms must change to match.
   3. **Server size and cost: Provisional.** One measurement on the Mac suggests 512 MB may be too small and 2 GB has room, but that isn't established. The real container must be measured at the worst-case workload, and prices checked fresh, before a size is chosen or anything is bought (sections 3 and 6).
 - **Domain and account (proposals for Alex and Abrey, not decisions):** the free Cloudflare plan needs the **whole domain** managed by Cloudflare. A separate small domain just for MargenX would avoid touching Abrey's website and email. A separate Cloudflare account would keep logouts away from anything else.
 - **Nothing found yet rules the design out.** Section 4 lists the details for the later steps; section 5 lists what only a live test or a provider's written answer can settle.
@@ -42,16 +49,19 @@
 ### 1.3 Sessions and renewal
 - Three lengths: the **overall (global) session** (15 minutes to 1 month, default 24 hours), the **app session**, and an optional **rule (policy) session**. The most specific one wins. Verified: [Session management](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/).
 - **Renewal:** when an app token expires, Access quietly issues a new one if the overall session is still valid and the person still passes the rule. Otherwise they log in again, which for us means a new emailed code. Verified: same page.
-- **For P4:** set the overall and app sessions to match (the plan's working-day length). **That is a setting, not evidence:** while the overall session is valid, Access can quietly renew an app token. So matching lengths doesn't prove that a cancelled person must enter a new code on every device. That is proven only by the P4 test in section 1.4.
+- **For P4:** set the overall and app sessions to match (the plan's working-day length). **That is a setting, not evidence:** while the overall session is valid, Access can quietly renew an app token. So matching lengths doesn't prove that a cancelled person must enter a new code on every device. That needs section 1.4's (a) or (b); a test alone can't prove it.
 
 ### 1.4 Logout and person-wide cancellation (the plan's logout design)
 - **Per-person cancellation exists:** an API call (`POST /accounts/{account_id}/access/organizations/revoke_user`, with the email) revokes that person's Access tokens **across all apps in the account**. Verified: [revoke_user API](https://developers.cloudflare.com/api/resources/zero_trust/subresources/organizations/methods/revoke_users/), [Session management](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/).
-- **What its answer confirms:** only that the request was accepted (`"success": true`), not when every session has ended. **So in the plan, "the gate confirms" can only mean "the gate accepted the cancellation"**, and the page may say "You're logged out" only after that acceptance. Verified (response format); timing Unclear.
+- **What its answer confirms:** only that the request was accepted, not when every session has ended. The answer has both a `success` field and a `result` field; **P2 treats a cancellation as accepted only when both are true and the request returned normally**. An HTTP 200 or `success` alone isn't enough, and an error or timeout counts as not accepted. In the plan, "the gate confirms" therefore means "the gate accepted the cancellation", and the page may say "You're logged out" only after that. Verified: [revoke_user API](https://developers.cloudflare.com/api/resources/zero_trust/subresources/organizations/methods/revoke_users/) (response fields); timing Unclear.
 - **Timing (documented for other actions, not for this call):** after an administrator cancels a person in the dashboard, they can't log back in for up to 1 minute. After the logout address is visited, tokens already issued keep being accepted for 20–30 seconds. Verified: [Session management](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/). **Neither figure is documented for the API call**, and neither says when every old token stops working. **Unclear.**
 - **So the door can't rely on a fixed wait. The fail-closed rule for P2:**
   - when the gate accepts a person's cancellation, the door records a **"not before" moment** for that person. It then **refuses every token for that person issued before that moment, for as long as such a token could still be valid** (until its own expiry), not just for a few minutes;
   - **after a restart** the door has lost those records, so it refuses **every token issued before the restart** (the plan's quarantine rule), which includes every token from before any cancellation;
-  - **what remains Unresolved:** a token issued after the restart, from a gate login the cancellation hasn't reached yet. The API's propagation time isn't documented. **P2 and P4 must show**, on the live setup with two devices, that after an accepted cancellation no device gets back in without a new emailed code, including across a restart. If that can't be shown, the plan's fallback applies (a weaker, honestly worded promise, Alex's choice);
+  - **what remains Unresolved:** a token issued after the cancellation or after a restart, from a gate login the cancellation hasn't reached yet. Such a token passes both rules above. The API's propagation time isn't documented, and **a sampled test, even on two devices, can't show that this gap never happens.** So the strong promise needs one of:
+    - (a) Cloudflare's documented, or written, maximum time for a cancellation to reach every session, which the door then waits out fail-closed;
+    - (b) a mechanism that forces a fresh emailed code whatever the timing. Candidates for P2 to check: a token field showing when the person last entered a code; or briefly taking the email off the allow rule during the cancellation, so no renewal can pass (this is the unverified "remove, then cancel" order, which P4 must test).
+    If neither is shown, **Alex must explicitly approve the weaker promise before release** (Log out closes MargenX on this browser; the login itself ends when its set time runs out), and the guide and terms change to match. P2 and P4 still test two devices and restarts, but as checks, not as proof.
   - the 2-minute quarantine stays as a **minimum** backup, not as proof.
 - **A cancellation isn't a ban.** The page says a person whose identity is still active can start a new session. With emailed codes, being active likely means the email is still on the allow rule, but the page doesn't say so. Whether logging back in needs a new emailed code is **Unclear; to test** in P4 (test requirement 21), with two devices.
 - **Removing someone for good (trial end, early end):** Cloudflare's page says to disable the person **at their identity provider** first, then revoke the session. Verified: [Session management](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/). With emailed codes there's no separate identity-provider account. **Our proposed equivalent** is to take the email off the allow rule first, then cancel. **Unverified:** the page doesn't describe this, so its effect on existing tokens and on renewal must be tested in P4 before it becomes the end-of-trial procedure.
@@ -107,7 +117,7 @@ Compared: **Render**, **Fly.io** and **Railway**, from their official docs and p
 |---|---|---|---|
 | No public address | **By design:** a background worker receives no incoming traffic. Verified: [Background workers](https://render.com/docs/background-workers), [Private services](https://render.com/docs/private-services) | Only if the config has no services section and every deploy uses `--no-public-ips`. Verified: [Configuration](https://docs.fly.io/reference/configuration/), [Services](https://docs.fly.io/networking/services) | Possible, but not recommended (below) |
 | Sizes | 512 MB or 2 GB; **no 1 GB**. Verified: [Compute plans](https://render.com/docs/compute-plans) | 512 MB, 1 GB, 2 GB. Verified: [Pricing](https://docs.fly.io/about/pricing) | Usage-based ([plans](https://docs.railway.com/pricing/plans)) |
-| List price, US, per month | 512 MB **$7**; 2 GB **$25**; Hobby workspace $0. From [Render pricing](https://render.com/pricing). *My own check of that page couldn't read the figures: re-check before buying.* | 1 GB **$6.70**; 2 GB (shared-cpu-2x) **$13.39**; no platform fee. Verified: [Pricing](https://docs.fly.io/about/pricing) | About $12 for 1 GB (an estimate worked out from [usage pricing](https://docs.railway.com/pricing/plans)) |
+| List price, US, per month | 512 MB **$7**; 2 GB **$25**; Hobby workspace $0. From [Render pricing](https://render.com/pricing). *My own check of that page couldn't read the figures: re-check before buying.* | 1 GB **$6.70**; 2 GB (shared-cpu-2x) **$13.39**; no platform fee. These are for the cheapest US regions (Ashburn `iad`, Secaucus `ewr`) and 30 days of continuous running. Verified: [Pricing](https://docs.fly.io/about/pricing) | About $12 for 1 GB (an estimate worked out from [usage pricing](https://docs.railway.com/pricing/plans)) |
 | Emergency stop | **Suspend button in the dashboard** (and API). Verified: [Suspend](https://render.com/changelog/suspend-and-resume-services-in-bulk-from-the-render-dashboard) | Command line (`fly machine stop`); a dashboard button isn't documented. **Never "suspend" on Fly:** it writes the whole memory, uploads included, to disk. Verified: [Configuration](https://docs.fly.io/reference/configuration/) | — |
 | Automatic deploys off | Yes ("Off"); previews off by default; deploy one exact commit. Verified: [Deploys](https://render.com/docs/deploys), [Previews](https://render.com/docs/service-previews) | Off by default (only if we add a GitHub workflow). Verified: [Continuous deployment](https://docs.fly.io/launch/continuous-deployment-with-github-actions) | **Railway-started redeploys** we can't opt out of (host moves, security updates), each wiping in-memory sessions ([deployment reference](https://docs.railway.com/deployments/reference)) |
 | App logs | Kept 7 days on Hobby; can't be switched off. Verified: [Logging](https://render.com/docs/logging) | Kept 7 days, fixed; can't be switched off; Anthropic is listed as a sub-processor for AI-assisted log analysis; Fly says request bodies are never sent to AI vendors. Verified: [Security questionnaire](https://fly.io/legal/security-questionnaire/), [Sub-processors](https://fly.io/legal/sub-processors/) | Upgrading brings back logs older than the plan shows, so they are kept longer ([logs](https://docs.railway.com/observability/logs)) |
@@ -120,32 +130,64 @@ Compared: **Render**, **Fly.io** and **Railway**, from their official docs and p
 
 ### 2.2 Proposed: Render, background worker, US region. Both Render and Fly.io are conditional
 - **Why Render first:** it can't be given a public address by mistake, it has a dashboard stop button (the plan's first emergency step), deploys can be locked to one exact commit, and it's run from a dashboard Alex can use.
-- **Neither provider passes the retention gate on paper.** Undocumented surfaces:
-  - **Render:** swap, crash dumps or core files, and staff access to a running service's memory;
-  - **Fly.io:** crash dumps, and whether swap is off unless set (its page only says the setting enables swap). Staff access is described as for security, maintenance or support with consent.
-- **What's needed before real files:** a written answer from the chosen provider covering each of these surfaces. Claude drafts the questions; Alex sends them.
-  - **If the answer covers every surface:** that provider can be used, still subject to the P4 settings check.
-  - **If not:** that provider can't be used for real files. If neither can, real files stay off, and Alex decides what to do next (for example the installed-app fallback in #131).
+- **Neither host passes the retention gate on paper.** The full inventory of places an uploaded file could end up on each host is below, with what is documented and what evidence is still needed.
+- **Acceptance rule (the plan's retention gate):** a host can be used for real files only with **written evidence that establishes that uploaded contents aren't persistently recorded in any surface below**. That evidence is the provider's own documents or a written answer from them, plus P3/P4 checks of what MargenX itself does. An answer that merely "covers every surface" isn't enough.
+- **If a host doesn't meet the rule:** that host can't be used for real files. If neither can, real files stay off, and Alex decides what to do next (for example the installed-app fallback in #131). Claude drafts the questions; Alex sends them.
+
+**The retention inventory for the hosts:**
+
+| Surface | Render: documented | Fly.io: documented | Still needed (both) |
+|---|---|---|---|
+| Process memory while a session runs | The file is there by design (in memory only, as the plan says) | Same | P3: limits; P4: memory exhaustion fails safely |
+| Swap (memory written to disk) | Not documented | Switched on only by `swap_size_mb`; that it's off otherwise is implied, not stated ([Configuration](https://docs.fly.io/reference/configuration/)) | Written answer: is swap ever used, and where |
+| Root and temporary filesystem | **Ephemeral but writable:** local changes are lost only at a restart or redeploy, so anything written stays until then ([Disks](https://render.com/docs/disks)) | Rebuilt fresh from the image when a Machine stops ([Scale count](https://docs.fly.io/launch/scale-count)); what happens to it before then isn't stated | P3: prove MargenX, Streamlit, pandas and openpyxl write **no** temporary or spill files with contents. Written answer: is the ephemeral disk ever copied, kept or reused |
+| App logs (stdout and stderr) | Kept 7 days on Hobby; can't be switched off ([Logging](https://render.com/docs/logging)) | Kept 7 days, fixed; can't be switched off ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) | P3: MargenX and the door never print contents, tokens or cookies (the canary test) |
+| Platform request and proxy logs | Logged for public web services only (method, status, address); a worker has no public traffic ([Logging](https://render.com/docs/logging)) | Proxy logs; none for an app with no services, as no traffic goes through the proxy ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) | P4: confirm no such log exists for our service |
+| Metrics | Not documented | Kept about 15 days ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) | Written answer: metrics hold no contents (expected: counts only) |
+| Security monitoring and telemetry | Not documented | **A separate security pipeline with "significantly longer retention"**: fleet and application telemetry, host runtime detection, in AWS OpenSearch and object storage; retention period not stated ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) | Written answer: does any security or runtime monitoring capture file or memory contents, and for how long |
+| Host diagnostics, crash dumps, core files | Not documented | Not documented | Written answer: are crash dumps or core files ever made or kept for a service |
+| Memory snapshots | None documented | **"Suspend" writes the whole memory to disk**; it's only used if we choose it, so it must never be used ([Configuration](https://docs.fly.io/reference/configuration/), [Security questionnaire](https://fly.io/legal/security-questionnaire/)) | P4: suspend never configured (Fly) |
+| Backups and snapshots | Daily snapshots only for persistent disks; we attach none ([Disks](https://render.com/docs/disks)) | Daily snapshots only for volumes; we attach none ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) | P4: no disk or volume attached |
+| Build artifacts and images | Builds kept for rollback (5 on Hobby); they hold code, not shop files. **Secret files can enter the image** ([Docker secrets](https://render.com/docs/docker-secrets)) | Images kept; code, not shop files | P3/P4: no secret in any image layer |
+| Staff and support access | Not documented beyond confidentiality in the DPA | For security or maintenance, or support with consent; logged internally, not shown to customers ([Privacy policy](https://fly.io/legal/privacy-policy), [Security questionnaire](https://fly.io/legal/security-questionnaire/)) | Written answer: can staff read a running service's memory or disk, and is it recorded |
+
 - **Not recommended: Railway** (Railway-started redeploys, longer log keeping, staff-access wording).
 
 ### 2.3 Details for the later steps (none changes the design)
-- **Two copies during each Render deploy:** for a short time the new copy starts before the old one stops, so two tunnel connections run at once. Verified: [Deploys](https://render.com/docs/deploys). P4 rule: deploy only when no trial user is active. The restart quarantine then applies to the new copy.
+- **Two copies during each Render deploy:** for a short time the new copy starts before the old one stops, so two tunnel connections run at once. Verified: [Deploys](https://render.com/docs/deploys). P4 rule: before a deploy, the door stops new logins and drains existing sessions; then the deploy runs. The restart quarantine then applies to the new copy.
 - **Secrets:** Render copies secret files into the Docker build folder, so they must be in `.dockerignore`, or they end up inside the image. Verified: [Docker secrets](https://render.com/docs/docker-secrets). Saving a secret starts a deploy by default ("Save only" exists). Verified: [Environment variables](https://render.com/docs/configure-environment-variables).
 - **Tunnel protocol:** none of the hosts documents outbound UDP. Run `cloudflared --protocol http2` (TCP only) and test it in P4. Source: [Tunnel with firewall](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/tunnel-with-firewall/).
 - **Connection resets:** Render sometimes resets long outbound connections. `cloudflared` reconnects, but a user mid-session may see a reconnect. Verified: [Outbound connection resets](https://render.com/docs/outbound-connection-resets).
 - **Logs can't be switched off anywhere,** so MargenX and the door must never print file contents, tokens or cookies (already in the plan, P3).
 
+### 2.4 Where each host processes data
+"US region" only says where the app runs. Logs, telemetry, control systems, backups and staff access can be elsewhere.
+
+| What | Render | Fly.io |
+|---|---|---|
+| The app itself (where shop files are read) | The region we pick: Oregon, Ohio or Virginia; it can't be changed later ([Regions](https://render.com/docs/regions)) | The region we pick, e.g. Ashburn or Secaucus; app data "stays in the regions you deploy to" ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
+| Logs and metrics | Where they are stored isn't stated. The sub-processors listed are all US entities (AWS, Google Cloud, Cloudflare, ClickHouse), which suggests the US but doesn't prove it ([Security](https://render.com/security)) | **Processed in the US**, whatever the app's region (platform logs, metrics, proxy traces, image builds) ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
+| Control systems (accounts, settings, secrets) | Not stated | Held in the US ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
+| Security monitoring | Not stated | AWS OpenSearch and object storage; region not stated ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
+| Backups | None for us (no disk) | None for us (no volume). Volume snapshots would be in AWS us-east-1 ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
+| Staff and support access | Not stated | A **"globally distributed team"**; no country list; no access from sanctioned countries ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
+| Contract (DPA) location wording | The research pass read Render's DPA as saying primary processing is in the US. **Claude's re-check couldn't read that page's text**, so this is unconfirmed ([DPA](https://render.com/dpa)) | DPA from the Trust Center, signed and returned ([Security questionnaire](https://fly.io/legal/security-questionnaire/)) |
+| The login gate in front | Cloudflare decrypts traffic wherever its network receives it; no regional option on the free plan (section 1.8) | Same |
+
+- **For the questions to the providers:** Render: where logs, metrics, diagnostics and control data are stored, and where staff and support can access from. Fly.io: the security pipeline's region and retention.
+- **For step T:** the privacy notice describes these locations as documented, with the unknowns as unknowns. It never says "US-only" unless every row is confirmed. Staff access from other countries (Fly.io's wording) and Cloudflare's worldwide edge mean an international-processing statement is likely needed.
 
 ## 3. Memory measured with made-up files
 Measured on 2026-10-27 on the Mac, with Python 3.11 and the pinned packages. Each figure is one Python process: MargenX's reading code, with Streamlit, pandas, openpyxl and altair loaded. The files were generated made-up data near MargenX's 50,000-line limit.
 
 | Case | File size | Lines | Peak memory |
 |---|---|---|---|
-| Libraries loaded, nothing read | — | — | about 160 MB |
-| Made-up CSV sales file read and checked | 4.2 MB | 49,000 | about 250 MB |
-| Made-up Excel sales file read and checked | 1.9 MB | 49,000 | about 280 MB |
+| Libraries loaded, nothing read | — | — | about 157–162 MB |
+| Made-up CSV sales file read and checked | 4.2 MB | 49,000 | about 251–272 MB (two runs) |
+| Made-up Excel sales file read and checked | 1.9 MB | 49,000 | about 277–283 MB (two runs) |
 
-- **What it suggests (Provisional):** one large file added roughly 90–120 MB on top of the base in this one test. Several shops at once with several large files, plus the Streamlit server, the door and `cloudflared`, **could** pass 512 MB, and 2 GB **likely** has room. **Neither is established.**
+- **How:** the script and its output are in the appendix at the end, so anyone can re-run it.
+- **What it suggests (Provisional):** one large file added roughly 90–125 MB on top of the base in these runs, and the figures vary between runs. Several shops at once with several large files, plus the Streamlit server, the door and `cloudflared`, **could** pass 512 MB, and 2 GB **likely** has room. **Neither is established.**
 - **Limits:** this is one process on a Mac, reading one file. It isn't the running container, it doesn't include several sessions or four files per session, and it didn't measure the door, the tunnel or the server overhead.
 - **The assumed worst-case workload for P3 and P4** (the plan's own proposed limits): up to 10 sessions in total and 3 per person, each with up to 4 files of up to 5 MB (20 MB per session), each file within the 50,000-line limit, plus the door and `cloudflared`.
 - **Before a size is chosen:** P3 enforces those limits, and P4 measures the real container at that worst case. It also checks what happens when memory runs out: the service must stop or refuse safely, not lose a session's data to another session. Only then is a size, and so a price, chosen.
@@ -154,23 +196,23 @@ Measured on 2026-10-27 on the Mac, with Python 3.11 and the pinned packages. Eac
 ## 4. What changes in the later steps (details only)
 | Finding | Step | What it means |
 |---|---|---|
-| The cancellation answer only means "accepted"; propagation time for the API isn't documented | P2, P4 | The fail-closed "not before" rule and the restart rule (section 1.4); "You're logged out" only after acceptance; P2 and P4 prove a new emailed code on every device, or the weaker promise applies |
+| The cancellation answer only means "accepted"; propagation time for the API isn't documented | P2, P4 | The fail-closed "not before" rule and the restart rule (section 1.4); "You're logged out" only after acceptance (both `success` and `result` true). The strong promise needs a documented or written maximum time, or a forced fresh code (section 1.4 (a) or (b)); otherwise Alex explicitly approves the weaker promise before release. Tests are checks, not proof |
 | A cancellation isn't a ban; Cloudflare's documented order is "disable at the identity provider, then revoke" | P4, P5 | Our proposed equivalent, "remove from the allow rule, then cancel", is **Unverified**: test its effect on existing tokens and renewal before it becomes the end-of-trial procedure |
 | The emailed code isn't the default | P4 | Add it; make it the app's only login method; "instant authentication" on |
 | CSV and Excel files are cached by default | P4 | A "bypass cache" rule for the whole MargenX address, plus "don't store" (already planned) |
 | Logout and cancellation act on the whole Cloudflare account | Before P4 | Proposal: a **separate Cloudflare account** just for MargenX (Alex decides) |
 | The domain must be fully on Cloudflare (free plan) | Before P4 | Proposal: **a separate small domain for MargenX**, so Abrey's site and email aren't touched (Alex and Abrey decide) |
 | The narrow "Revoke" key permission may not work on that call | P4 | Test it first. If only the broad permission works, it needs Alex's explicit yes and a security review before use |
-| Open connections aren't cut by Cloudflare | P2 | Confirms the door's design: the door closes them |
+| Open connections aren't guaranteed to be cut by Cloudflare (undocumented) | P2 | Confirms the door's design: the door closes them |
 | Whether the DPA covers a free Cloudflare account | T | Check with Cloudflare before the trial terms are finalised |
 | Undocumented retention surfaces at Cloudflare, Render and Fly.io | Before P4, F | Written provider evidence, surface by surface; otherwise that provider isn't used for real files |
-| Render runs two copies briefly at each deploy | P4, P5 | Deploy only when no trial user is active |
+| Render runs two copies briefly at each deploy | P4, P5 | Before a deploy, the door stops letting anyone new in and closes existing sessions (a drain), then the deploy runs. Watching for "no active users" alone leaves a race while two copies run |
 | Render secret files enter the Docker build folder | P3, P4 | List them in `.dockerignore`; test that no secret is inside the built image |
 | Login records keep emails, and user records can't be deleted at Cloudflare | T | Say so in the privacy notice (the plan already allows for it) |
 
 ## 5. What only a live test or a provider's written answer can settle (before real files)
 - **Retention, in writing:** each chosen provider's answer for every surface in sections 1.7 and 2.2.
-- **Logout:** after an accepted cancellation, no device gets back in without a new emailed code, including across a restart (test requirement 21). Also how long after a cancellation old tokens are refused at the gate.
+- **Logout:** a documented or written maximum cancellation time from Cloudflare, or a mechanism that forces a fresh emailed code (section 1.4 (a) or (b)). Two-device and restart tests in P2 and P4 are checks, not proof. Without (a) or (b), Alex's explicit approval of the weaker promise is required before release.
 - **Removal:** "remove from the allow rule, then cancel" works on existing tokens and on renewal.
 - The narrow "Revoke" key permission works on the cancellation call.
 - Whether an open live connection survives a cancellation at the gate (the door closes it anyway).
@@ -188,7 +230,7 @@ Measured on 2026-10-27 on the Mac, with Python 3.11 and the pinned packages. Eac
 
    | Part | Render | Fly.io |
    |---|---|---|
-   | Server | 512 MB $7 or 2 GB $25 a month ([pricing](https://render.com/pricing); not re-read by Claude) | 1 GB $6.70 or 2 GB $13.39 a month ([pricing](https://docs.fly.io/about/pricing)) |
+   | Server | 512 MB $7 or 2 GB $25 a month ([pricing](https://render.com/pricing); not re-read by Claude) | 1 GB $6.70 or 2 GB $13.39 a month, in Ashburn or Secaucus, running all 30 days ([pricing](https://docs.fly.io/about/pricing)) |
    | Account or workspace fee | Hobby $0 (Pro $25 a month if ever needed) | None |
    | Outbound traffic | 5 GB a month included, then $0.15 per GB | $0.02 per GB from North America |
    | Builds | 500 build minutes a month included | — |
@@ -201,3 +243,60 @@ Measured on 2026-10-27 on the Mac, with Python 3.11 and the pinned packages. Eac
 
 Building still waits until after the first real shop meeting (Alex, 2026-10-27).
 
+## Appendix: how the memory was measured
+Run from the repository root, with the project's Python setup. The script makes its own **made-up** files; it reads no real data.
+
+```bash
+for case in base csv xlsx; do python -I measure.py "$PWD" "$case"; done
+```
+
+`measure.py`:
+
+```python
+"""Peak memory of one Python process reading made-up MargenX files (no real data)."""
+import io, resource, sys, random, os
+sys.path.insert(0, sys.argv[1])
+scenario = sys.argv[2]
+def peak_mb():
+    r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return r / 1e6 if sys.platform == "darwin" else r / 1e3
+import streamlit, pandas, openpyxl, altair  # what the app loads
+import job_intake as ji, job_profit
+base = peak_mb()
+def made_up_csv(n):
+    rnd = random.Random(7); out = io.StringIO()
+    out.write("Invoice #,Date,Customer Name,Job No,Description,Total\n")
+    for i in range(n):
+        out.write(f"FIC-{i},10/{rnd.randint(1,28):02d}/2026,Example Customer {i%300} (fictional),J-{i%2000},Made-up item {i},{rnd.randint(50,5000)}.{rnd.randint(0,99):02d}\n")
+    return out.getvalue().encode()
+def made_up_xlsx(n):
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["Invoice #","Date","Customer Name","Job No","Description","Total"])
+    rnd = random.Random(7)
+    for i in range(n):
+        ws.append([f"FIC-{i}", f"10/{rnd.randint(1,28):02d}/2026", f"Example Customer {i%300} (fictional)", f"J-{i%2000}", f"Made-up item {i}", rnd.randint(50,5000)+rnd.randint(0,99)/100])
+    b = io.BytesIO(); wb.save(b); return b.getvalue()
+n = 49_000
+data = made_up_csv(n) if scenario == "csv" else made_up_xlsx(n) if scenario == "xlsx" else None
+if data is None:
+    print(f"baseline peak {base:.0f} MB"); sys.exit()
+before = peak_mb()
+headers, records, notes = ji.read_file("made_up." + scenario, data)
+kind = ji.detect_kind(headers) or "invoices"
+mapping = ji.suggest_mapping(headers, kind)
+try:
+    fmt = ji.suggest_date_format(ji.column_values(headers, records, mapping["date"]))
+    res = ji.intake(headers, records, mapping, kind, fmt, "line", {})
+    ok = f"intake done: {getattr(res,'accepted',None) if isinstance(getattr(res,'accepted',None),int) else len(getattr(res,'accepted',[]) or [])} accepted"
+except Exception as e:
+    ok = f"intake not run ({type(e).__name__}: {str(e)[:80]})"
+print(f"{scenario}: {len(data)/1e6:.1f} MB file, {len(records)} rows, peak {peak_mb():.0f} MB (baseline {base:.0f} MB), {ok}")
+```
+
+Output on 2026-10-27 (macOS, Python 3.11; `ru_maxrss` is the process's peak resident memory):
+
+```text
+baseline peak 157 MB
+csv: 4.2 MB file, 49000 rows, peak 272 MB (baseline 160 MB), intake done: 49000 accepted
+xlsx: 1.9 MB file, 49000 rows, peak 283 MB (baseline 159 MB), intake done: 48074 accepted
+```
