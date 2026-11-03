@@ -1,6 +1,6 @@
 # Current State — SNAPSHOT (stale-able)
 
-**Snapshot taken: 2026-10-27 (evening, Miami time),** from GitHub (`main` at `b36661b`, after PRs #130 and #132; open PRs, issue and PR comments) and the owner's decisions in Claude Code sessions. **[unverified]** marks anything not read from GitHub or `main`.
+**Snapshot taken: 2026-11-02 (evening, Miami time),** from GitHub (`main` at `b36661b`, after PRs #130 and #132; open PRs, issue and PR comments, including the owner's 2026-11-02 decisions on #131 and #128) and the owner's decisions in Claude Code sessions. **[unverified]** marks anything not read from GitHub or `main`.
 
 > **This file is a snapshot, not a source of truth.** Before acting, refresh from live GitHub and `main`. If anything here disagrees with them, GitHub/`main` wins. Say so in your handoff, and refresh this file in a docs-only PR. **New sessions: read this file, `AGENTS.md`, `docs/DECISIONS.md` and `docs/MVP_SPEC.md` first.** Don't rely on chat history or summaries.
 
@@ -88,37 +88,44 @@ Internal code names (`marginx_ui.py`, `marginx_insights.py`, `marginx_pilot.py`,
   - Spanish
 - **"Complete" means complete per the imported files** (sales, labor, and materials or outsourced work present, nothing rejected), not reconciled business profit. MargenX can't know about costs that were never recorded.
 - The website draft claims things MargenX doesn't do yet (labor hours, quoted vs. actual, card fees, the "change what happened" sliders). Fix them before it goes public. Excel reading now exists (#116), but only on made-up files.
-- **The website trial (#131) is a plan only.** No login service or server has been set up. The #132 research leaves three release conditions **unresolved**:
+- **The website trial (#131) isn't built yet.** Building started on 2026-11-02 with P0; no login service or server has been set up. The #132 research leaves three release conditions **unresolved**:
   - written provider evidence that uploaded files aren't kept anywhere (the plan's retention gate);
   - proof behind the strong logout promise, or Alex's explicit approval of the weaker one;
   - the server size and cost, from a real container measurement.
 - **Real customer data is prohibited** until step 3b is done and the owner records the real-data decision (**D-008 or later**, since D-007 is the wider target; real data approved for a named pilot shop).
 
 ## Next actions, in order
-1. **Get the first real shop meeting.** Customer outreach per the 2026-10-22 plan **[unverified]**: Abrey's short calls → meetings with Alex. Owner decisions: QuickBooks steps 2–7 (#128) are paused until after the first real meeting (2026-10-26, recorded on #128). **Building the website trial (#131, P1 onward) also waits until after it** (2026-10-27, recorded on #131). Research and docs may continue. Questions worth answering at the meeting:
+1. **Get the first real shop meeting.** Customer outreach per the 2026-10-22 plan **[unverified]**: Abrey's short calls → meetings with Alex. QuickBooks steps 2–7 (#128) stay paused until after the first real meeting (2026-10-26, recorded on #128). Questions worth answering at the meeting:
    - QuickBooks Online, QuickBooks Desktop or Excel?
    - Are jobs tracked in it (QuickBooks sub-customers or Projects)?
    - Would the owner download a report?
-   - Would the owner use MargenX on their own for two weeks, on a private website with an emailed login code?
-   - Until the trial is built and approved, the only real-data offer is the sit-down pilot, and only after the real-data decision. The self-use trial shouldn't be promised to shops yet.
+   - Would the owner try MargenX on their own for two weeks, through the private website login?
+   - **The offer to shops is now this two-week trial**, through the website login (Alex, 2026-11-02, recorded on #131). **Until the trial is built and approved for go-live,** the only real-data option is the sit-down pilot, and only after the real-data decision. The slide decks' speaker notes say so **[unverified]**.
 2. **Then decide how to continue issue #128** (reading QuickBooks reports). Its plan v7 passed a manual review with no blockers, and Alex chose Profit and Loss Detail as the sales source when both reports are uploaded (both recorded on #128). Steps 2–7 are paused.
-3. **The self-use website trial (issue #131).**
-   - **How shops get it:** Alex chose a private MargenX website with a login (2026-10-26, recorded on #131), so each trial can be ended on its date. An installed app is kept as the fallback.
-   - **Status:** plan v7 passed its manual review. Step R, the research, is merged (#132).
-   - **Next owner inputs:**
-     - the 14 questions (a comment on #131), before step P0, which records D-008 and D-009;
-     - the website details (what Abrey's site is built with, where the domain is registered, who has the logins), which Claude asks for just before P4.
+3. **The self-use website trial (issue #131): building started on 2026-11-02.**
+   - **How shops get it:** a private MargenX website with a login (Alex, 2026-10-26, recorded on #131), so each trial can be ended on its date. An installed app is kept as the fallback.
+   - **Status:**
+     - plan v7 passed its manual review;
+     - step R, the research, is merged (#132);
+     - **Alex decided on 2026-11-02 to start building now** (recorded on #131). This replaces the 2026-10-27 "wait until after the first real meeting".
+     - Every step keeps its tests, its manual review and Alex's merge yes.
+   - **Alex's other 2026-11-02 choices (recorded on #131):**
+     - **login gate:** Cloudflare Access, free plan;
+     - **domain:** the existing website domain, margenx.org. Its DNS moves to Cloudflare once, carefully, with Abrey, before P4. If the registrar or the site can't work with that, the fallback is a separate small domain. Nothing changes on the domain until Alex approves and Abrey agrees.
+   - **Abrey's website (his 2026-10-27 email, summarised on #131):**
+     - a static HTML site for Netlify, not live yet; the registrar is still unknown;
+     - its `login.html` has an `APP_URL` setting that can point to the MargenX login;
+     - its password "Create account" form doesn't fit the plan (invite-only, emailed code, no passwords). The proposal is "Request a trial".
+     - The site's public trial wording needs Alex's confirmation before it goes live.
+   - **Next:** **P0.** Alex answers the 14 questions (a comment on #131), then a docs PR records D-008 and D-009. Then P1–P6, T, F and G, in the reviewed order.
+   - **QuickBooks shops:** they can only use the trial once #128 steps 2–7 are built, because MargenX refuses QuickBooks reports for now (#129). Restarting #128 is a separate decision for Alex.
    - **Owner decisions still needed:**
      - real data is D-008, and going live is D-009. Both are recorded in step P0, after Alex answers the questions;
      - **D-009 part 1** allows only a made-up-data test website, from P0 on, with only Alex's own test emails invited;
      - **D-008 and D-009 part 2** (real shops) become active only at go-live (G), for one named shop at a time, after the final release check and signed trial terms;
      - **no purchase** (server, domain, anything else) happens before Alex approves a budget.
-   - **Plan reviews:** for #131's plan reviews only, Alex set a limit on 2026-10-27; the full wording is on #131.
-     - **Still blockers:**
-       - any design problem: something in the approach, order, decisions or promises that is wrong or unsafe and couldn't be put right inside the build step. The recorded examples are real files let in before approval, a shop getting access before its checks, a promise the design can't keep, an unsafe step order, and anything that could show a wrong figure as Complete;
-       - anything the reviewer is unsure about.
-     - **Not blockers for the plan:** narrower details that a named build step can handle within the design, such as a specific edge case, an extra test or an exact setting. They become **required** tests in that step, and that step's own manual review must confirm them before it can merge.
-     - **Unchanged:** the money-safety rules; no real shop data before D-008 is active at G; the standing rules in `AGENTS.md`; D-004 and D-005; every PR still gets its own reviews and Alex's yes. The limit isn't in `docs/DECISIONS.md`.
+   - **Plan reviews:** for #131's plan reviews, Alex set a review limit on 2026-10-27. Its wording is on #131; it isn't in `docs/DECISIONS.md`.
+
 4. Small follow-ups (non-blocking):
    - the #129 review's follow-ups, listed on #128 for the step that needs each;
    - optional test additions from the #113 and #115 reviews (see those PRs);
@@ -131,6 +138,6 @@ Internal code names (`marginx_ui.py`, `marginx_insights.py`, `marginx_pilot.py`,
 ## Paused or background
 - **AI-team readiness gate** (Suites A/B/C, #11/#69/#35): paused by the owner's choice (focus on MargenX). The run details below are from an earlier snapshot and weren't re-checked on 2026-10-24; #69 is still open. The round-3 Suite A scheduled run `39175749268` (2026-10-18, at `34e43ee`) **failed** and is **not recorded on #69**. Every scheduled run since refuses at "Require reviewed hardening change" (expected; no paid call). A→B→C successes: 0. Unattended agents stay disabled.
 - **QuickBooks report reading** (issue #128, steps 2–7): paused by the owner until after the first real shop meeting. Step 1 (#129) is merged.
-- **Building the website trial** (issue #131, P1 onward): paused by the owner until after the first real shop meeting. Step R (#132) is merged.
+- The website trial (#131) is **no longer paused**: Alex started building it on 2026-11-02 (see Next actions 3).
 - **Opportunity Radar:** the scoring foundation is on `main` (`opportunity_radar/`); the evidence store (issue #1) isn't built.
 - Draft PRs #16 (old LEDGER website), #39/#62/#63/#64 (trial evidence) and #67/#70 (old readiness drafts) stay unmerged on purpose.
