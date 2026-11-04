@@ -48,13 +48,19 @@ SECTIONS = (INCOME, COST_OF_GOODS_SOLD, EXPENSES, OTHER_INCOME, OTHER_EXPENSES)
 SALE_TYPES = frozenset({"invoice", "sales receipt"})
 
 # The tested cost allow-list, per report and section. A type is added only together with a
-# fictional-file test that proves it (tests/test_quickbooks_rules.py). Being in a cost section
-# never bypasses this list: an Invoice or Sales Receipt under Cost of Goods Sold is on neither
-# list, so it is not resolved. Other Income and Other Expenses have no list: the owner says what
-# each of their lines is (S9).
+# fictional-file test that proves it (tests/test_quickbooks_rules.py, tests/test_quickbooks_figures.py).
+# Being in a cost section never bypasses this list. Other Income and Other Expenses have no list: the
+# owner says what each of their lines is (S9).
+# Step 4 (issue #128) added, from the layout seen in the 2026-10-26 export:
+# - "Cash Expense" and "Credit Card Expense": money paid out, posted with a positive amount under
+#   Expenses, like "Expense".
+# - In Cost of Goods Sold only, "Invoice" and "Sales Receipt": QuickBooks posts the cost of the
+#   items sold on that invoice or receipt there (the $405 lines). They are a cost, never a sale.
 COST_TYPES = {
-    (PROFIT_AND_LOSS_DETAIL, COST_OF_GOODS_SOLD): frozenset({"bill", "expense", "check"}),
-    (PROFIT_AND_LOSS_DETAIL, EXPENSES): frozenset({"bill", "expense", "check"}),
+    (PROFIT_AND_LOSS_DETAIL, COST_OF_GOODS_SOLD): frozenset({"bill", "expense", "check", "cash expense",
+                                                             "credit card expense", "invoice", "sales receipt"}),
+    (PROFIT_AND_LOSS_DETAIL, EXPENSES): frozenset({"bill", "expense", "check", "cash expense",
+                                                   "credit card expense"}),
 }
 
 # Money received or moved: never counted automatically as a sale or a cost, in any section.
@@ -68,8 +74,9 @@ PAYMENT_TYPES = frozenset({
 # Types the plan lets count only after their sign and posting are tested (Q6): not resolved for now.
 NOT_YET_TESTED_TYPES = frozenset({"credit memo", "discount", "refund", "refund receipt", "vendor credit"})
 
-for _types in COST_TYPES.values():
-    assert not _types & (PAYMENT_TYPES | SALE_TYPES), "payments and sales are never on a cost allow-list"
+for (_report, _section), _types in COST_TYPES.items():
+    assert not _types & PAYMENT_TYPES, "payments are never on a cost allow-list"
+    assert _section == COST_OF_GOODS_SOLD or not _types & SALE_TYPES, "sale types are a cost only in COGS"
 assert not SALE_TYPES & PAYMENT_TYPES
 
 
@@ -163,10 +170,15 @@ def classify_profit_and_loss_line(account_path: tuple[str, ...] | list[str], tra
         return _not_resolved(_type_reason(kind, shown))
     if section in (COST_OF_GOODS_SOLD, EXPENSES):
         if kind in COST_TYPES[(PROFIT_AND_LOSS_DETAIL, section)]:
-            return _negative(shown) if amount < 0 else Outcome(COST, f"'{shown}' in {path[0].strip()}.")
+            if amount < 0:
+                return _negative(shown)
+            if kind in SALE_TYPES:
+                # The observed $405 case: QuickBooks posts the cost of the items sold on an invoice under Cost
+                # of Goods Sold, with the type "Invoice". It is a cost, never a sale (issue #128).
+                return Outcome(COST, f"'{shown}' in {path[0].strip()}: the cost of the items sold on it. A cost, "
+                                     "never a sale.")
+            return Outcome(COST, f"'{shown}' in {path[0].strip()}.")
         if kind in SALE_TYPES:
-            # The observed $405 case: QuickBooks posts an item's cost on the invoice, so the line says
-            # "Invoice" but sits under Cost of Goods Sold. It is never a sale (issue #128).
             return _not_resolved(f"'{shown}' under {path[0].strip()} is never a sale, and it isn't on the tested "
                                  "list of cost types.")
         return _not_resolved(_type_reason(kind, shown))

@@ -11,8 +11,9 @@ The rules below are MargenX's written rules (issue #128, plan v7, S1 and S6), re
 the text, not copied from the code:
 - A line is a sale only in the Income section, with the type Invoice or Sales Receipt, and an amount
   that isn't negative.
-- A line is a cost only in Cost of Goods Sold or Expenses, with the type Bill, Expense or Check (the
-  tested allow-list), and an amount that isn't negative.
+- A line is a cost only in Cost of Goods Sold or Expenses, with a type on the tested allow-list (Bill,
+  Expense, Check, Cash Expense or Credit Card Expense; in Cost of Goods Sold also Invoice and Sales
+  Receipt, the cost of the items sold), and an amount that isn't negative.
 - An account named "Unapplied Cash ..." only belongs in cash-basis reports, so in these (accrual)
   reports it holds its whole section: nothing in that section is counted. Other Income and Other
   Expense lines are never counted automatically.
@@ -27,7 +28,8 @@ import random
 from dataclasses import dataclass, field
 
 SALE_TYPES = {"Invoice", "Sales Receipt"}
-COST_TYPES = {"Bill", "Expense", "Check"}
+COST_TYPES = {"Bill", "Expense", "Check", "Cash Expense", "Credit Card Expense"}
+COGS_ONLY_COST_TYPES = {"Invoice", "Sales Receipt"}
 INCOME_TYPES = ["Invoice"] * 6 + ["Sales Receipt"] * 3 + ["Credit Memo", "Deposit", "Payment", "Journal Entry",
                                                          "Refund"]
 COSTS_TYPES = ["Bill"] * 4 + ["Expense"] * 3 + ["Check"] * 2 + ["Cash Expense", "Credit Card Expense", "Invoice",
@@ -42,9 +44,11 @@ ACCOUNTS = {
     "Other Income": ["Interest Earned", "Other Ordinary Income"],
     "Other Expense": ["Miscellaneous", "Penalties"],
 }
+TIDY_NAMES = ["Coral Cafe (fictional):Patio", "Coral Cafe (fictional):Kitchen", "Palm Gym (fictional):Lobby"]
 SUB_ACCOUNTS = ["Job Materials", "Plants and Soil", "Fuel", "Labor", "Gas and Electric", "Telephone", "Decks"]
-NAMES = ["Coral Cafe (fictional):Patio", "Palm Gym (fictional):Lobby", "Bay Clinic (fictional)",
-         "Garden Supply (fictional)", "Bayside Fuel (fictional)", "Landlord (fictional)"]
+NAMES = ["Coral Cafe (fictional):Patio", "Coral Cafe (fictional):Kitchen", "Palm Gym (fictional):Lobby",
+         "Bay Clinic (fictional)", "Garden Supply (fictional)", "Bayside Fuel (fictional)", "Landlord (fictional)",
+         "Doral Realty (fictional):North:Lobby", "Kendall School (fictional):"]
 
 
 @dataclass
@@ -72,6 +76,7 @@ class Report:
     expected: dict  # section -> Expected
     total_rows: int  # closing totals plus summary rows
     line_rows: list = field(default_factory=list)
+    lines: list = field(default_factory=list)  # [section, type, name, cents, "sale" | "cost" | None] per line
 
 
 def _excel_total(cents_list: list[int]) -> str:
@@ -84,11 +89,15 @@ def _excel_total(cents_list: list[int]) -> str:
 
 def make_report(seed: int) -> Report:
     rng = random.Random(seed)
+    # About one report in three is "tidy": only plain sales and costs with clear names, so figures that can be
+    # Complete come up too, and a missing hold would show.
+    tidy = rng.random() < 0.35
     body: list[list] = []
     stored: dict[str, str] = {}
     expected: dict[str, Expected] = {}
     totals = 0
     line_rows: list[int] = []
+    lines: list[list] = []
     breakable: list[tuple[int, str]] = []  # (body index, section) of totals that may be broken on purpose
     held_sections: set[str] = set()  # sections holding an "Unapplied Cash" account
 
@@ -100,14 +109,17 @@ def make_report(seed: int) -> Report:
         month = rng.randint(1, 10)
         pool = (INCOME_TYPES if section == "Income" else COSTS_TYPES
                 if section in ("Cost of Goods Sold", "Expenses") else OTHER_TYPES)
+        if tidy and section in ("Income", "Cost of Goods Sold", "Expenses"):
+            pool = sorted(SALE_TYPES) if section == "Income" else sorted(COST_TYPES)
         kind = rng.choice(pool)
-        cents = rng.randint(1, 500_000) if rng.random() > 0.08 else -rng.randint(1, 50_000)
-        if rng.random() < 0.03:
+        cents = rng.randint(1, 500_000) if tidy or rng.random() > 0.08 else -rng.randint(1, 50_000)
+        if not tidy and rng.random() < 0.03:
             cents = 0
         unapplied = any(a.startswith("Unapplied Cash") for a in account_path)
         if section == "Income" and kind in SALE_TYPES and cents >= 0 and not unapplied:
             counts = "sale"
-        elif section in ("Cost of Goods Sold", "Expenses") and kind in COST_TYPES and cents >= 0 and not unapplied:
+        elif (section in ("Cost of Goods Sold", "Expenses") and cents >= 0 and not unapplied
+              and (kind in COST_TYPES or (section == "Cost of Goods Sold" and kind in COGS_ONLY_COST_TYPES))):
             counts = "cost"
         else:
             counts = None
@@ -126,7 +138,9 @@ def make_report(seed: int) -> Report:
         # Stored exactly, as the real export stores line amounts ("750.0"); openpyxl alone would write some
         # as 16-digit approximations ("68.76000000000001"), which MargenX rightly refuses as not exact cents.
         stored[f"J{excel_row(len(body))}"] = f"{'-' if cents < 0 else ''}{abs(cents) // 100}.{abs(cents) % 100:02d}"
-        body.append([None, f"{month:02d}/{day:02d}/2026", kind, str(rng.randint(1000, 9999)), rng.choice(NAMES), "", "",
+        name = rng.choice(TIDY_NAMES if tidy and section in ("Income", "Cost of Goods Sold", "Expenses") else NAMES)
+        lines.append([section, kind, name, cents, counts])
+        body.append([None, f"{month:02d}/{day:02d}/2026", kind, str(rng.randint(1000, 9999)), name, "", "",
                      "Made-up line", "Checking", cents / 100, None])
         cents_list.append(cents)
 
@@ -176,6 +190,8 @@ def make_report(seed: int) -> Report:
             add_total("Total Cost of Goods Sold", mine, section)
             cents += mine
         names = [a for a in ACCOUNTS[section] if a != "Cost of Goods Sold"]
+        if tidy:
+            names = [a for a in names if not a.startswith("Unapplied Cash")]
         for name in rng.sample(names, rng.randint(1, min(3, len(names)))):
             cents += add_account(section, name, 0, [])
         add_total(f"Total {section}", cents, section)
@@ -216,4 +232,63 @@ def make_report(seed: int) -> Report:
             [None, "Transaction date", "Transaction type", "Num", "Name", "Location", "Class full name", "Description",
              "Item split account", "Amount", "Balance"],
             *body, [], [], [], ["Accrual Basis Saturday, October 31, 2026 05:00 PM GMTZ"]]
-    return Report(rows, stored, expected, totals, line_rows)
+    for line in lines:  # a held section counts nothing
+        if expected[line[0]].broken:
+            line[4] = None
+    return Report(rows, stored, expected, totals, line_rows, lines)
+
+
+def who(section: str, kind: str, name: str) -> tuple[str | None, str | None]:
+    """The customer and job a line's Name proves, from the written rule S5: "Customer:Job" with exactly one
+    ":" and text on both sides; with no ":", the customer only on an Invoice or Sales Receipt line in Income
+    or Cost of Goods Sold; otherwise nobody (a payee is never a customer)."""
+    name = name.strip()
+    if name.count(":") == 1:
+        customer, job = (part.strip() for part in name.split(":"))
+        return (customer, job) if customer and job else (None, None)
+    if ":" not in name and name and kind in SALE_TYPES and section in ("Income", "Cost of Goods Sold"):
+        return name, None
+    return None, None
+
+
+def expected_figures(report: Report) -> tuple[dict, dict]:
+    """Each customer's and each job's counted sales and job costs, in whole cents, when the owner has said
+    that sub-customers are jobs and that every cost account holds job costs. Every customer or job named
+    on any line is listed, counted or not."""
+    customers: dict[str, list[int]] = {}
+    jobs: dict[tuple[str, str], list[int]] = {}
+    for section, kind, name, cents, counts in report.lines:
+        customer, job = who(section, kind, name)
+        if customer is None:
+            continue
+        mine = customers.setdefault(customer, [0, 0])
+        theirs = jobs.setdefault((customer, job), [0, 0]) if job else None
+        if counts:
+            index = 0 if counts == "sale" else 1
+            mine[index] += cents
+            if theirs is not None:
+                theirs[index] += cents
+    return customers, jobs
+
+
+def expected_customer_status(report: Report) -> dict[str, tuple[bool, bool]]:
+    """Whether each customer's sales and job costs can be Complete, from the written rule S8, with every cost
+    account answered "job costs" and no line answered: a figure is held by its section's broken totals, by
+    any line in it that isn't counted and is this customer's or nobody's, and by any counted line that is
+    nobody's (its customer isn't known)."""
+    customers, _ = expected_figures(report)
+    sections = {"sales": ("Income",), "costs": ("Cost of Goods Sold", "Expenses")}
+    status = {}
+    for customer in customers:
+        complete = []
+        for which in ("sales", "costs"):
+            held = any(report.expected[s].broken for s in sections[which] if s in report.expected)
+            for section, kind, name, cents, counts in report.lines:
+                if section not in sections[which]:
+                    continue
+                owner, _ = who(section, kind, name)
+                if (not counts and owner in (None, customer)) or (counts and owner is None):
+                    held = True
+            complete.append(not held)
+        status[customer] = tuple(complete)
+    return status

@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from decimal import Decimal
 
 from openpyxl import Workbook
 
@@ -123,3 +124,59 @@ def csv_bytes(rows) -> bytes:
         text = "" if value is None else str(value)
         return f'"{text}"' if "," in text else text
     return "\n".join(",".join(cell(v) for v in row) for row in rows).encode()
+
+
+def report_rows(sections: dict[str, list[tuple[str, list[list]]]]) -> list[list]:
+    """A whole Profit and Loss Detail from sections of accounts and their lines, with every total and
+    summary row worked out here (in whole cents) in the layout seen. sections maps "Income", "Cost of
+    Goods Sold", "Expenses", "Other Income" or "Other Expense" to [(account, [lines])]."""
+    def cents(value) -> int:
+        """Exact: a value with fractions of a cent is refused, never rounded (the automated review of 7da2180)."""
+        exact = Decimal(str(value))
+        if exact != exact.quantize(Decimal("0.01")):
+            raise ValueError(f"{value} isn't a whole number of cents")
+        return int(exact * 100)
+
+    def money(c: int) -> Decimal:
+        return Decimal(c) / 100  # written to the workbook exactly
+
+    body: list[list] = [["Ordinary Income/Expenses"]]
+    sums: dict[str, int] = {}
+
+    def section(name: str) -> None:
+        accounts = sections.get(name)
+        if not accounts:
+            sums[name] = 0
+            return
+        body.append([name])
+        total = 0
+        for account, lines in accounts:
+            body.append([account])
+            account_total = sum(cents(l[9]) for l in lines)
+            body.extend(lines)
+            body.append(total_row(f"Total for {account}", money(account_total)))
+            total += account_total
+        body.append(total_row(f"Total {name}", money(total)))
+        sums[name] = total
+
+    def total_row(label, amount):
+        return [label, None, None, None, None, None, None, None, None, amount]
+
+    section("Income")
+    section("Cost of Goods Sold")
+    body.append(total_row("Gross Profit", money(sums["Income"] - sums["Cost of Goods Sold"])))
+    section("Expenses")
+    ordinary = sums["Income"] - sums["Cost of Goods Sold"] - sums["Expenses"]
+    body.append(total_row("Net Ordinary Income", money(ordinary)))
+    if sections.get("Other Income") or sections.get("Other Expense"):
+        body.append(["Other Income/Expense"])
+        if sections.get("Other Income"):
+            section("Other Income")
+        else:
+            body.append([None, "Other Income"])
+            sums["Other Income"] = 0
+        section("Other Expense")
+        body.append(total_row("Net Other Income", money(sums["Other Income"] - sums["Other Expense"])))
+        ordinary += sums["Other Income"] - sums["Other Expense"]
+    body.append(total_row("Net Income", money(ordinary)))
+    return pnl_rows(body=body)
