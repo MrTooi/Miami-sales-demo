@@ -10,6 +10,11 @@ mode switched on and the app reachable from that computer alone (pilot_safety),
 a pilot shop's own files may be read with the owner's consent. Either way, files
 are processed in memory for this session only and never saved; "End session"
 forgets everything.
+
+In the website trial (trial_access, issue #131), only the invited person gets in and the page
+checks their login itself. Until the QuickBooks Profit and Loss Detail reading (#128) is finished,
+the trial shows the made-up sample files only: it has no upload box, and the gate in front of the
+app refuses every upload.
 """
 from __future__ import annotations
 
@@ -32,6 +37,7 @@ import job_profit as jp  # noqa: E402
 import marginx_insights as mi  # noqa: E402
 import marginx_ui as ui  # noqa: E402
 import pilot_safety as ps  # noqa: E402
+import trial_access as ta  # noqa: E402
 
 SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"
 SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")
@@ -70,7 +76,15 @@ def _request_headers():
         return None
 
 
-PILOT = ps.pilot_mode(os.environ, st.get_option("server.address"), _request_headers())
+TRIAL_CONFIG = ta.TrialConfig.from_environ(os.environ)
+TRIAL = TRIAL_CONFIG is not None
+if ta.TrialConfig.requested(os.environ) and not TRIAL:
+    # The trial switch is on but its settings are missing or invalid: show nothing rather than fall back
+    # to the ordinary page (the gate in front refuses every request in this case too).
+    st.error("This MargenX trial copy isn't set up correctly, so it can't open. Please tell the MargenX team.")
+    st.stop()
+# The two modes never mix: the website trial is never the laptop pilot.
+PILOT = False if TRIAL else ps.pilot_mode(os.environ, st.get_option("server.address"), _request_headers())
 
 # The app's frame: a top bar (brand, session, End session), the check-up's steps down the side, and
 # the page beside them. "End session" forgets every file, answer and result: the session's state is
@@ -89,23 +103,57 @@ def _release_uploads() -> bool:
         return False
 
 
+def _session_id() -> str | None:
+    try:
+        from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
+
+        ctx = get_script_run_ctx()
+        return ctx.session_id if ctx else None
+    except Exception:
+        return None
+
+
+TRIAL_EMAIL = None
+if TRIAL:
+    # The page checks the login itself, and ties this session to that one person for good. The tie is made
+    # in one locked step with a fresh check against logouts (a logout in another tab can't slip in between),
+    # and the register never forgets it while the process runs, so a logout also reaches disconnected tabs.
+    TRIAL_SID = _session_id()
+    TRIAL_LOGIN = ta.login_from_headers(_request_headers(), ta.checker_for(TRIAL_CONFIG))
+    TRIAL_EMAIL = TRIAL_LOGIN[0] if TRIAL_LOGIN else None
+    if TRIAL_LOGIN is None or TRIAL_SID is None or not ta.REGISTER.bind(TRIAL_SID, *TRIAL_LOGIN):
+        _release_uploads()
+        st.session_state.clear()
+        st.error("Your login has ended or couldn't be checked. Reload this page to log in again.")
+        st.stop()
+
+
 with st.container(key="mx-bar"):
     bar_brand, bar_end = st.columns([3.2, 1.6], vertical_alignment="center")
     with bar_brand:
-        ui.top_bar(PILOT)
+        ui.top_bar(PILOT, TRIAL)
     end_clicked = bar_end.button("End session and clear everything", width="stretch")
+    if TRIAL:
+        # Log out posts to the gate, which answers it itself (trial_access.TrialGate._log_out): it ends the
+        # login and every MargenX session of this person, then sends the browser to Cloudflare's logout.
+        with bar_end:
+            ui.logout_button(ta.LOGOUT_PATH)
 if end_clicked:
     released = _release_uploads()
     st.session_state.clear()
     st.session_state["session_number"] = session + 1
-    st.session_state["just_ended"] = "released" if released else "unconfirmed"
+    st.session_state["just_ended"] = "trial" if TRIAL else "released" if released else "unconfirmed"
     st.rerun()
 # The "session ended" message goes right under the top bar, above the steps, so it's the first thing seen
 # on a phone too (where the steps column sits above the page).
 ended = st.session_state.pop("just_ended", None)
 if ended:
     with st.container(key="mx-ended"):
-        if ended == "released":
+        if ended == "trial":
+            # The trial reads no uploaded file (samples only), so there is no file to talk about.
+            st.success("Session ended. Your answers and results were cleared from this session. You can start "
+                       "again below, or press **Log out** when you're done.")
+        elif ended == "released":
             st.success("Session ended. The uploaded files were removed from MargenX's upload storage, and the answers "
                        "and results were cleared from this session. Close this browser tab and stop MargenX to finish "
                        "the visit. The original files on this laptop (Downloads, AirDrop, USB) must still be deleted "
@@ -125,7 +173,12 @@ with side:
     ui.what_you_get()
 
 with main:
-    if PILOT:
+    if TRIAL:
+        st.info(
+            f"**Private MargenX trial.** Only you can log in. {ta.SAMPLES_ONLY_NOTE} **End session** clears your "
+            "answers and results; **Log out** ends your login."
+        )
+    elif PILOT:
         st.warning(
             "**Pilot session on this laptop.** A pilot shop's own files may be used only with the shop owner present "
             "and agreeing below. Files are read in memory only, never saved, and forgotten when you press "
@@ -138,7 +191,9 @@ with main:
         )
     st.session_state["session_number"] = session
 
-    use_samples = st.toggle("Try it with the made-up sample files", value=not PILOT, key=f"samples-{session}")
+    # The trial has no upload box until #128 is finished: samples only, and no switch to turn them off.
+    use_samples = True if TRIAL else st.toggle("Try it with the made-up sample files", value=not PILOT,
+                                               key=f"samples-{session}")
     files: list[tuple[str, bytes]] = []
     slots = None  # the "Sales report / Cost report" status under the upload area
     if use_samples:
@@ -154,7 +209,8 @@ with main:
                           else "Only made-up files outside a pilot session.")
             consent_col, points_col = st.columns([1.6, 1], vertical_alignment="center")
             # The box comes first: the upload area isn't shown, so no file can be received, until it is ticked.
-            confirmed = consent_col.checkbox(ps.CONSENT_TEXT if PILOT else ps.MADE_UP_TEXT, key=f"confirm-{session}")
+            consent_text = ps.CONSENT_TEXT if PILOT else ps.MADE_UP_TEXT
+            confirmed = consent_col.checkbox(consent_text, key=f"confirm-{session}")
             with points_col:
                 ui.privacy_points(PILOT)
         with st.container(key="mx-files"):
