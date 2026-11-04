@@ -1,12 +1,14 @@
 """MargenX: recognising a supported QuickBooks Online report, step 2 of the plan in issue #128.
 
-One report is supported first: **Profit and Loss Detail**, exported from QuickBooks Online with
-"Export to Excel", on the accrual basis (Alex's 2026-11-04 decision). A file is recognised only when
-it is exactly the layout seen on 2026-10-26 (issue #128, "Layouts seen"):
+Two reports, each exported from QuickBooks Online with "Export to Excel", on the accrual basis:
+**Profit and Loss Detail** (the sales source, Alex's decisions of 2026-10-26 and 2026-11-04) and, from
+step 5a, **Sales by Customer Detail** (the cross-check, S4). A file is recognised only when it is exactly
+the layout seen on 2026-10-26 (issue #128, "Layouts seen"):
 
 - Excel row 1: the company name, alone in column A.
 - Row 2: the title "Profit and Loss Detail", alone in column A.
-- Row 3: the period, such as "January 1-October 26, 2026", alone in column A.
+- Row 3: the period, such as "January 1-October 26, 2026", alone in column A. Sales by Customer
+  Detail may also say "All Dates" (seen in its export); Profit and Loss Detail may not (not seen).
 - Row 4: empty. Any other line there (a filter, a currency, an extra header detail) isn't in the
   layout seen, so the file isn't recognised.
 - Row 5: the column names. Column A has no name; the others are only names from the layout seen.
@@ -28,6 +30,8 @@ from datetime import date
 import quickbooks_rules as qr
 
 PROFIT_AND_LOSS_DETAIL = qr.PROFIT_AND_LOSS_DETAIL
+SALES_BY_CUSTOMER_DETAIL = qr.SALES_BY_CUSTOMER_DETAIL
+ALL_DATES = "All Dates"
 
 # Column names of Profit and Loss Detail in the layout seen (after column A, which has no name).
 # Required: the columns a line needs. Optional: columns seen in the layout that MargenX never uses
@@ -35,6 +39,15 @@ PROFIT_AND_LOSS_DETAIL = qr.PROFIT_AND_LOSS_DETAIL
 # shows only for companies that track them). Any other column isn't in the layout seen.
 PNL_REQUIRED_COLUMNS = ("Transaction date", "Transaction type", "Num", "Name", "Amount")
 PNL_OPTIONAL_COLUMNS = ("Location", "Class full name", "Description", "Item split account", "Balance")
+# Sales by Customer Detail, in the layout seen. Quantity and Sales price are optional: they are only ever
+# checks on a line's Amount, never money themselves.
+SBCD_REQUIRED_COLUMNS = ("Transaction date", "Transaction type", "Num", "Amount")
+SBCD_OPTIONAL_COLUMNS = ("Product/Service full name", "Description", "Quantity", "Sales price", "Balance")
+# What each report's checks need: its required and optional columns, and whether "All Dates" was seen.
+REPORT_RULES = {
+    PROFIT_AND_LOSS_DETAIL: (PNL_REQUIRED_COLUMNS, PNL_OPTIONAL_COLUMNS, False),
+    SALES_BY_CUSTOMER_DETAIL: (SBCD_REQUIRED_COLUMNS, SBCD_OPTIONAL_COLUMNS, True),
+}
 
 MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
           "November", "December")
@@ -51,25 +64,35 @@ FOOTER = re.compile(rf"(Accrual|Cash) Basis ({'|'.join(WEEKDAYS)}), {_MONTH} (\d
 
 
 @dataclass(frozen=True)
-class ProfitAndLossDetailLayout:
-    """A Profit and Loss Detail file whose layout passed every check. Nothing in it is counted yet."""
+class ReportLayout:
+    """A report whose layout passed every check. Nothing in it is counted yet."""
     company: str
     period: str  # as written in row 3
-    period_start: date
-    period_end: date
+    period_start: date | None  # None only for "All Dates" (Sales by Customer Detail)
+    period_end: date | None
     basis: str  # "Accrual": the only basis recognised for now
     footer: str  # as written
     footer_row: int  # Excel row number
     header_row: int  # Excel row number of the column names (5)
     columns: dict[str, int]  # column name -> position (0 = column A)
     body: tuple[tuple[int, tuple[str, ...]], ...]  # every non-empty row between the column names and the footer
+    report: str = PROFIT_AND_LOSS_DETAIL  # which report it is
+
+    def in_period(self, when: date) -> bool:
+        """True when a date is inside the report's period ("All Dates" holds every date)."""
+        if self.period_start is None or self.period_end is None:
+            return True
+        return self.period_start <= when <= self.period_end
+
+
+ProfitAndLossDetailLayout = ReportLayout  # the name steps 2-4 used
 
 
 @dataclass(frozen=True)
 class Recognition:
     """What a file was recognised as. layout is set only when problems is empty."""
     report: str  # the report the file claims to be (its title)
-    layout: ProfitAndLossDetailLayout | None
+    layout: ReportLayout | None
     problems: tuple[str, ...]  # plain reasons the file isn't exactly the layout MargenX knows
 
 
@@ -84,11 +107,18 @@ def _alone_in_column_a(cells: list[str] | tuple[str, ...]) -> str | None:
     return _clean(cells[0]) if filled == [0] else None
 
 
-def claims_profit_and_loss_detail(signs: list[str]) -> bool:
-    """True when the file's title (one of the QuickBooks signs found above its lines) is "Profit and Loss
-    Detail": the file then gets that report's checks, and their plain reasons, rather than the general
+def claimed_report(signs: list[str]) -> str | None:
+    """The supported report a file's title claims to be (one of the QuickBooks signs found above its lines),
+    or None: the file then gets that report's checks, and their plain reasons, rather than the general
     refusal."""
-    return any(qr._text(sign) == qr._text(f"the title '{PROFIT_AND_LOSS_DETAIL}'") for sign in signs)
+    for report in REPORT_RULES:
+        if any(qr._text(sign) == qr._text(f"the title '{report}'") for sign in signs):
+            return report
+    return None
+
+
+def claims_profit_and_loss_detail(signs: list[str]) -> bool:
+    return claimed_report(signs) == PROFIT_AND_LOSS_DETAIL
 
 
 def _date(year: str, month: str, day: str) -> date | None:
@@ -98,8 +128,10 @@ def _date(year: str, month: str, day: str) -> date | None:
         return None
 
 
-def _period(text: str) -> tuple[date, date] | str:
+def _period(text: str, all_dates_allowed: bool = False) -> tuple[date | None, date | None] | str:
     """The report's dates from row 3, or the plain reason they can't be read."""
+    if all_dates_allowed and text == ALL_DATES:
+        return None, None
     one, two = PERIOD_ONE_YEAR.fullmatch(text), PERIOD_TWO_YEARS.fullmatch(text)
     if one:
         start_month, start_day, end_month, end_day, year = one.groups()
@@ -133,11 +165,22 @@ def _footer(text: str) -> tuple[str, str | None]:
 
 
 def recognise_profit_and_loss_detail(table: list[tuple[int, list[str]]], *, is_xlsx: bool) -> Recognition:
-    """Check a file against the Profit and Loss Detail layout seen (see the module docstring).
+    """Check a file against the Profit and Loss Detail layout seen (see the module docstring)."""
+    return recognise(table, is_xlsx=is_xlsx, report=PROFIT_AND_LOSS_DETAIL)
+
+
+def recognise_sales_by_customer_detail(table: list[tuple[int, list[str]]], *, is_xlsx: bool) -> Recognition:
+    """Check a file against the Sales by Customer Detail layout seen (see the module docstring)."""
+    return recognise(table, is_xlsx=is_xlsx, report=SALES_BY_CUSTOMER_DETAIL)
+
+
+def recognise(table: list[tuple[int, list[str]]], *, is_xlsx: bool, report: str) -> Recognition:
+    """Check a file against one supported report's layout seen.
 
     table: every non-empty row of the file with its row number, as job_intake reads it. Every
     problem found is listed, so the owner sees all of them at once.
     """
+    required_columns, optional_columns, all_dates_allowed = REPORT_RULES[report]
     problems: list[str] = []
     if not is_xlsx:
         problems.append("it's a CSV file, and MargenX knows only the Excel version of this report")
@@ -146,12 +189,12 @@ def recognise_profit_and_loss_detail(table: list[tuple[int, list[str]]], *, is_x
     company = _alone_in_column_a(rows.get(1, ()))
     if not company:
         problems.append("row 1 should hold only the company name, in column A")
-    if _alone_in_column_a(rows.get(2, ())) != PROFIT_AND_LOSS_DETAIL:
-        problems.append("row 2 should hold only the title 'Profit and Loss Detail', in column A")
+    if _alone_in_column_a(rows.get(2, ())) != report:
+        problems.append(f"row 2 should hold only the title '{report}', in column A")
     period_text = _alone_in_column_a(rows.get(3, ()))
-    period: tuple[date, date] | str = "row 3 should hold only the report's dates, in column A"
+    period: tuple[date | None, date | None] | str = "row 3 should hold only the report's dates, in column A"
     if period_text:
-        period = _period(period_text)
+        period = _period(period_text, all_dates_allowed)
     if isinstance(period, str):
         problems.append(period)
     if 4 in rows:
@@ -169,7 +212,7 @@ def recognise_profit_and_loss_detail(table: list[tuple[int, list[str]]], *, is_x
             names.pop()
         if not names or names[0].strip():
             problems.append("column A of row 5 should have no name, as in the layout MargenX knows")
-        known = PNL_REQUIRED_COLUMNS + PNL_OPTIONAL_COLUMNS
+        known = required_columns + optional_columns
         for position, raw in enumerate(names[1:], start=1):
             name = _clean(raw)
             if not name:
@@ -180,7 +223,7 @@ def recognise_profit_and_loss_detail(table: list[tuple[int, list[str]]], *, is_x
                 problems.append(f"the column '{name}' appears twice")
             else:
                 columns[name] = position
-        missing = [name for name in PNL_REQUIRED_COLUMNS if name not in columns]
+        missing = [name for name in required_columns if name not in columns]
         if missing:
             problems.append("it's missing the column" + ("s " if len(missing) > 1 else " ")
                             + ", ".join(f"'{m}'" for m in missing))
@@ -213,13 +256,13 @@ def recognise_profit_and_loss_detail(table: list[tuple[int, list[str]]], *, is_x
             problems.append("it has no rows between the column names and the basis line")
 
     if problems:
-        return Recognition(PROFIT_AND_LOSS_DETAIL, None, tuple(dict.fromkeys(problems)))
+        return Recognition(report, None, tuple(dict.fromkeys(problems)))
     start, end = period  # type: ignore[misc]
-    layout = ProfitAndLossDetailLayout(
+    layout = ReportLayout(
         company=company, period=period_text, period_start=start, period_end=end, basis=basis, footer=footer_text,
         footer_row=footer_row, header_row=5, columns=columns,
-        body=tuple((n, tuple(cells)) for n, cells in after_header[:-1]))
-    return Recognition(PROFIT_AND_LOSS_DETAIL, layout, ())
+        body=tuple((n, tuple(cells)) for n, cells in after_header[:-1]), report=report)
+    return Recognition(report, layout, ())
 
 
 def _letter(index: int) -> str:
@@ -242,24 +285,25 @@ def quickbooks_refusal(table: list[tuple[int, list[str]]], title_lines: int, *, 
     """The plain reason a QuickBooks file is refused, or None for any other file (S2).
 
     Says what made MargenX think the file came from QuickBooks, and what to upload instead.
-    - A Profit and Loss Detail file gets its own checks: it is either recognised, or told exactly
-      how it differs from the layout MargenX knows. Either way it is still refused for now, because
-      its lines aren't read yet (steps 3 and 4).
+    - A Profit and Loss Detail or Sales by Customer Detail file gets its own checks: it is either
+      recognised, or told exactly how it differs from the layout MargenX knows. Either way it is still
+      refused for now: uploads of QuickBooks reports are switched on only in a later step.
     - "Transaction List by Customer" mixes invoices with customer payments: never a sales file.
     - Any other QuickBooks look-alike is refused, naming the sign that was found.
     """
     signs = qr.quickbooks_signs(table, title_lines)
     if not signs:
         return None
-    if claims_profit_and_loss_detail(signs):
-        found = recognise_profit_and_loss_detail(table, is_xlsx=is_xlsx)
+    claimed = claimed_report(signs)
+    if claimed:
+        found = recognise(table, is_xlsx=is_xlsx, report=claimed)
         if found.layout:
             layout = found.layout
-            return (f"This is QuickBooks' Profit and Loss Detail report for {layout.company} ({layout.period}, "
+            return (f"This is QuickBooks' {claimed} report for {layout.company} ({layout.period}, "
                     f"{layout.basis.lower()} basis). MargenX recognises this report, but {NOT_YET} {PLAIN_LIST}")
         shown = found.problems[:3]
         more = len(found.problems) - len(shown)
-        return (f"This looks like a QuickBooks report (it has the title '{PROFIT_AND_LOSS_DETAIL}'), but it isn't "
+        return (f"This looks like a QuickBooks report (it has the title '{claimed}'), but it isn't "
                 "exactly in the layout MargenX knows: " + "; ".join(shown) + (f" (and {more} more)" if more else "")
                 + f". Exporting it again won't help yet: {NOT_YET} {PLAIN_LIST}")
     if any(qr.TRANSACTION_LIST.match(sign.removeprefix("the title '")) for sign in signs if sign.startswith("the title")):

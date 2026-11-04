@@ -244,6 +244,9 @@ class S9DuplicateTests(unittest.TestCase):
                                                 deposits[1]: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt),
                                                 cost: qf.LineAnswer(qf.DUPLICATE, duplicate_of=first)}))
         self.assertEqual(4, sum("can't prove yet" in w for w in result.warnings))
+        warnings = {int(w.split(":")[0].removeprefix("Row ")): w for w in result.warnings}
+        self.assertIn("its amount stays in the figures", warnings[second])  # an Invoice MargenX counts by itself
+        self.assertIn("its amount isn't in the figures", warnings[deposits[0]])  # a Deposit it holds
         self.assertEqual((D("2100"), qp.NEEDS_A_CHECK), (result.company["sales"].amount, result.company["sales"].status))
         self.assertEqual((D("700"), qp.NEEDS_A_CHECK), (result.company["job_costs"].amount,
                                                        result.company["job_costs"].status))
@@ -647,6 +650,41 @@ class StepRuleTests(unittest.TestCase):
         for figure in (result.company["sales"], result.customers[X]["sales"], result.jobs[A]["sales"]):
             self.assertEqual(qp.NEEDS_A_CHECK, figure.status)  # ... but the section's totals still hold it
             self.assertTrue(figure.unknown_amount)
+
+    def test_a_line_really_outside_the_period_leaves_the_figures_on_the_owners_word(self):
+        # The automated review of 533c565: a successful exclusion adds no amount and no hold of its own, while any hold
+        # from the report itself stays.
+        late = L(2, "Invoice", "1009", f"{X}:Job A", 700.0, 4700.0)
+        late[1] = "11/02/2026"
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", 4000.0, 4000.0), late])]})
+        row = rows_of(report, num="1009")[0]
+        before = figures(report, answers())
+        self.assertIn(row, holds(before.company["sales"]))
+        result = figures(report, answers(lines={row: qf.LineAnswer(qf.OUTSIDE_PERIOD)}))
+        self.assertEqual((), result.warnings)
+        self.assertEqual((D("4000"), qp.COMPLETE), (result.company["sales"].amount, result.company["sales"].status))
+        self.assertEqual(qf.OUTSIDE_PERIOD, next(r for r in result.resolutions if r.row == row).kind)
+        self.assertNotIn(row, holds(result.jobs[A]["sales"]))
+        # A report-level hold (a total that doesn't match) still stays after the exclusion.
+        rows = fx.report_rows({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", 4000.0, 4000.0),
+                                                             late])]})
+        rows = [r if r[:1] != ["Total for Design income"] else fx.total("Total for Design income", 4800.0) for r in rows]
+        broken = qp.read_profit_and_loss_detail("t.xlsx", fx.xlsx(rows))
+        result = figures(broken, answers(lines={rows_of(broken, num="1009")[0]: qf.LineAnswer(qf.OUTSIDE_PERIOD)}))
+        self.assertEqual(qp.NEEDS_A_CHECK, result.company["sales"].status)
+        self.assertTrue(result.company["sales"].unknown_amount)
+
+    def test_an_out_of_period_answer_that_names_a_customer_or_job_is_refused(self):
+        late = L(2, "Invoice", "1009", f"{X}:Job A", 700.0, 4700.0)
+        late[1] = "11/02/2026"
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", 4000.0, 4000.0), late])]})
+        row = rows_of(report, num="1009")[0]
+        for extra in ({"customer": X}, {"job": "Job A"}, {"no_job": True}, {"outside_job": "Old patio (fictional)"}):
+            with self.subTest(extra):
+                result = figures(report, answers(lines={row: qf.LineAnswer(qf.OUTSIDE_PERIOD, **extra)}))
+                self.assertIn("never belongs to a customer or a job", " ".join(result.warnings))
+                self.assertIn(row, holds(result.company["sales"]))
+                self.assertNotEqual(qf.OUTSIDE_PERIOD, next(r for r in result.resolutions if r.row == row).kind)
 
     def test_an_answer_for_an_out_of_period_line_must_be_true(self):
         report = two_jobs()
