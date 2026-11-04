@@ -43,11 +43,11 @@ _MONTH = "(" + "|".join(MONTHS) + ")"
 # "January 1-October 26, 2026" (seen), and the same across two years: "November 1, 2025-October 31, 2026".
 PERIOD_ONE_YEAR = re.compile(rf"{_MONTH} (\d{{1,2}})-{_MONTH} (\d{{1,2}}), (\d{{4}})")
 PERIOD_TWO_YEARS = re.compile(rf"{_MONTH} (\d{{1,2}}), (\d{{4}})-{_MONTH} (\d{{1,2}}), (\d{{4}})")
-# "Accrual Basis Monday, October 26, 2026 07:04 PM GMTZ" (seen). The time zone is "GMTZ" or an offset
-# such as "GMT-04:00" (real offsets only: up to 14 hours, minutes 00, 15, 30 or 45). The date and time
-# say when the report was run; only the basis is used, but every part must be real for the line to count.
+# "Accrual Basis Monday, October 26, 2026 07:04 PM GMTZ" (seen). Only the time zone seen, "GMTZ", is
+# accepted; any other form (an offset such as "GMT-04:00") isn't the layout seen and is refused. The date
+# and time say when the report was run; only the basis is used, but every part must be real.
 FOOTER = re.compile(rf"(Accrual|Cash) Basis ({'|'.join(WEEKDAYS)}), {_MONTH} (\d{{1,2}}), (\d{{4}}) "
-                    r"(\d{1,2}):(\d{2}) (AM|PM) GMT(?:Z|[+-](\d{2}):(\d{2}))")
+                    r"(\d{1,2}):(\d{2}) (AM|PM) GMTZ")
 
 
 @dataclass(frozen=True)
@@ -123,11 +123,9 @@ def _footer(text: str) -> tuple[str, str | None]:
     if not found:
         return "", ("the last line isn't the basis line MargenX knows (for example 'Accrual Basis Monday, "
                     f"October 26, 2026 07:04 PM GMTZ'); it says '{qr._shown(text)}'")
-    basis, weekday, month, day, year, hour, minute, _, offset_hours, offset_minutes = found.groups()
+    basis, weekday, month, day, year, hour, minute, _ = found.groups()
     run_on = _date(year, month, day)
-    real_offset = offset_hours is None or (int(offset_hours) <= 14 and offset_minutes in ("00", "15", "30", "45"))
-    if (run_on is None or WEEKDAYS[run_on.weekday()] != weekday or not (1 <= int(hour) <= 12 and int(minute) < 60)
-            or not real_offset):
+    if run_on is None or WEEKDAYS[run_on.weekday()] != weekday or not (1 <= int(hour) <= 12 and int(minute) < 60):
         return "", f"the last line, '{qr._shown(text)}', doesn't hold a real date and time"
     if basis == "Cash":
         return "", ("it's a cash-basis report. MargenX reads accrual-basis reports only for now: in QuickBooks, "
