@@ -47,7 +47,8 @@ class KnownAnswerTests(unittest.TestCase):
         """Step 4: with sub-customers as jobs and every cost account answered "job costs"."""
         accounts = {line.account_path: qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT) for line in result.lines
                     if line.section in ("Cost of Goods Sold", "Expenses")}
-        got = qf.figures(result, qf.OwnerAnswers(sub_customers_are_jobs=True, accounts=accounts))
+        got = qf.figures(result, qf.OwnerAnswers(report=qf.report_fingerprint(result), sub_customers_are_jobs=True,
+                                                 accounts=accounts))
         customers, jobs = gen.expected_figures(report)
         self.assertEqual(set(customers), set(got.customers))
         self.assertEqual(set(jobs), set(got.jobs))

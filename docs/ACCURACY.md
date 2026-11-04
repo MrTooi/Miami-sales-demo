@@ -136,8 +136,9 @@ Since step 4 the generator also works out, from the written rule for names (S5),
 each job's sales and job costs, with every cost account answered "job costs". Names include
 "Customer:Job", a customer alone, vendors, two ":" and an empty job, which must prove nothing.
 
-What this proves: line counts, section sums, customer and job sums, and statuses, for the layouts and
-transaction types the generator makes. It doesn't prove each row's own outcome or other layouts:
+What this proves: line counts, section sums and statuses, customer and job sums, and each customer's
+sales and costs status, for the layouts and transaction types the generator makes. It doesn't check job
+statuses (one report never makes a job Complete) or the owner's answers, which the targeted tests do. It doesn't prove each row's own outcome or other layouts:
 `tests/test_quickbooks_pnl.py` and `tests/test_quickbooks_figures.py` hold those targeted cases,
 including the plan's own S8 and S9 examples worked by hand.
 
