@@ -46,7 +46,7 @@ class KnownAnswerTests(unittest.TestCase):
                         (want.lines, want.line_sum, want.included, want.included_lines, want.not_resolved,
                          want.not_resolved_lines, want.complete, not want.broken),
                         (got.lines, cents(got.line_sum), cents(got.included), got.included_lines,
-                         cents(got.not_resolved), got.not_resolved_lines, got.status == qp.COMPLETE, got.verified),
+                         cents(got.not_resolved), got.not_resolved_lines, got.all_counted, got.totals_match),
                         name)
                     broken += want.broken
                     complete += want.complete

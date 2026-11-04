@@ -8,7 +8,7 @@ in whole cents, from the written rules (issue #128, plan v7, S1 and S6), not fro
 - a line is a sale only when it's an Invoice or a Sales Receipt, its amount isn't negative, and its
   customer's whole group adds up to its own totals (and the grand TOTAL to every line);
 - everything else is "not resolved", and never dropped;
-- a customer is Complete only when its group matched and every line in it was counted.
+- a customer's lines are all counted only when its group matched and every line in it was counted.
 """
 from __future__ import annotations
 

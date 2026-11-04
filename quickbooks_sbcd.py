@@ -19,9 +19,14 @@ Detail:
    "not resolved", with the reason, and is never dropped.
 
 The customer is the heading; a sub-customer is the nested heading inside it. Here nothing but the
-nesting says whose a line is, so a customer group is verified only when it is closed by its own
-matching totals, and a sub-customer counts as a job only once the owner says so (S5, used in step 5b).
-Customers and sub-customers nested more than two levels deep aren't the layout seen: they are held.
+nesting says whose a line is, and the nesting can't be proven from this report alone: if a "Total for
+X with sub-customers" row were missing, a sub-customer would read exactly like a customer of its own,
+and every remaining total would still match (the automated review of 4ef0f9d). So this report never
+proves who a line belongs to (ownership_proven is always False), and no customer figure is ever built
+from it alone. A customer's totals matching (totals_match) and all its lines being counted
+(all_counted) say only that its lines and totals agree. Who a line belongs to comes from Profit and
+Loss Detail's "Customer:Job" Names, which step 5b cross-checks line by line (S4, S5). Customers and
+sub-customers nested more than two levels deep aren't the layout seen: they are held.
 
 Plan rule S4: when both reports are uploaded, sales come from Profit and Loss Detail; this report is a
 cross-check only, and its sales are never added (step 5b). Nothing here is wired to an upload yet: job_intake
@@ -78,8 +83,8 @@ class SalesLine:
 @dataclass(frozen=True)
 class CustomerCoverage:
     """Every line of one customer's group (sub-customers included), by outcome."""
-    customer: str
-    verified: bool
+    customer: str  # the heading, as read: who the lines belong to isn't proven by this report (see above)
+    totals_match: bool  # every total in its group matched its lines, and nothing in the report is unexplained
     lines: int
     line_sum: Decimal | None
     stored_total: Decimal | None  # the group's own closing total, under the float rule
@@ -95,8 +100,10 @@ class CustomerCoverage:
             self.included + self.not_resolved == self.stored_total
 
     @property
-    def status(self) -> str:
-        return qp.COMPLETE if self.verified and self.adds_up and self.not_resolved_lines == 0 else qp.NEEDS_A_CHECK
+    def all_counted(self) -> bool:
+        """Its totals matched and every line in its group counts as a sale. This is about the lines and totals
+        agreeing, never a customer figure: this report alone doesn't prove who the lines belong to."""
+        return self.totals_match and self.adds_up and self.not_resolved_lines == 0
 
 
 @dataclass(frozen=True)
@@ -112,6 +119,12 @@ class SalesByCustomerDetail:
     @property
     def reconciled(self) -> bool:
         return not self.problems
+
+    @property
+    def ownership_proven(self) -> bool:
+        """Never, from this report alone (see the module docstring): a missing "with sub-customers" total turns a
+        sub-customer into a customer of its own with every other total still matching."""
+        return False
 
 
 @dataclass
@@ -336,7 +349,9 @@ class _Reader:
         self.close_finished(upto=name)
         top = self.stack[-1] if self.stack else None
         if top is None or top.name != name:
-            self.problem(row, f"'{text}' doesn't close the customer above it")
+            # What it was meant to close can't be told, so it holds the whole report (the automated review of
+            # 4ef0f9d).
+            self.problem(row, f"'{text}' doesn't close the customer above it", None)
             return
         if with_sub:
             if not top.children:
@@ -440,7 +455,7 @@ def reconcile(layout: qlayouts.ReportLayout, source: str, sheet: str = "") -> Sa
         known = [l for l in mine if l.amount is not None]
         line_sum, _ = reader.sums(group.all_lines())
         coverage[name] = CustomerCoverage(
-            customer=name, verified=verified[name], lines=len(mine), line_sum=line_sum, stored_total=group.full_total,
+            customer=name, totals_match=verified[name], lines=len(mine), line_sum=line_sum, stored_total=group.full_total,
             included=sum((l.amount for l in known if l.outcome == qp.INCLUDED), ZERO),
             included_lines=sum(1 for l in mine if l.outcome == qp.INCLUDED),
             not_resolved=sum((l.amount for l in known if l.outcome == qp.NOT_RESOLVED), ZERO),

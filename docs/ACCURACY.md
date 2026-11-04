@@ -160,11 +160,16 @@ cross-check for Profit and Loss Detail's sales (step 5b); its own sales are neve
 
 **One report worked by hand** (`tests/test_quickbooks_sbcd.py`, made up):
 
-| Customer | Lines | Its total | Counted | Held | Status |
+| Customer | Lines | Its total | Counted | Held | All counted |
 |---|---|---|---|---|---|
-| Coral Cafe | $900 (2 × $450), $300 | $1,200 | $1,200 | $0 | Complete |
-| Palm Gym › Lobby, Pool | $600 (3 × $200); $100 (4 × $25), −$50 credit memo | $650 | $700 | −$50 | Needs a check |
-| Bay Clinic | $120, −$20 refund | $100 | $120 | −$20 | Needs a check |
+| Coral Cafe | $900 (2 × $450), $300 | $1,200 | $1,200 | $0 | yes |
+| Palm Gym › Lobby, Pool | $600 (3 × $200); $100 (4 × $25), −$50 credit memo | $650 | $700 | −$50 | no |
+| Bay Clinic | $120, −$20 refund | $100 | $120 | −$20 | no |
+
+"All counted" means the customer's lines and totals agree. It is never a customer figure: this
+report alone can't prove who a line belongs to (a deleted "Total for X with sub-customers" row makes a
+sub-customer read as a customer of its own, with every other total still matching). Who a line
+belongs to comes from Profit and Loss Detail's "Customer:Job" Names in step 5b.
 
 The grand TOTAL, $1,950, and every Quantity total (9) match too.
 
@@ -173,7 +178,8 @@ The grand TOTAL, $1,950, and every Quantity total (9) match too.
 - Quantity × Sales price amounts, with every type of line;
 - totals stored with Excel's float noise.
 
-It works out each customer's sum, counted and held amounts and status in whole cents. One report in
+It works out, in whole cents, each customer's sum, its counted and held amounts, and whether its
+lines are all counted. One report in
 four has a customer's total or the grand TOTAL off by a cent or a fraction of a cent: that customer,
 or every customer, must be held.
 

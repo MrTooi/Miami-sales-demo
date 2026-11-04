@@ -116,14 +116,15 @@ class GoodReportTests(unittest.TestCase):
                           lines["1001"].quantity_text, lines["1001"].price_text))
 
     def test_each_customer_adds_up_and_has_its_status(self):
-        expected = {CORAL: (2, D("1200"), D("0"), qp.COMPLETE), PALM: (3, D("700"), D("-50"), qp.NEEDS_A_CHECK),
-                    BAY: (2, D("120"), D("-20"), qp.NEEDS_A_CHECK)}
+        expected = {CORAL: (2, D("1200"), D("0"), True), PALM: (3, D("700"), D("-50"), False),
+                    BAY: (2, D("120"), D("-20"), False)}
         for name, (count, included, held, status) in expected.items():
             with self.subTest(name):
                 coverage = self.report.customers[name]
                 self.assertEqual((count, included, held, status), (coverage.lines, coverage.included,
-                                                                   coverage.not_resolved, coverage.status))
+                                                                   coverage.not_resolved, coverage.all_counted))
                 self.assertTrue(coverage.adds_up)
+        self.assertFalse(self.report.ownership_proven)
 
 
 class HeldTests(unittest.TestCase):
@@ -132,7 +133,7 @@ class HeldTests(unittest.TestCase):
     def assert_held(self, report, customer, says):
         self.assertTrue(any(says in p.text for p in report.problems), report.problems)
         coverage = report.customers[customer]
-        self.assertEqual((qp.NEEDS_A_CHECK, 0), (coverage.status, coverage.included_lines))
+        self.assertEqual((False, False, 0), (coverage.totals_match, coverage.all_counted, coverage.included_lines))
         for line in report.lines:
             if line.customer == customer:
                 self.assertEqual(qp.NOT_RESOLVED, line.outcome)
@@ -140,7 +141,7 @@ class HeldTests(unittest.TestCase):
     def test_a_customer_total_a_cent_off_holds_that_customer_only(self):
         report = read(replaced(fx.sbcd_rows(customers()), "Total for Coral Cafe (fictional)", amount=D("1199.99")))
         self.assert_held(report, CORAL, "it says 1,199.99, but its lines add up to 1,200.00")
-        self.assertTrue(report.customers[PALM].verified)
+        self.assertTrue(report.customers[PALM].totals_match)
 
     def test_a_grand_total_that_doesnt_match_holds_every_customer(self):
         report = read(replaced(fx.sbcd_rows(customers()), "TOTAL", amount=D("1950.10")))
@@ -153,7 +154,7 @@ class HeldTests(unittest.TestCase):
 
     def test_the_float_rule_reads_a_noisy_stored_total(self):
         rows = replaced(fx.sbcd_rows(customers()), "Total for Coral Cafe (fictional)", amount=D("1199.9999999999998"))
-        self.assertEqual(qp.COMPLETE, read(rows).customers[CORAL].status)
+        self.assertTrue(read(rows).customers[CORAL].all_counted)
 
     def test_a_line_whose_quantity_times_price_isnt_its_amount_is_held(self):
         bay = [S(7, "Invoice", "1006", "Planters", 1, 120, amount="125"), S(8, "Refund", "1007", "Planters", -1, 20)]
@@ -163,7 +164,7 @@ class HeldTests(unittest.TestCase):
         self.assertIn("Quantity × Sales price (1 × 120) doesn't give its Amount (125)", line.reason)
         # The automated review of 5f45bbd: it holds its whole customer, not just itself.
         self.assert_held(report, BAY, "doesn't give its Amount")
-        self.assertTrue(report.customers[CORAL].verified)
+        self.assertTrue(report.customers[CORAL].totals_match)
 
     def test_a_good_line_beside_a_bad_one_is_held_too(self):
         good = S(7, "Invoice", "1006", "Planters", 1, 120)
@@ -214,7 +215,7 @@ class HeldTests(unittest.TestCase):
             with self.subTest(says):
                 report = read(variant)
                 self.assertTrue(any(says in p.text for p in report.problems), report.problems)
-                self.assertNotIn(qp.COMPLETE, [c.status for c in report.customers.values()])
+                self.assertFalse(any(c.all_counted for c in report.customers.values()))
 
     def test_nesting_deeper_than_one_sub_customer_is_held(self):
         rows = fx.sbcd_rows(customers())
@@ -223,8 +224,8 @@ class HeldTests(unittest.TestCase):
             ["Total for North wing", None, None, None, None, None, D("3"), None, D("600")]] + rows[index + 2:]
         report = read(deep)
         self.assertTrue(any("nested 3 levels deep" in p.text for p in report.problems), report.problems)
-        self.assertEqual(qp.NEEDS_A_CHECK, report.customers[PALM].status)
-        self.assertTrue(report.customers[CORAL].verified)
+        self.assertFalse(report.customers[PALM].all_counted)
+        self.assertTrue(report.customers[CORAL].totals_match)
 
     def test_a_parent_with_its_own_lines_and_sub_customers(self):
         rows = fx.sbcd_rows([(PALM, [S(3, "Invoice", "1010", "Design", 1, 80)],
@@ -232,7 +233,28 @@ class HeldTests(unittest.TestCase):
         report = read(rows)
         self.assertEqual((), report.problems)
         self.assertEqual({"1010": (PALM,), "1003": (PALM, "Lobby")}, {l.num: l.customer_path for l in report.lines})
-        self.assertEqual((D("680"), qp.COMPLETE), (report.customers[PALM].included, report.customers[PALM].status))
+        self.assertEqual((D("680"), True), (report.customers[PALM].included, report.customers[PALM].all_counted))
+
+    def test_a_missing_with_sub_customers_total_is_why_ownership_is_never_proven(self):
+        # The automated review of 4ef0f9d: "A, invoice, Total for A, B, invoice, Total for B, TOTAL" reads as two
+        # customers, whether or not B was A's sub-customer with A's combined total deleted. Both readings match every
+        # remaining total, so this report never proves ownership; step 5b takes it from Profit and Loss Detail.
+        rows = fx.sbcd_rows([(PALM, [S(3, "Invoice", "1010", "Design", 1, 80)],
+                              [("Lobby", [S(4, "Invoice", "1003", "Plants", 3, 200)])])])
+        deleted = [r for r in rows if r[:1] != [f"Total for {PALM} with sub-customers"]]
+        report = read(deleted)
+        self.assertEqual({PALM, "Lobby"}, set(report.customers))
+        self.assertFalse(report.ownership_proven)
+        self.assertEqual({PALM: (PALM,), "Lobby": ("Lobby",)}, {l.customer: l.customer_path for l in report.lines})
+
+    def test_a_total_that_closes_nothing_above_it_holds_the_whole_report(self):
+        rows = fx.sbcd_rows(customers())
+        index = next(i for i, r in enumerate(rows) if r[:1] == ["Total for Lobby"])
+        variant = rows[:index] + [["Total for Somebody else"] + rows[index][1:]] + rows[index + 1:]
+        report = read(variant)
+        self.assertTrue(any("doesn't close the customer above it" in p.text and p.section is None
+                            for p in report.problems), report.problems)
+        self.assertFalse(report.customers[CORAL].totals_match)  # another customer, otherwise fine, is held too
 
     def test_no_line_ever_disappears(self):
         rows = fx.sbcd_rows(customers())
