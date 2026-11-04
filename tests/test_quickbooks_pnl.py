@@ -285,6 +285,33 @@ class LineProblemTests(unittest.TestCase):
         self.assertTrue(any("row 30 is a line" in p.text for p in report.problems), report.problems)
         self.assertEqual(qp.NEEDS_A_CHECK, report.sections["Other Income"].status)
 
+    def test_only_an_empty_other_income_may_be_written_in_column_b(self):
+        # The automated review of e98debc: an empty section in column B has no closing total, so only the one
+        # seen (an empty "Other Income") is allowed; any other section there holds the whole report.
+        for section, at in (("Income", 7), ("Cost of Goods Sold", 13), ("Expenses", 19), ("Other Expense", 30)):
+            with self.subTest(section):
+                rows = with_body({at: [None, section]})
+                report = read(rows, stored={})
+                self.assertTrue(any(f"has '{section}' alone in column B" in p.text for p in report.problems),
+                                report.problems)
+                self.assertFalse(any(s.verified for s in report.sections.values()))
+                self.assertNotIn(qp.COMPLETE, [s.status for s in report.sections.values()])
+
+    def test_very_deep_nesting_is_held_never_a_crash(self):
+        # The automated review of e98debc: thousands of nested headings must give a held report, with every
+        # line kept, not a RecursionError.
+        depth = 3000
+        body = [["Ordinary Income/Expenses"], ["Income"], *([f"Level {i}"] for i in range(depth)),
+                fx.line(2, "Invoice", "1301", "Bay Clinic (fictional)", 10.0, 10.0),
+                fx.total(f"Total for Level {depth - 1}", 10.0),
+                *(fx.total(f"Total for Level {i} with sub-accounts", 10.0) for i in reversed(range(depth - 1))),
+                fx.total("Total Income", 10.0), fx.total("Net Ordinary Income", 10.0), fx.total("Net Income", 10.0)]
+        report = read(fx.pnl_rows(body=body), stored={})
+        self.assertTrue(any("nested more than 10 accounts deep" in p.text for p in report.problems))
+        self.assertEqual(([D("10.0")], qp.NEEDS_A_CHECK), ([l.amount for l in report.lines],
+                                                           report.sections["Income"].status))
+        self.assertEqual(qp.NOT_RESOLVED, report.lines[0].outcome)
+
     def test_no_line_ever_disappears(self):
         variants = {
             "good": fx.pnl_rows(),

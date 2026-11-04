@@ -63,6 +63,10 @@ NUMBER = re.compile(r"-?\d+(\.\d+)?")
 TOTAL_NUMBER = re.compile(r"-?\d+(\.\d+)?([eE][-+]?\d{1,3})?")
 LINE_DATE = re.compile(r"(\d{2})/(\d{2})/(\d{4})")
 CENT = Decimal("0.01")
+# QuickBooks allows sub-accounts about 5 levels deep. Anything deeper isn't a layout seen: its section is held.
+MAX_ACCOUNT_DEPTH = 10
+# The one section seen written alone in column B: an empty "Other Income".
+COLUMN_B_SECTION = "Other Income"
 FLOAT_TOLERANCE = Decimal("0.000001")
 
 
@@ -191,9 +195,12 @@ class _Group:
     direct_closed: bool = False  # its own "Total for X" was read
 
     def all_lines(self) -> list:
-        found = list(self.lines)
-        for child in self.children:
-            found += child.all_lines()
+        """Its own lines and every sub-account's, without recursion (nesting depth is never trusted)."""
+        found, waiting = [], [self]
+        while waiting:
+            group = waiting.pop()
+            found += group.lines
+            waiting += group.children
         return found
 
 
@@ -229,7 +236,7 @@ class _Reader:
         first = _clean(cells[0])
         filled = [i for i, c in enumerate(cells) if i > 0 and c.strip()]
         if not first:
-            if filled == [1] and _clean(cells[1]) in SECTION_NAMES:
+            if filled == [1]:
                 return "heading_b", _clean(cells[1])
             return ("line", "") if filled else ("other", "")
         if not filled:
@@ -330,7 +337,7 @@ class _Reader:
                     and not self.stack[0].children and not self.stack[0].lines:
                 # Seen: the section "Cost of Goods Sold" holds an account of the same name, as its first heading.
                 self.account_heading(nxt, row, text)
-            elif kind in ("heading", "heading_b") and text in SECTION_NAMES:
+            elif (kind == "heading" and text in SECTION_NAMES) or (kind == "heading_b" and text == COLUMN_B_SECTION):
                 self.close_section_if_open(row)
                 allowed = ORDINARY_SECTIONS if self.wrapper == ORDINARY_WRAPPER else (
                     OTHER_SECTIONS if self.wrapper == OTHER_WRAPPER else ())
@@ -340,8 +347,9 @@ class _Reader:
                 self.sections.setdefault(text, group)
                 self.stack = [group]
             elif kind == "heading_b":
+                # Only an empty "Other Income" was seen in column B; anything else there holds the whole report.
                 self.problem(row, f"row {row} has '{text}' alone in column B, which the layout MargenX knows "
-                             "doesn't have")
+                             "doesn't have", None)
             elif kind == "heading" and (text in SUMMARIES or TOTAL_PLAIN.fullmatch(text)):
                 self.problem(row, f"'{text}' has no amount")
             elif kind == "heading":
@@ -380,6 +388,9 @@ class _Reader:
         if not top.is_section and top.lines and not top.direct_closed:
             self.problem(row, f"'{top.name}' has lines but no 'Total for {top.name}' before its sub-account "
                          f"'{text}'", top.section)
+        if len(self.stack) > MAX_ACCOUNT_DEPTH:
+            self.problem(row, f"'{text}' is nested more than {MAX_ACCOUNT_DEPTH} accounts deep, which the layout "
+                         "MargenX knows doesn't have", top.section)
         group = _Group(text, top.section, False, row)
         top.children.append(group)
         self.stack.append(group)
