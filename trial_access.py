@@ -56,7 +56,10 @@ LOGOUT_PATH = "/_trial/logout"
 CLOUDFLARE_LOGOUT = "/cdn-cgi/access/logout"
 # Replaced on every response: nothing from the trial is stored by the browser or any cache, and no other
 # site can show the trial inside a frame.
-FORCED_HEADERS = ((b"cache-control", b"no-store"), (b"x-frame-options", b"DENY"))
+# Referrer-Policy same-origin keeps the browser sending the trial's real Origin on the Log out form's POST
+# (a no-referrer policy would make it "null", which the gate refuses).
+FORCED_HEADERS = ((b"cache-control", b"no-store"), (b"x-frame-options", b"DENY"),
+                  (b"referrer-policy", b"same-origin"))
 # Added next to any policy Streamlit sets (a browser applies every policy it gets, so ours always holds).
 ADDED_HEADERS = ((b"content-security-policy", b"frame-ancestors 'none'"),)
 SECURITY_HEADERS = FORCED_HEADERS + ADDED_HEADERS
@@ -164,14 +167,24 @@ class SessionRegister:
     _lock: threading.Lock = field(default_factory=threading.Lock)
     loop: asyncio.AbstractEventLoop | None = None
 
-    def bind(self, session_id: str, email: str) -> bool:
-        """Tie a session to a person. A session can never move to another person, and a session ended
-        by a logout can't be used again: False then (the caller clears it)."""
+    def bind(self, session_id: str, email: str, issued_at: float) -> bool:
+        """Tie a session to a person's login, in one locked step with the check that the login hasn't been
+        logged out: a logout can never slip in between the two. False (the caller clears the session) if
+        the session belongs to someone else, was ended by a logout, or the login was logged out; in the
+        last case the session is retired here, so it can never be resumed either."""
         with self._lock:
             if session_id in self._retired:
                 return False
-            current = self._sessions.setdefault(session_id, email)
-            return current == email
+            owner = self._sessions.get(session_id, email)
+            if owner != email:
+                return False
+            ended = self._logged_out_at.get(email)
+            if ended is not None and issued_at <= ended:  # the logout won
+                self._sessions.pop(session_id, None)
+                self._retired.add(session_id)
+                return False
+            self._sessions[session_id] = email
+            return True
 
     def may_resume(self, session_id: str, email: str) -> bool:
         """Whether a live connection may resume this earlier session: not if a logout ended it, nor if it
@@ -427,13 +440,14 @@ class TrialGate:
                 state["watch"].cancel()
 
 
-def identity_from_headers(headers: Mapping[str, str] | None, checker: TokenChecker | None) -> str | None:
-    """The invited person's email for this page view, or None. The page checks the token itself too,
-    so a gate mistake alone can't open the trial."""
+def login_from_headers(headers: Mapping[str, str] | None, checker: TokenChecker | None) -> tuple[str, float] | None:
+    """The invited person's email and login time for this page view, or None. The page checks the token
+    itself too, so a gate mistake alone can't open the trial. The page then binds its session with
+    SessionRegister.bind, which checks the login against logouts again, under the register's lock."""
     if headers is None or checker is None:
         return None
     lowered = {k.lower(): v for k, v in headers.items()}
     claims = checker.claims(lowered.get(TOKEN_HEADER))
     if claims is None or not REGISTER.login_allowed(claims["email"], float(claims["iat"])):
         return None
-    return claims["email"]
+    return claims["email"], float(claims["iat"])

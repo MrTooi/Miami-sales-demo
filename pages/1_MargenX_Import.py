@@ -110,11 +110,13 @@ def _session_id() -> str | None:
 
 TRIAL_EMAIL = None
 if TRIAL:
-    # The page checks the login itself, and ties this session to that one person for good. The register
-    # never forgets that while the process runs, so a logout also reaches tabs that have disconnected.
+    # The page checks the login itself, and ties this session to that one person for good. The tie is made
+    # in one locked step with a fresh check against logouts (a logout in another tab can't slip in between),
+    # and the register never forgets it while the process runs, so a logout also reaches disconnected tabs.
     TRIAL_SID = _session_id()
-    TRIAL_EMAIL = ta.identity_from_headers(_request_headers(), ta.checker_for(TRIAL_CONFIG))
-    if TRIAL_EMAIL is None or TRIAL_SID is None or not ta.REGISTER.bind(TRIAL_SID, TRIAL_EMAIL):
+    TRIAL_LOGIN = ta.login_from_headers(_request_headers(), ta.checker_for(TRIAL_CONFIG))
+    TRIAL_EMAIL = TRIAL_LOGIN[0] if TRIAL_LOGIN else None
+    if TRIAL_LOGIN is None or TRIAL_SID is None or not ta.REGISTER.bind(TRIAL_SID, *TRIAL_LOGIN):
         _release_uploads()
         st.session_state.clear()
         st.error("Your login has ended or couldn't be checked. Reload this page to log in again.")

@@ -31,6 +31,7 @@ SETTINGS = {"MARGINX_TRIAL": "1", "MARGINX_TRIAL_TEAM_DOMAIN": TEAM, "MARGINX_TR
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 OTHER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 CONFIG = ta.TrialConfig.from_environ(SETTINGS)
+ISSUED = time.time() - 5  # a login time from before every logout these tests make
 
 
 class FakeKeys:
@@ -126,33 +127,41 @@ class TokenTests(unittest.TestCase):
 class RegisterTests(unittest.TestCase):
     def test_a_session_belongs_to_one_person_for_good(self):
         r = ta.SessionRegister()
-        self.assertTrue(r.bind("s1", INVITED))
-        self.assertTrue(r.bind("s1", INVITED))
-        self.assertFalse(r.bind("s1", "someone@example.com"))
+        self.assertTrue(r.bind("s1", INVITED, ISSUED))
+        self.assertTrue(r.bind("s1", INVITED, ISSUED))
+        self.assertFalse(r.bind("s1", "someone@example.com", ISSUED))
         self.assertTrue(r.may_resume("s1", INVITED))
         self.assertFalse(r.may_resume("s1", "someone@example.com"))
         self.assertTrue(r.may_resume("never-seen", INVITED))  # Streamlit then starts a new session
 
     def test_log_out_retires_every_session_and_refuses_earlier_logins(self):
         r = ta.SessionRegister()
-        r.bind("s1", INVITED)
-        r.bind("s2", INVITED)
-        r.bind("x", "someone@example.com")
+        r.bind("s1", INVITED, ISSUED)
+        r.bind("s2", INVITED, ISSUED)
+        r.bind("x", "someone@example.com", ISSUED)
         self.assertEqual(["s1", "s2"], sorted(r.log_out(INVITED, now=1000)))
         for sid in ("s1", "s2"):
-            self.assertFalse(r.bind(sid, INVITED))  # never usable again, even by the same person
+            self.assertFalse(r.bind(sid, INVITED, ISSUED))  # never usable again, even by the same person
             self.assertFalse(r.may_resume(sid, INVITED))
         self.assertTrue(r.may_resume("x", "someone@example.com"))
         self.assertFalse(r.login_allowed(INVITED, 999))
         self.assertFalse(r.login_allowed(INVITED, 1000))
         self.assertTrue(r.login_allowed(INVITED, 1001))
-        self.assertTrue(r.bind("s3", INVITED))  # a new login gets a new session
+        self.assertTrue(r.bind("s3", INVITED, ISSUED))  # a new login gets a new session
+
+    def test_binding_and_the_logout_check_are_one_step(self):
+        r = ta.SessionRegister()
+        r.log_out(INVITED, now=1000)
+        self.assertFalse(r.bind("late", INVITED, 999))  # checked before a logout that has since happened
+        self.assertFalse(r.bind("late", INVITED, 2000))  # and retired: not even a newer login can use it
+        self.assertFalse(r.may_resume("late", INVITED))
+        self.assertTrue(r.bind("new", INVITED, 1001))  # a login after the logout works
 
     def test_no_session_is_forgotten_before_a_logout(self):
         # Streamlit keeps a disconnected tab's session so it can reconnect: its owner must stay known.
         r = ta.SessionRegister()
-        r.bind("disconnected", INVITED)
-        r.bind("open", INVITED)
+        r.bind("disconnected", INVITED, ISSUED)
+        r.bind("open", INVITED, ISSUED)
         self.assertFalse(hasattr(r, "prune"))
         self.assertEqual(["disconnected", "open"], sorted(r.log_out(INVITED)))
 
@@ -295,20 +304,24 @@ class GateTests(unittest.TestCase):
         self.assertEqual(b"no-store", headers[b"cache-control"])
         self.assertEqual(b"frame-ancestors 'none'", headers[b"content-security-policy"])
         self.assertEqual(b"DENY", headers[b"x-frame-options"])
+        self.assertEqual(b"same-origin", headers[b"referrer-policy"])
 
     def test_what_streamlit_says_about_caching_and_framing_is_replaced(self):
         upstream = [(b"Cache-Control", b"public, max-age=31536000"), (b"cache-control", b"no-cache"),
-                    (b"X-Frame-Options", b"SAMEORIGIN"), (b"content-security-policy", b"default-src 'self'")]
+                    (b"X-Frame-Options", b"SAMEORIGIN"), (b"content-security-policy", b"default-src 'self'"),
+                    (b"Referrer-Policy", b"no-referrer")]
         rec = run(self.kw, http_scope("/static/app.js", tok=token()), Recorder(upstream_headers=upstream))
         headers = [(k.lower(), v) for k, v in rec.sent[0]["headers"]]
         self.assertEqual([b"no-store"], [v for k, v in headers if k == b"cache-control"])
         self.assertEqual([b"DENY"], [v for k, v in headers if k == b"x-frame-options"])
+        # no-referrer would make the Log out form's Origin "null"; same-origin keeps the real one.
+        self.assertEqual([b"same-origin"], [v for k, v in headers if k == b"referrer-policy"])
         # A browser applies every policy it gets, so Streamlit's stays and ours is added.
         self.assertEqual([b"default-src 'self'", b"frame-ancestors 'none'"],
                          [v for k, v in headers if k == b"content-security-policy"])
 
     def test_uploads_are_off_and_refused_before_their_body_is_read(self):
-        self.register.bind("s1", INVITED)
+        self.register.bind("s1", INVITED, ISSUED)
         for method in ("PUT", "DELETE", "POST", "GET", "OPTIONS", "HEAD"):
             for path in ("/_stcore/upload_file/s1/file-1", "/_stcore/upload_file/s1", "/_stcore/upload_file"):
                 scope = http_scope(path, method=method, tok=token(), origin=ORIGIN, length=10)
@@ -328,8 +341,8 @@ class GateTests(unittest.TestCase):
         self.assertEqual("websocket.receive", rec.app_got[0]["type"])
 
     def test_a_session_ended_by_logout_or_someone_elses_cannot_be_resumed(self):
-        self.register.bind("mine", INVITED)
-        self.register.bind("theirs", "someone@example.com")
+        self.register.bind("mine", INVITED, ISSUED)
+        self.register.bind("theirs", "someone@example.com", ISSUED)
         ok = Recorder([{"type": "websocket.receive", "text": "hi"}])
         self.assertTrue(run(self.kw, ws_scope(tok=token(), resume="mine"), ok).app_called)
         self.assertTrue(self.refused(ws_scope(tok=token(), resume="theirs")))
@@ -422,9 +435,9 @@ class GateTests(unittest.TestCase):
         return asyncio.run(scenario()), closed
 
     def test_log_out_ends_everything_and_goes_to_cloudflares_logout(self):
-        self.register.bind("s1", INVITED)
-        self.register.bind("s2", INVITED)
-        self.register.bind("x", "someone@example.com")
+        self.register.bind("s1", INVITED, ISSUED)
+        self.register.bind("s2", INVITED, ISSUED)
+        self.register.bind("x", "someone@example.com", ISSUED)
         rec, closed = self.log_out_via_button()
         self.assertEqual(303, rec.status())
         self.assertEqual(b"/cdn-cgi/access/logout", dict(rec.sent[0]["headers"])[b"location"])
@@ -432,7 +445,7 @@ class GateTests(unittest.TestCase):
         self.assertFalse(rec.body_read)
         self.assertEqual(["s1", "s2"], sorted(closed))
         self.assertFalse(self.register.login_allowed(INVITED, time.time() - 1))
-        self.assertFalse(self.register.bind("s1", INVITED))
+        self.assertFalse(self.register.bind("s1", INVITED, ISSUED))
         self.assertTrue(self.register.may_resume("x", "someone@example.com"))
 
     def test_older_browsers_without_fetch_metadata_can_log_out_from_the_page(self):
@@ -440,7 +453,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual(303, rec.status())
 
     def test_another_site_cannot_log_the_person_out(self):
-        self.register.bind("s1", INVITED)
+        self.register.bind("s1", INVITED, ISSUED)
         attempts = {
             "GET, no fetch metadata (a link or image on another site)": {"method": "GET", "site": None, "origin": None},
             "GET, same-origin": {"method": "GET"},
@@ -457,7 +470,7 @@ class GateTests(unittest.TestCase):
             self.assertEqual(403, rec.status(), name)
             self.assertEqual([], closed, name)
         self.assertTrue(self.register.login_allowed(INVITED, time.time() - 1))
-        self.assertTrue(self.register.bind("s1", INVITED))
+        self.assertTrue(self.register.bind("s1", INVITED, ISSUED))
 
     def test_log_out_needs_a_valid_login_like_everything_else(self):
         rec, closed = self.log_out_via_button(tok=token(email="someone@example.com"))
@@ -468,7 +481,7 @@ class GateTests(unittest.TestCase):
         """The round-2 regression: tab A disconnects (Streamlit keeps its session to reconnect), tab B
         reruns, B logs out, then A's old session ID is tried with a fresh login."""
         register = ta.SessionRegister()
-        register.bind("tab-a", INVITED)
+        register.bind("tab-a", INVITED, ISSUED)
         # Tab B's page runs while Streamlit reports A as inactive (disconnected, kept for reconnecting).
         from streamlit.runtime import Runtime
 
@@ -479,7 +492,7 @@ class GateTests(unittest.TestCase):
             rt.is_active_session.side_effect = lambda sid: sid != "tab-a"
             return rt
         with mock.patch.dict("os.environ", SETTINGS), mock.patch.object(ta, "REGISTER", register), \
-                mock.patch.object(ta, "identity_from_headers", return_value=INVITED), \
+                mock.patch.object(ta, "login_from_headers", return_value=(INVITED, ISSUED)), \
                 mock.patch.object(Runtime, "instance", side_effect=instance):
             at = AppTest.from_file(PAGE, default_timeout=30)
             at.run()
@@ -564,11 +577,13 @@ class GateTests(unittest.TestCase):
 class IdentityTests(unittest.TestCase):
     def test_the_page_checks_the_token_itself(self):
         with mock.patch.object(ta, "REGISTER", ta.SessionRegister()):
-            self.assertEqual(INVITED, ta.identity_from_headers({"Cf-Access-Jwt-Assertion": token()}, checker()))
-            self.assertIsNone(ta.identity_from_headers({}, checker()))
-            self.assertIsNone(ta.identity_from_headers(None, checker()))
-            self.assertIsNone(ta.identity_from_headers({"cf-access-jwt-assertion": token()}, None))
-            self.assertIsNone(ta.identity_from_headers({"cf-access-jwt-assertion": token(email="x@example.com")},
+            issued = int(time.time()) - 5
+            self.assertEqual((INVITED, issued),
+                             ta.login_from_headers({"Cf-Access-Jwt-Assertion": token(iat=issued)}, checker()))
+            self.assertIsNone(ta.login_from_headers({}, checker()))
+            self.assertIsNone(ta.login_from_headers(None, checker()))
+            self.assertIsNone(ta.login_from_headers({"cf-access-jwt-assertion": token()}, None))
+            self.assertIsNone(ta.login_from_headers({"cf-access-jwt-assertion": token(email="x@example.com")},
                                                        checker()))
 
 
@@ -577,7 +592,7 @@ class TrialPageTests(unittest.TestCase):
         register = register or ta.SessionRegister()
         patches = [mock.patch.dict("os.environ", {**SETTINGS, **(environ or {})}),
                    mock.patch.object(ta, "REGISTER", register),
-                   mock.patch.object(ta, "identity_from_headers", return_value=email)]
+                   mock.patch.object(ta, "login_from_headers", return_value=(email, ISSUED) if email else None)]
         return register, patches
 
     def run_page(self, **kw):
@@ -624,6 +639,28 @@ class TrialPageTests(unittest.TestCase):
             at.run()
         self.assertIn("log in again", at.error[0].value)
         self.assertEqual(0, len(register._sessions))
+
+    def test_a_logout_between_the_login_check_and_the_first_bind_wins(self):
+        """The round-3 regression: a new tab passes its login check, another tab logs out at that moment,
+        then the new tab binds. The new tab must be refused and its session retired for good."""
+        register = ta.SessionRegister()
+
+        def check_then_pause(headers, checker):
+            login = (INVITED, ISSUED)  # the login check passes...
+            register.log_out(INVITED, now=ISSUED + 1)  # ...and another tab logs out before the first bind
+            return login
+        with mock.patch.dict("os.environ", SETTINGS), mock.patch.object(ta, "REGISTER", register), \
+                mock.patch.object(ta, "login_from_headers", side_effect=check_then_pause):
+            at = AppTest.from_file(PAGE, default_timeout=30)
+            at.run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("log in again", at.error[0].value)
+        self.assertEqual({}, register._sessions)
+        (late,) = register._retired
+        # A fresh login can't pick that session up through the gate either.
+        rec = run({"register": register}, ws_scope(tok=token(iat=time.time()), resume=late))
+        self.assertTrue(rec.closed())
+        self.assertFalse(rec.app_called)
 
     def test_the_trial_never_turns_into_the_laptop_pilot(self):
         at, _ = self.run_page(environ={"MARGINX_PILOT": "1"})
