@@ -22,6 +22,8 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal
 
+from finance_engine import MAX_MONEY
+
 # What a line may count as. There is deliberately no "left out": type rules never prove that a
 # line can leave the figures (S9). Only a proven duplicate or a line dated outside the report's
 # period can be excluded, and those are decided later, by the owner and the ledger (step 3).
@@ -89,6 +91,14 @@ def _amount(amount: Decimal) -> Decimal:
     return amount
 
 
+def _not_cents(amount: Decimal) -> bool:
+    """A line amount must be exact cents and no larger than MargenX's money limit; it is never rounded to
+    fit (the #129 review). The size is checked first, so the cents check can never fail on a huge number."""
+    if amount.copy_abs() > MAX_MONEY:
+        return True
+    return amount != amount.quantize(Decimal("0.01"))
+
+
 def _not_resolved(reason: str) -> Outcome:
     return Outcome(NOT_RESOLVED, reason + " It stays not resolved and is shown with its amount; it is never "
                                           "left out.")
@@ -134,6 +144,8 @@ def classify_profit_and_loss_line(account_path: tuple[str, ...] | list[str], tra
       amount, an unknown section and any type nobody has tested.
     """
     amount = _amount(amount)
+    if _not_cents(amount):
+        return _not_resolved(f"Its amount {amount} isn't an exact number of cents within MargenX's limit.")
     path = tuple(account_path)
     kind, shown = _text(transaction_type), (transaction_type or "").strip()
     unapplied = _unapplied_cash(path)
@@ -168,6 +180,8 @@ def classify_sales_by_customer_line(transaction_type: str | None, amount: Decima
     Receipt, its amount isn't negative, and its customer group adds up to the group's own total
     (group_verified, decided by steps 2 and 3). It never holds a cost."""
     amount = _amount(amount)
+    if _not_cents(amount):
+        return _not_resolved(f"Its amount {amount} isn't an exact number of cents within MargenX's limit.")
     kind, shown = _text(transaction_type), (transaction_type or "").strip()
     if not group_verified:
         return _not_resolved("Its customer group hasn't been checked against the group's own total yet.")
