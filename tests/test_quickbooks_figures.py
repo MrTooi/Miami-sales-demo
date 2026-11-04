@@ -449,6 +449,21 @@ class ManualReviewOf151a80aTests(unittest.TestCase):
         self.assertEqual([l.amount_text for l in first.lines], [l.amount_text for l in second.lines])
         self.assertNotEqual(qf.report_fingerprint(first), qf.report_fingerprint(second))
 
+    def test_a_duplicate_answer_that_names_a_customer_or_job_is_refused(self):
+        # The automated review of adf24cb: a Deposit named "X:Job A" matching a Job A receipt, but answered as a
+        # duplicate "for Job B", contradicts itself: it stays held instead of being excluded.
+        report = read({"Income": [("Design income", [
+            L(2, "Sales Receipt", "1001", f"{X}:Job A", 700.0, 700.0, "", "Checking"),
+            L(2, "Deposit", "", f"{X}:Job A", 700.0, 1400.0, "", "Checking")])]})
+        receipt, deposit = rows_of(report, transaction_type="Sales Receipt")[0], rows_of(report, transaction_type="Deposit")[0]
+        for extra in ({"job": "Job B"}, {"customer": Y}, {"no_job": True}, {"outside_job": "Old patio (fictional)"}):
+            with self.subTest(extra):
+                result = figures(report, answers(lines={deposit: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt,
+                                                                                **extra)}))
+                self.assertIn("never belongs to a customer or a job", " ".join(result.warnings))
+                self.assertEqual(qp.NEEDS_A_CHECK, result.company["sales"].status)
+                self.assertNotEqual(qf.DUPLICATE, next(r for r in result.resolutions if r.row == deposit).kind)
+
     def test_a_refused_move_holds_the_proposed_customer_too(self):
         # The re-review's blocker 2: a -$200 credit memo exported under X that the owner says is Y's. It stays held,
         # and Y (with its job) needs a check too: Y's sales could be $100, not $300.

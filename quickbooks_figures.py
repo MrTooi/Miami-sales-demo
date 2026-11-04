@@ -315,6 +315,11 @@ class _Builder:
             return (f"'{line.transaction_type.strip()}' is money received or moved, so MargenX leaves it unresolved "
                     "(AGENTS.md rule 4), interest posted as a deposit included; you can only mark it as a duplicate "
                     "of a counted line or as dated outside the period")
+        if answer.kind not in (REVENUE, REDUCTION, JOB_COST) and (
+                answer.customer or answer.job or answer.no_job or answer.outside_job):
+            # Checked before anything is excluded: a duplicate or out-of-period answer that also names a customer or
+            # job contradicts itself, and is refused rather than half-applied (the automated review of adf24cb).
+            return f"'{answer.kind}' never belongs to a customer or a job"
         if answer.kind in EXCLUDED_KINDS:
             if answer.kind == OUTSIDE_PERIOD:
                 when = qp._date(line.date)
@@ -340,8 +345,6 @@ class _Builder:
             # Overhead belongs to no customer: calling a line overhead would take it away from the customer (and
             # job) its Name proves, so it is refused like any other change to what the Name proves.
             return f"its Name says it's {names_of(line)[0]}'s, so it can't be overhead"
-        if answer.customer or answer.job or answer.no_job or answer.outside_job:
-            return f"'{answer.kind}' never belongs to a customer or a job"
         return ""
 
     def attribution_problem(self, line: qp.LedgerLine, answer: LineAnswer) -> str:
