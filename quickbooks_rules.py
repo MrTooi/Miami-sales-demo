@@ -7,9 +7,11 @@ Two rules from the reviewed plan (v7), and nothing else:
   only through a tested allow-list of cost types per section. Every other line is "not
   resolved": it is never guessed and never dropped, whatever its type (S9).
 - S2: what makes a file *look like* a QuickBooks report. job_intake.read_file refuses every such
-  file with a plain reason, so it never reaches the older reader for plain lists.
+  file with a plain reason (quickbooks_layouts.quickbooks_refusal), so it never reaches the older
+  reader for plain lists.
 
-No QuickBooks layout is verified yet (that is step 2), so no upload reaches the S1 rules today.
+Step 2 (quickbooks_layouts.py) recognises the Profit and Loss Detail layout, but its lines aren't
+read yet, so no upload reaches the S1 rules today.
 Later steps call them only for lines of a verified layout, inside a section or customer group
 closed by its own matching total (steps 2 and 3). The rules only say what a line may count as;
 they never add anything up.
@@ -219,8 +221,8 @@ def quickbooks_signs(table: list[tuple[int, list[str]]], title_lines: int) -> li
 
     table: every non-empty row of the file, with its row number. title_lines: how many rows to look
     at for a title block and the column names (the reader's own limit). Looked for:
-    - in any cell of the first title_lines + 1 rows, whatever else the row holds: QuickBooks column
-      names (an exact cell match), or "Transaction type" together with "Num";
+    - in any cell of the first title_lines + 1 rows, whatever else the row holds, even alone: a
+      QuickBooks column name (an exact cell match); or "Transaction type" together with "Num";
     - in any cell above the first row holding two numbers or dates: a QuickBooks report title;
     - in any row's first filled cell: a "Total for ..." row, a basis footer or a Profit and Loss
       summary row (S2).
@@ -237,10 +239,11 @@ def quickbooks_signs(table: list[tuple[int, list[str]]], title_lines: int) -> li
         above_lines = above_lines and top and sum(1 for c in filled if DATA_CELL.match(c)) < 2
         if above_lines:
             signs += [f"the title '{_shown(c)}'" for c in filled if QUICKBOOKS_TITLE.match(c)]
-        if top and len(filled) >= 2:
+        if top:
+            # A QuickBooks-only column name counts even alone in its row (the #129 review). Only the
+            # pair "Transaction type" and "Num", common words on their own, needs both cells.
             signs += [f"the column '{_shown(c)}'" for c in filled if _text(c) in QUICKBOOKS_COLUMNS]
-            names = {_text(c) for c in filled}
-            if {"transaction type", "num"} <= names:
+            if {"transaction type", "num"} <= {_text(c) for c in filled}:
                 signs.append("the columns 'Transaction type' and 'Num'")
         if TOTAL_FOR.match(first):
             signs.append(f"the row '{_shown(first)}'")
@@ -249,22 +252,3 @@ def quickbooks_signs(table: list[tuple[int, list[str]]], title_lines: int) -> li
         elif _text(first) in SUMMARY_ROWS:
             signs.append(f"the row '{_shown(first)}'")
     return list(dict.fromkeys(signs))
-
-
-def quickbooks_refusal(table: list[tuple[int, list[str]]], title_lines: int) -> str | None:
-    """The plain reason a QuickBooks look-alike is refused, or None for any other file (S2).
-
-    No QuickBooks layout is verified yet, so every look-alike is refused. "Transaction List by
-    Customer" gets its own reason: it mixes invoices with customer payments, and its totals add
-    both, so it can never be a sales file.
-    """
-    signs = quickbooks_signs(table, title_lines)
-    if not signs:
-        return None
-    if any(TRANSACTION_LIST.match(sign.removeprefix("the title '")) for sign in signs if sign.startswith("the title")):
-        return ("This looks like QuickBooks' \"Transaction List by Customer\" report. It mixes invoices with "
-                "customer payments, and its totals add both together, so it can't be used as a sales file "
-                "(and it has no costs). Nothing from this file was used.")
-    return (f"This looks like a QuickBooks report (it has {signs[0]}), and MargenX can't read QuickBooks reports "
-            "yet, so nothing from this file was used. For now, upload a plain list with one row per sale or cost, "
-            "with columns such as Date, Customer, Job and Amount.")
