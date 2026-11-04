@@ -13,8 +13,9 @@ the text, not copied from the code:
   that isn't negative.
 - A line is a cost only in Cost of Goods Sold or Expenses, with the type Bill, Expense or Check (the
   tested allow-list), and an amount that isn't negative.
-- An account named "Unapplied Cash ..." is never counted. Other Income and Other Expense lines are
-  never counted automatically.
+- An account named "Unapplied Cash ..." only belongs in cash-basis reports, so in these (accrual)
+  reports it holds its whole section: nothing in that section is counted. Other Income and Other
+  Expense lines are never counted automatically.
 - Everything else is "not resolved", and never dropped.
 - If any total in a section doesn't match its lines to the cent, nothing in that section is
   counted: every line in it is not resolved.
@@ -89,6 +90,7 @@ def make_report(seed: int) -> Report:
     totals = 0
     line_rows: list[int] = []
     breakable: list[tuple[int, str]] = []  # (body index, section) of totals that may be broken on purpose
+    held_sections: set[str] = set()  # sections holding an "Unapplied Cash" account
 
     def excel_row(index: int) -> int:
         return 6 + index
@@ -139,6 +141,8 @@ def make_report(seed: int) -> Report:
 
     def add_account(section: str, name: str, depth: int, above: list[str]) -> list[int]:
         body.append([name])
+        if name.startswith("Unapplied Cash"):
+            held_sections.add(section)
         path = [*above, name]  # every account heading above the line counts (an "Unapplied Cash" parent too)
         mine: list[int] = []
         parent = depth < 2 and rng.random() < 0.35
@@ -189,6 +193,12 @@ def make_report(seed: int) -> Report:
     add_total("Net Other Income", [*other_income, *(-c for c in other_expense)], None)
     add_total("Net Income", [*income, *(-c for c in cogs), *(-c for c in expenses), *other_income,
                              *(-c for c in other_expense)], None)
+
+    for section in held_sections:
+        e = expected[section]
+        e.broken = True
+        e.included, e.included_lines, e.sales, e.costs = 0, 0, 0, 0
+        e.not_resolved, e.not_resolved_lines = e.line_sum, e.lines
 
     # One report in four has a broken total: a cent off (as if a line were edited after export), or off by
     # a fraction of a cent, far more than Excel's float noise (the float rule must refuse it).

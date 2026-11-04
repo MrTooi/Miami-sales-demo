@@ -14,7 +14,9 @@ Takes a report whose layout quickbooks_layouts recognised (step 2) and:
 3. Writes the coverage ledger (S6): every money line, with its row, original amount, account path
    and outcome. A line is "included" only when its section passed every check and the S1 rules
    count it as a sale or a cost; otherwise it is "not resolved", with the reason, and is never
-   dropped. Nothing is "excluded" automatically: only a proven duplicate or a line dated outside
+   dropped. A row of unknown shape is kept in the ledger too, with whatever is in its Amount column.
+   An "Unapplied Cash ..." account (cash-basis only) holds its whole section, so no outcome depends
+   on which account sits above which. Nothing is "excluded" automatically: only a proven duplicate or a line dated outside
    the report's period can be, and those are the owner's to confirm later (S9). A line dated
    outside the period is held as not resolved here.
 
@@ -210,7 +212,8 @@ class _Reader:
         self.stack: list[_Group] = []
         self.sections: dict[str, _Group] = {}
         self.orphans: list[tuple[int, tuple[str, ...], str | None, tuple[str, ...]]] = []  # lines under no account
-        self.placed: list[tuple[int, tuple[str, ...], str | None, tuple[str, ...]]] = []  # (row, cells, section, path)
+        # (row, cells, section, path, note): every money line, and every row of unknown shape (note says why)
+        self.placed: list[tuple[int, tuple[str, ...], str | None, tuple[str, ...], str | None]] = []
         self.summaries: list[tuple[int, str, str]] = []
         self.section_totals: dict[str, Decimal | None] = {}  # each section's own closing total (float rule)
         self.wrapper: str | None = None
@@ -264,8 +267,10 @@ class _Reader:
                 return
             if top.children:
                 # A parent closes only with "Total for X with sub-accounts"; never silently. (A parent with its
-                # own lines that is missing that total reads as an account followed by a separate parent: every
-                # amount is the same either way, and every total is still checked against its lines.)
+                # own lines that is missing that total reads as an account followed by a separate parent. Every
+                # total is still checked against its lines, and no outcome depends on which account sits above
+                # which: S1 uses the section, the type and the amount, and an "Unapplied Cash" account holds
+                # its whole section.)
                 self.problem(top.row, f"'{top.name}' has sub-accounts but no 'Total for {top.name} with "
                              "sub-accounts'", top.section)
             self.stack.pop()
@@ -346,13 +351,23 @@ class _Reader:
             elif kind == "labelled":
                 self.labelled(nxt, row, text, cells)
             else:
-                # What it belongs to can't be told, so it holds the whole report.
+                # What it belongs to can't be told, so it holds the whole report. It is kept in the ledger,
+                # with whatever is in its Amount column, so nothing in the file is dropped.
                 self.problem(row, f"row {row} isn't a heading, a line or a total MargenX knows", None)
+                self.placed.append((row, cells, self.stack[0].section if self.stack else None, self.path_of(),
+                                    f"Row {row} isn't a heading, a line or a total MargenX knows, so what it is "
+                                    "can't be told."))
         self.close_section_if_open(self.layout.footer_row)
         if not any(label == "Net Income" for _, label, _ in self.summaries):
             self.problem(self.layout.footer_row, "the report has no 'Net Income' row", None)
 
     def account_heading(self, nxt: int, row: int, text: str) -> None:
+        if "unapplied" in text.casefold():
+            # QuickBooks puts "Unapplied Cash ..." accounts only in cash-basis reports (issue #128), and this is an
+            # accrual one. Holding the whole section also means no line's outcome ever depends on which account
+            # sits above which (the automated review of fe569fa).
+            self.problem(row, f"the account '{text}' appears in an accrual-basis report, where QuickBooks doesn't "
+                         "put unapplied cash", "current")
         if self.stack and self.stack[0].column_b:
             self.problem(row, f"the section '{self.stack[0].name}' in column B has accounts under it, which the "
                          "layout MargenX knows doesn't have", self.stack[0].section)
@@ -381,10 +396,10 @@ class _Reader:
             self.problem(row, f"row {row} is a line {where}", section)
             if top is not None and not top.column_b:
                 top.lines.append((row, cells))  # still in its section's total check
-            self.placed.append((row, cells, section, self.path_of()))
+            self.placed.append((row, cells, section, self.path_of(), None))
             return
         top.lines.append((row, cells))
-        self.placed.append((row, cells, section, self.path_of()))
+        self.placed.append((row, cells, section, self.path_of(), None))
 
     def labelled(self, nxt: int, row: int, text: str, cells: tuple[str, ...]) -> None:
         stored = cells[self.amount]
@@ -430,7 +445,16 @@ class _Reader:
                 self.section_totals[section.section] = total_cents(stored)
                 self.stack.clear()
                 return
-        self.problem(row, f"'{text}' isn't a total MargenX can place")
+        if match or plain:
+            # Shaped like a total, so it is only ever a check (S6), never money; its section is held.
+            self.problem(row, f"'{text}' isn't a total MargenX can place")
+            return
+        # A label beside an amount that isn't any kind of total: it may be money, so it holds the whole report
+        # and is kept in the ledger with its amount.
+        self.problem(row, f"row {row} isn't a heading, a line or a total MargenX knows", None)
+        self.placed.append((row, cells, self.stack[0].section if self.stack else None, self.path_of(),
+                            f"Row {row} ('{qr._shown(text)}') isn't a heading, a line or a total MargenX knows, so "
+                            "what it is can't be told."))
 
     def summary_checks(self) -> None:
         sums = {name: self.line_sum(group.all_lines()) for name, group in self.sections.items()}
@@ -472,14 +496,20 @@ def reconcile(layout: qlayouts.ProfitAndLossDetailLayout, source: str) -> Profit
         return cells[position].strip() if position is not None and position < len(cells) else ""
 
     lines = []
-    for row, cells, section, path in reader.placed:
+    def raw(cells: tuple[str, ...], column: str) -> str:
+        position = layout.columns.get(column)
+        return cells[position] if position is not None and position < len(cells) else ""
+
+    for row, cells, section, path, note in reader.placed:
         amount_text = cell(cells, "Amount")
         amount = line_amount(amount_text)
         when = _date(cell(cells, "Transaction date"))
         kind = cell(cells, "Transaction type")
         canonical = SECTION_NAMES.get(section) if section else None
         counts_as, reason = None, ""
-        if amount is None:
+        if note:
+            reason = note
+        elif amount is None:
             reason = (f"Its amount '{amount_text}' isn't an exact number of cents, so it can't be counted." if amount_text
                       else "Its amount is blank, so it can't be counted.")
         elif when is None:
@@ -497,9 +527,9 @@ def reconcile(layout: qlayouts.ProfitAndLossDetailLayout, source: str) -> Profit
             if outcome.counts_as in (qr.SALE, qr.COST):
                 counts_as = outcome.counts_as
         lines.append(LedgerLine(
-            source=source, row=row, date=cell(cells, "Transaction date"), transaction_type=kind,
-            num=cell(cells, "Num"), name=cell(cells, "Name"), description=cell(cells, "Description"),
-            amount_text=amount_text, amount=amount, section=canonical, account_path=path,
+            source=source, row=row, date=raw(cells, "Transaction date"), transaction_type=raw(cells, "Transaction type"),
+            num=raw(cells, "Num"), name=raw(cells, "Name"), description=raw(cells, "Description"),
+            amount_text=raw(cells, "Amount"), amount=amount, section=canonical, account_path=path,
             outcome=INCLUDED if counts_as else NOT_RESOLVED, counts_as=counts_as,
             reason=reason if counts_as else reason + ("" if "never left out" in reason else
                                                       " It stays not resolved and is shown with its amount; it is "

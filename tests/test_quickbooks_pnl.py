@@ -243,11 +243,33 @@ class LineProblemTests(unittest.TestCase):
                 held = next(l for l in report.lines if l.row == 9)
                 self.assertEqual(qp.NOT_RESOLVED, held.outcome)
 
-    def test_a_row_of_an_unknown_shape_holds_the_whole_report(self):
+    def test_a_row_of_an_unknown_shape_holds_the_whole_report_and_is_kept_in_the_ledger(self):
         report = read(with_body({}, inserts={22: [["Memo", "", "", "", "Fuel note", "", "", "", "", 5.0]]}), stored={})
         self.assertTrue(any("isn't a heading, a line or a total" in p.text for p in report.problems))
         self.assertTrue(all(line.outcome == qp.NOT_RESOLVED for line in report.lines))
         self.assertFalse(any(s.verified for s in report.sections.values()))
+        # The automated review of fe569fa: the row itself, with its amount, is in the ledger.
+        kept = next(line for line in report.lines if line.row == 22)
+        self.assertEqual((D("5"), "Fuel note", qp.NOT_RESOLVED, "Expenses"),
+                         (kept.amount, kept.name, kept.outcome, kept.section))
+        self.assertIn("Row 22 isn't a heading, a line or a total MargenX knows", kept.reason)
+
+    def test_a_label_with_an_amount_that_isnt_a_total_is_kept_in_the_ledger(self):
+        report = read(with_body({}, inserts={22: [fx.total("Adjustment (fictional)", 5.0)]}), stored={})
+        kept = next(line for line in report.lines if line.row == 22)
+        self.assertEqual((D("5"), qp.NOT_RESOLVED), (kept.amount, kept.outcome))
+        self.assertIn("('Adjustment (fictional)') isn't a heading, a line or a total", kept.reason)
+        self.assertFalse(any(s.verified for s in report.sections.values()))
+        # A row shaped like a total that can't be placed is only a check, never money.
+        unplaced = read(with_body({}, inserts={22: [fx.total("Total for Gas", 5.0)]}), stored={})
+        self.assertNotIn(22, [line.row for line in unplaced.lines])
+        self.assertFalse(unplaced.sections["Expenses"].verified)
+
+    def test_names_and_amounts_are_kept_exactly_as_written(self):
+        line = fx.line(2, "Invoice", "1001", "  Coral Cafe (fictional):Patio ", 900.0, 900.0)
+        report = read(with_body({9: line}), stored={"J9": "900.0"})
+        kept = next(l for l in report.lines if l.row == 9)
+        self.assertEqual(("  Coral Cafe (fictional):Patio ", "900.0", D("900.0")), (kept.name, kept.amount_text, kept.amount))
 
     def test_a_line_directly_under_a_section_is_held(self):
         stray = fx.line(3, "Invoice", "1009", "Bay Clinic (fictional)", 50.0, 50.0)
@@ -268,6 +290,8 @@ class LineProblemTests(unittest.TestCase):
             "good": fx.pnl_rows(),
             "missing total": with_body({11: None}),
             "unknown row": with_body({}, inserts={22: [["Memo", "", "", "", "x", "", "", "", "", 5.0]]}),
+            "unapplied cash": with_body({8: ["Unapplied Cash Payment Income"]}),
+            "label with amount": with_body({}, inserts={22: [fx.total("Adjustment (fictional)", 5.0)]}),
             "uneven amount": with_body({22: [None, "10/04/2026", "Expense", "", "B", "", "", "", "", "1.001", ""]}),
             "section out of order": with_body({13: ["Expenses"]}),
             "no wrapper": with_body({6: None}),
@@ -276,9 +300,14 @@ class LineProblemTests(unittest.TestCase):
         for name, rows in variants.items():
             with self.subTest(name):
                 report = read(rows, stored={})
+                # Every line, and every row of unknown shape: a label beside anything but an amount, or beside
+                # an amount when the label isn't a total or summary row.
+                def is_total(label):
+                    return str(label).startswith("Total ") or label in qp.SUMMARIES
                 line_rows = [row for row, cells in enumerate(rows, 1)
-                             if row > 5 and len(cells) > 2 and not cells[0] and any(c not in (None, "") for c in cells[1:])
-                             and cells[1] != "Other Income"]
+                             if row > 5 and len(cells) > 2 and any(c not in (None, "") for c in cells[1:])
+                             and cells[1] != "Other Income" and (not cells[0] or not is_total(cells[0]) or any(
+                                 c not in (None, "") for i, c in enumerate(cells[1:], 1) if i != 9))]
                 self.assertEqual(sorted(line_rows), sorted(line.row for line in report.lines))
                 for coverage in report.sections.values():
                     known = sum((l.amount for l in report.lines if l.section == coverage.section and l.amount is not None),
@@ -367,8 +396,8 @@ class StructureTests(unittest.TestCase):
 
     def test_a_missing_sub_account_total_never_changes_an_amount(self):
         # Without "Total for Landscaping Services with sub-accounts", the file reads just as well as Landscaping
-        # Services being an account of its own followed by a parent "Job Materials" (wherever it sits): every
-        # total still matches its lines, and every amount is the same either way. Only the account path differs.
+        # Services being an account of its own followed by a parent "Job Materials": every total still matches
+        # its lines, and no outcome depends on which account sits above which (see the Unapplied Cash test).
         body = [row for row in self.BODY if row[0] != "Total for Landscaping Services with sub-accounts"]
         report = read(fx.pnl_rows(body=body))
         self.assertEqual(read(fx.pnl_rows(body=self.BODY)).sections["Income"].included,
@@ -383,6 +412,27 @@ class StructureTests(unittest.TestCase):
                         report.problems)
         self.assertFalse(report.sections["Income"].verified)
         self.assertIn(10, [int(line.amount) for line in report.lines])  # kept in the ledger
+
+    def test_an_unapplied_cash_parent_missing_its_total_never_lets_its_lines_count(self):
+        # The automated review of fe569fa: an "Unapplied Cash" parent with its own lines and total, whose
+        # "with sub-accounts" total is missing, could be read as a sibling of its sub-account, so the
+        # sub-account's Invoice lines would no longer sit under "Unapplied Cash". Such an account (cash-basis
+        # only) now holds its whole section, whatever the nesting.
+        body = [["Ordinary Income/Expenses"], ["Income"],
+                ["Unapplied Cash Payment Income"],
+                fx.line(3, "Invoice", "1201", "Bay Clinic (fictional)", 100.0, 100.0),
+                fx.total("Total for Unapplied Cash Payment Income", 100.0),
+                ["Design income"],
+                fx.line(4, "Invoice", "1202", "Bay Clinic (fictional)", 250.0, 250.0),
+                fx.total("Total for Design income", 250.0),
+                fx.total("Total Income", 350.0),
+                fx.total("Net Ordinary Income", 350.0), fx.total("Net Income", 350.0)]
+        report = read(fx.pnl_rows(body=body))
+        self.assertTrue(any("appears in an accrual-basis report" in p.text for p in report.problems), report.problems)
+        income = report.sections["Income"]
+        self.assertEqual((0, D("0"), D("350.0"), qp.NEEDS_A_CHECK),
+                         (income.included_lines, income.included, income.not_resolved, income.status))
+        self.assertEqual([qp.NOT_RESOLVED] * 2, [line.outcome for line in report.lines])
 
     def test_a_with_sub_accounts_total_on_an_account_without_any_holds_the_section(self):
         body = [*self.BODY[:31], fx.total("Total for Rent or Lease with sub-accounts", 300.0), *self.BODY[32:]]
