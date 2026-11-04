@@ -344,7 +344,7 @@ class QuickBooksLookAlikeTests(unittest.TestCase):
                 with self.subTest(title=rows[1][0], name=name):
                     reason = self.refusal(rows, name)
                     if rows is PNL_REPORT and name.endswith(".xlsx"):  # recognised (step 2), not read yet
-                        self.assertIn("MargenX recognises this report, but reading its lines is still being built", reason)
+                        self.assertIn("MargenX recognises this report, but MargenX can't use QuickBooks reports yet", reason)
                     else:
                         self.assertIn(f"it has the title '{rows[1][0]}'", reason)
                     self.assertIn("othing from this file was used", reason)
@@ -492,7 +492,7 @@ class PlainListReaderAuditTests(unittest.TestCase):
         self.assertEqual(len(rows) - 3, len(result.rejected))
         self.assertTrue(all(r["money_missing"] for r in result.rejected))
         reasons = " ".join(" ".join(r["reasons"]) for r in result.rejected)
-        self.assertIn("Account 'Cost of Goods Sold' isn't an income account, so this line isn't counted as a sale", reasons)
+        self.assertIn("Account 'Cost of Goods Sold' doesn't prove this line is a sale, so MargenX hasn't counted it", reasons)
         self.assertIn("This line's account is blank", reasons)
         # Every account column name is checked, and every account column must show income.
         for header in ("Account name", "Income account", "GL account", "Ledger account"):

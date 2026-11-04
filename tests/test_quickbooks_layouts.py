@@ -92,7 +92,7 @@ class RecognisedLayoutTests(unittest.TestCase):
         reason = refusal(GOOD)
         self.assertEqual(
             "This is QuickBooks' Profit and Loss Detail report for Biscayne Landscaping (fictional) (January 1-October "
-            "26, 2026, accrual basis). MargenX recognises this report, but reading its lines is still being built, so "
+            "26, 2026, accrual basis). MargenX recognises this report, but MargenX can't use QuickBooks reports yet, so "
             "nothing from this file was used. For now, upload a plain list with one row per sale or cost, with "
             "columns such as Date, Customer, Job and Amount.", reason)
         for amount in ("900", "1,200", "150", "349"):
@@ -109,7 +109,8 @@ class VariantTests(unittest.TestCase):
         reason = refusal(data, name)
         self.assertIn("This looks like a QuickBooks report (it has the title 'Profit and Loss Detail'), but it isn't "
                       "exactly in the layout MargenX knows", reason)
-        self.assertIn("Nothing from this file was used.", reason)
+        self.assertIn("nothing from this file was used.", reason)
+        self.assertIn("Exporting it again won't help yet", reason)  # never sent to another refusal
         return reason
 
     def test_each_variant_is_refused_with_its_reason(self):
@@ -164,7 +165,8 @@ class VariantTests(unittest.TestCase):
     def test_the_csv_version_is_refused_with_how_to_export_excel(self):
         for name in ("report.csv",):
             reason = self.assert_refused(fx.csv_bytes(fx.pnl_rows()), "it's a CSV file", name)
-            self.assertIn("choose Export to Excel", reason)
+            self.assertIn("Exporting it again won't help yet", reason)
+            self.assertNotIn("Export to Excel", reason)
         with self.assertRaisesRegex(ji.IntakeError, "it's a CSV file"):
             ji.read_csv(fx.csv_bytes(fx.pnl_rows()))
 
@@ -219,9 +221,9 @@ class RefusalWordingTests(unittest.TestCase):
 
     def test_each_trigger_gets_its_own_advice(self):
         cases = {
-            "rename or remove that column": [["Invoice", "Date", "Customer", "Split", "Amount"], self.PLAIN[1]],
-            "rename or remove those columns": [["Num", "Date", "Customer", "Transaction type", "Amount"], self.PLAIN[1]],
-            "rename or remove that row": [*self.PLAIN, ["Total for Bakery (fictional)", "", "", "", "40.00"]],
+            "rename that column": [["Invoice", "Date", "Customer", "Split", "Amount"], self.PLAIN[1]],
+            "rename those columns": [["Num", "Date", "Customer", "Transaction type", "Amount"], self.PLAIN[1]],
+            "reword the first cell of that row": [*self.PLAIN, ["Total for Bakery (fictional)", "", "", "", "40.00"]],
         }
         for advice, rows in cases.items():
             with self.subTest(advice):
@@ -236,7 +238,9 @@ class RefusalWordingTests(unittest.TestCase):
         self.assertIn("upload a plain list with one row per sale or cost", reason)
         self.assertNotIn("rename", reason)
 
-    def test_plain_files_still_read(self):
+    def test_plain_sample_files_still_open(self):
+        # Proves only that they aren't refused as QuickBooks files; their rows and amounts are checked by
+        # tests/test_accuracy.py.
         samples = sorted((Path(__file__).resolve().parents[1] / "sample_data" / "marginx").glob("*.csv"))
         self.assertGreaterEqual(len(samples), 2)  # never passes with no files to read
         for path in samples:
