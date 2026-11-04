@@ -270,6 +270,14 @@ class LineProblemTests(unittest.TestCase):
         self.assertNotIn(22, [line.row for line in unplaced.lines])
         self.assertFalse(unplaced.sections["Expenses"].verified)
 
+    def test_account_headings_are_kept_exactly_as_written(self):
+        # The automated review of 3099ec1. Matching a closing total ignores repeated spaces (QuickBooks writes
+        # both rows itself); the ledger keeps each heading exactly as written.
+        report = read(with_body({21: ["Fuel  (truck)"], 24: fx.total("Total for Fuel (truck)", 349.41)}), stored={})
+        self.assertEqual((), report.problems)
+        self.assertEqual(("Expenses", "Automobile", "Fuel  (truck)"),
+                         next(l for l in report.lines if l.row == 22).account_path)
+
     def test_names_and_amounts_are_kept_exactly_as_written(self):
         line = fx.line(2, "Invoice", "1001", "  Coral Cafe (fictional):Patio ", 900.0, 900.0)
         report = read(with_body({9: line}), stored={"J9": "900.0"})

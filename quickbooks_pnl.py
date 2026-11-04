@@ -110,7 +110,7 @@ class LedgerLine:
     amount_text: str  # the amount exactly as stored
     amount: Decimal | None  # None when it isn't exact cents
     section: str | None  # "Income", "Cost of Goods Sold", "Expenses", "Other Income", "Other Expenses"
-    account_path: tuple[str, ...]  # the headings above it, section first, as written
+    account_path: tuple[str, ...]  # the headings above it, section first, exactly as written (spaces included)
     outcome: str  # INCLUDED, EXCLUDED or NOT_RESOLVED
     counts_as: str | None  # qr.SALE or qr.COST when included
     reason: str
@@ -190,6 +190,7 @@ class _Group:
     is_section: bool
     row: int
     column_b: bool = False  # a section heading written in column B (seen once, for an empty "Other Income")
+    raw: str = ""  # the heading exactly as written (name is it with repeated spaces collapsed, for matching)
     lines: list = field(default_factory=list)  # (row, cells) of its own lines
     children: list = field(default_factory=list)
     direct_closed: bool = False  # its own "Total for X" was read
@@ -224,6 +225,7 @@ class _Reader:
         self.summaries: list[tuple[int, str, str]] = []
         self.section_totals: dict[str, Decimal | None] = {}  # each section's own closing total (float rule)
         self.wrapper: str | None = None
+        self.current_raw = ""
 
     # -- helpers --
     def problem(self, row: int, text: str, section: str | None = "current") -> None:
@@ -317,7 +319,11 @@ class _Reader:
         return None if any(a is None for a in amounts) else sum(amounts, Decimal("0"))
 
     def path_of(self) -> tuple[str, ...]:
-        return tuple(g.name for g in self.stack)
+        """The headings above a line exactly as written, spaces included (the automated review of 3099ec1)."""
+        return tuple(g.raw or g.name for g in self.stack)
+
+    def raw_heading(self, row_cells: tuple[str, ...]) -> str:
+        return next((c for c in row_cells if c.strip()), "")
 
     # -- the walk --
     def read(self) -> None:
@@ -327,6 +333,7 @@ class _Reader:
         for index, (row, cells) in enumerate(self.rows):
             kind, text = self.kind(cells)
             nxt = index + 1
+            self.current_raw = self.raw_heading(cells)
             if kind == "heading" and text in (ORDINARY_WRAPPER, OTHER_WRAPPER):
                 self.close_section_if_open(row)
                 if (text == ORDINARY_WRAPPER and self.wrapper is not None) or (
@@ -343,7 +350,7 @@ class _Reader:
                     OTHER_SECTIONS if self.wrapper == OTHER_WRAPPER else ())
                 if text not in allowed or text in self.sections:
                     self.problem(row, f"the section '{text}' isn't where the layout MargenX knows puts it", text)
-                group = _Group(text, text, True, row, column_b=kind == "heading_b")
+                group = _Group(text, text, True, row, column_b=kind == "heading_b", raw=self.current_raw)
                 self.sections.setdefault(text, group)
                 self.stack = [group]
             elif kind == "heading_b":
@@ -382,7 +389,7 @@ class _Reader:
         self.close_finished_leaves(index=nxt - 1)
         if not self.stack:
             self.problem(row, f"the account '{text}' isn't under any section", None)
-            self.stack = [_Group(text, None, False, row)]
+            self.stack = [_Group(text, None, False, row, raw=self.current_raw)]
             return
         top = self.stack[-1]
         if not top.is_section and top.lines and not top.direct_closed:
@@ -391,7 +398,7 @@ class _Reader:
         if len(self.stack) > MAX_ACCOUNT_DEPTH:
             self.problem(row, f"'{text}' is nested more than {MAX_ACCOUNT_DEPTH} accounts deep, which the layout "
                          "MargenX knows doesn't have", top.section)
-        group = _Group(text, top.section, False, row)
+        group = _Group(text, top.section, False, row, raw=self.current_raw)
         top.children.append(group)
         self.stack.append(group)
 
