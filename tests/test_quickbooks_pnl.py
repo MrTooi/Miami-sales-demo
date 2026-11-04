@@ -112,7 +112,8 @@ class GoodReportTests(unittest.TestCase):
 
 
 class FloatRuleTests(unittest.TestCase):
-    def test_only_totals_within_a_millionth_of_a_cent_count(self):
+    def test_only_totals_within_a_ten_thousandth_of_a_cent_count(self):
+        # 0.000001 dollars is a ten-thousandth of a cent.
         for stored, cents in (("349.40999999999997", D("349.41")), ("349.409999", D("349.41")),
                               ("349.410001", D("349.41")), ("1200", D("1200.00")), ("-89.5", D("-89.50")),
                               ("5.5511151231257827E-17", D("0.00")), ("-1.1368683772161603e-13", D("0.00")),
@@ -136,6 +137,10 @@ class FloatRuleTests(unittest.TestCase):
             outcome = classify(D("100.005"))
             self.assertEqual(qr.NOT_RESOLVED, outcome.counts_as)
             self.assertIn("isn't an exact number of cents", outcome.reason)
+            # The automated review of e241ef5: huge amounts are held, never a crash.
+            for huge in ("1E+26", "-1E+26", "1E+999999", "999999999999.99", "1000000000000.00"):
+                held = classify(D(huge))
+                self.assertEqual(qr.SALE if huge == "999999999999.99" else qr.NOT_RESOLVED, held.counts_as, huge)
             self.assertEqual(qr.SALE, classify(D("100.50")).counts_as)
 
 
