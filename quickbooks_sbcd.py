@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 
 import job_intake as ji
 import quickbooks_layouts as qlayouts
@@ -225,7 +225,7 @@ class _Reader:
     def sums(self, lines: list) -> tuple[Decimal | None, Decimal | None]:
         """The exact sum of the lines' amounts (None if one isn't exact cents) and of their quantities (None if
         one isn't a number)."""
-        amounts = [qp.line_amount(cells[self.amount]) for _, cells in lines]
+        amounts = [qp.line_amount(cells[self.amount] if self.amount < len(cells) else "") for _, cells in lines]
         amount = None if any(a is None for a in amounts) else sum(amounts, ZERO)
         if self.quantity is None:
             return amount, ZERO
@@ -241,7 +241,7 @@ class _Reader:
         """Checks a total row's Amount (and Quantity, when shown) against its lines; returns the stored Amount
         as cents when it matched."""
         amount, quantity = self.sums(lines)
-        stored = cells[self.amount]
+        stored = cells[self.amount] if self.amount < len(cells) else ""
         cents = qp.total_cents(stored)
         if cents is None:
             reason = (f"the stored total '{stored}' isn't a whole number of cents (MargenX allows only Excel's "
@@ -370,11 +370,18 @@ class _Reader:
 def _times(quantity: Decimal, price: Decimal) -> Decimal | None:
     """Quantity × Sales price rounded half up to the cent, or None when it's too large to be money (never a crash:
     the automated review of 5f45bbd)."""
+    digits = len(quantity.as_tuple().digits) + len(price.as_tuple().digits)
+    if digits > 60:
+        return None  # more digits than any real price or quantity: held, never repaired
     try:
-        product = quantity * price
-        if product.copy_abs() > qp.MAX_MONEY:
-            return None
-        return product.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        with localcontext() as exact:
+            # Enough precision that the product is exact, so it is rounded once, to the cent (the automated review
+            # of 658ae53: default precision rounded it first).
+            exact.prec = digits + 5
+            product = quantity * price
+            if product.copy_abs() > qp.MAX_MONEY:
+                return None
+            return product.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     except InvalidOperation:
         return None
 
