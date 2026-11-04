@@ -92,7 +92,9 @@ Internal code names (`marginx_ui.py`, `marginx_insights.py`, `marginx_pilot.py`,
 - The website draft claims things MargenX doesn't do yet (labor hours, quoted vs. actual, card fees, the "change what happened" sliders). Fix them before it goes public. Excel reading now exists (#116), but only on made-up files.
 - **The website trial (#131) isn't built yet.** No login service or server has been set up. The #132 research leaves three release conditions **unresolved**, and the lean v1 keeps them as release requirements:
   - written provider evidence that uploaded files aren't kept anywhere (the plan's retention gate);
-  - the logout behaviour, tested in the release checks. Alex chose the simple promise on 2026-11-04 (recorded on #131): Log out ends the MargenX session; the Cloudflare login may take a short moment to end everywhere. It's written into D-009, in PR #135, which isn't merged;
+  - the logout behaviour. Alex chose the simple promise on 2026-11-04 (recorded on #131): Log out ends the MargenX session; the Cloudflare login may take a short moment to end everywhere. It's written into D-009, in PR #135, which isn't merged.
+    - **That's the wording chosen, not a proven timing.** Cloudflare documents that tokens issued before its logout stop being accepted within 20–30 seconds (research #132, section 1.4). It doesn't document how long its other ways of cancelling a login take.
+    - What MargenX actually does is shown in the release checks before any shop, and the guide and terms describe only what was shown;
   - the server size and cost, from a real container measurement.
 - **Real customer data is prohibited today.** There are two separate paths, and neither is open:
   - **The sit-down pilot** (on the team laptop) needs its own owner decision for a named shop, after step 3b.
