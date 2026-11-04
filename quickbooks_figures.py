@@ -193,6 +193,13 @@ def names_of(line: qp.LedgerLine) -> tuple[str | None, str | None]:
 ALL = object()  # every customer, or every job
 
 
+@dataclass(frozen=True)
+class _JobsOf:
+    """Every job of one customer: its own type, so no customer or job name can ever be mistaken for it
+    (the automated review of 52b5809)."""
+    customer: str
+
+
 class _Builder:
     def __init__(self, report: qp.ProfitAndLossDetail, answers: OwnerAnswers):
         self.report = report
@@ -209,7 +216,7 @@ class _Builder:
                     self.jobs.add((customer, job))
         self.amounts: dict[tuple, Decimal] = {}
         self.holds: dict[tuple, list[Hold]] = {}
-        self.pending: list[tuple] = []  # (scope, field, hold) with ALL or "jobs of" scopes, resolved at the end
+        self.pending: list[tuple] = []  # (scope, field, hold) with ALL or _JobsOf scopes, resolved at the end
         self.resolutions: list[Resolution] = []
         self.warnings: list[str] = []
 
@@ -218,7 +225,7 @@ class _Builder:
         self.amounts[key] = self.amounts.get(key, ZERO) + amount
 
     def hold(self, where: str, who, figure: str, hold: Hold) -> None:
-        """where: company, customer or job; who: a name, (customer, job), ALL, or ("jobs of", customer)."""
+        """where: company, customer or job; who: a name, (customer, job), ALL, or _JobsOf(customer)."""
         self.pending.append((where, who, figure, hold))
 
     def hold_customer_and_jobs(self, customer, job, figure: str, hold: Hold, *, jobs_too: bool = True) -> None:
@@ -228,7 +235,7 @@ class _Builder:
             if customer and job:
                 self.hold("job", (customer, job), figure, hold)
             else:
-                self.hold("job", ("jobs of", customer) if customer else ALL, figure, hold)
+                self.hold("job", _JobsOf(customer) if customer else ALL, figure, hold)
 
     # -- answers --
     def account_use(self, line: qp.LedgerLine) -> tuple[str | None, AccountAnswer | None, str]:
@@ -239,7 +246,13 @@ class _Builder:
             self.warn(f"The answer '{answer.use}' for '{' › '.join(line.account_path)}' isn't one MargenX knows.")
             return None, None, "That account's answer couldn't be used."
         if answer.use == OVERHEAD_ACCOUNT:
-            entries = [l for l in self.report.lines if l.account_path == line.account_path and l.outcome == qp.INCLUDED]
+            # Every entry of the account, held ones too (the automated review of 52b5809). Only the entries S1
+            # counts become overhead; any other entry still needs its own answer.
+            entries = [l for l in self.report.lines if l.account_path == line.account_path]
+            if any(l.amount is None for l in entries):
+                self.warn(f"An entry in '{' › '.join(line.account_path)}' has no readable amount, so its entries "
+                          "can't be confirmed together.")
+                return None, None, "Its account's entries can't all be confirmed: one amount can't be read."
             total = sum((l.amount for l in entries), ZERO)
             if answer.entries != len(entries) or answer.total != total:
                 self.warn(f"You confirmed {answer.entries} entries ({answer.total}) in "
@@ -343,7 +356,7 @@ class _Builder:
                 if job:
                     self.add(("job", (customer, job), figure), amount)
                 elif self.jobs_on and not outside_jobs:
-                    self.hold("job", ("jobs of", customer), figure, Hold(
+                    self.hold("job", _JobsOf(customer), figure, Hold(
                         row, amount, f"Row {row} ({amount:,.2f}) is {customer}'s, but which job it belongs to isn't known."))
             else:
                 hold = Hold(row, amount, f"Row {row} ({amount:,.2f}) is counted, but whose it is isn't known.")
@@ -405,6 +418,8 @@ class _Builder:
                 problem = "a duplicate must have the same amount as the line it repeats"
             elif not mine or mine != target.customer:
                 problem = "a duplicate must have the same customer as the line it repeats"
+            elif self.lines[target.row].section != line.section:
+                problem = "a duplicate must be in the same section as the line it repeats (a cost never repeats a sale)"
             if problem:
                 self.warn(f"Row {resolution.row}: your answer '{DUPLICATE}' can't be used: {problem}.")
                 final.append(self.unresolved(line))
@@ -457,8 +472,8 @@ class _Builder:
             else:
                 if who is ALL:
                     targets = self.jobs
-                elif isinstance(who, tuple) and who[0] == "jobs of":
-                    targets = [j for j in self.jobs if j[0] == who[1]]
+                elif isinstance(who, _JobsOf):
+                    targets = [j for j in self.jobs if j[0] == who.customer]
                 else:
                     targets = [who]
                 for job in targets:

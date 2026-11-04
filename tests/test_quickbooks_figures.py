@@ -338,6 +338,45 @@ class S9OverheadAndOtherSectionTests(unittest.TestCase):
                          qf.figures(self.report, answers({**JOB_COSTS, **unconfirmed})).company["overhead"].status)
 
 
+class AutomatedReviewOf52b5809Tests(unittest.TestCase):
+    def test_a_customer_named_like_an_internal_marker_is_still_held(self):
+        report = read({"Income": [("Design income", [
+            L(2, "Invoice", "1001", "jobs of:Job A", 4000.0, 4000.0),
+            L(9, "Credit Memo", "1009", "jobs of:Job A", -200.0, 3800.0)])]})
+        memo = rows_of(report, transaction_type="Credit Memo")[0]
+        result = qf.figures(report, answers())
+        self.assertEqual({memo}, holds(result.jobs[("jobs of", "Job A")]["sales"]))
+        self.assertEqual(qp.NEEDS_A_CHECK, result.jobs[("jobs of", "Job A")]["sales"].status)
+
+    def test_an_overhead_confirmation_must_cover_every_entry_held_ones_too(self):
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", 4000.0, 4000.0)])],
+                       "Expenses": [("Office Supplies", [
+                           L(8, "Expense", "", "Office Depot (fictional)", 500.0, 500.0, "", "Checking"),
+                           L(9, "Vendor Credit", "", "Office Depot (fictional)", -40.0, 460.0, "", "Checking")])]})
+        credit = rows_of(report, transaction_type="Vendor Credit")[0]
+        only_the_expense = {OFFICE: qf.AccountAnswer(qf.OVERHEAD_ACCOUNT, entries=1, total=D("500.0"))}
+        result = qf.figures(report, answers(only_the_expense))
+        self.assertIn("Confirm them again", " ".join(result.warnings))
+        self.assertEqual(qp.NEEDS_A_CHECK, result.company["overhead"].status)
+        both = {OFFICE: qf.AccountAnswer(qf.OVERHEAD_ACCOUNT, entries=2, total=D("460.0"))}
+        result = qf.figures(report, answers(both))
+        self.assertEqual(D("500"), result.company["overhead"].amount)  # only the expense S1 counts
+        self.assertEqual({credit}, holds(result.company["overhead"]))  # the credit still needs its own answer
+        result = qf.figures(report, answers(both, {credit: qf.LineAnswer(qf.OVERHEAD)}))
+        self.assertEqual((D("460"), qp.COMPLETE), (result.company["overhead"].amount, result.company["overhead"].status))
+
+    def test_a_cost_is_never_a_duplicate_of_a_sale(self):
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", 700.0, 700.0)])],
+                       "Cost of Goods Sold": [("Cost of Goods Sold", [
+                           L(3, "Invoice", "1001", f"{X}:Job A", 700.0, 700.0, "Pavers")])]})
+        sale, cost = rows_of(report, section="Income")[0], rows_of(report, section="Cost of Goods Sold")[0]
+        result = qf.figures(report, answers({("Cost of Goods Sold", "Cost of Goods Sold"):
+                                             qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT)},
+                                            {cost: qf.LineAnswer(qf.DUPLICATE, duplicate_of=sale)}))
+        self.assertIn("same section", " ".join(result.warnings))
+        self.assertEqual(qp.NEEDS_A_CHECK, result.company["job_costs"].status)
+
+
 class MixedAccountTests(unittest.TestCase):
     """W2: each entry of a mixed account is a job cost for a verified job, overhead, or not resolved."""
 
