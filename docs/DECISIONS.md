@@ -153,3 +153,60 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
   - Owners in the new groups may record costs differently, for example receipts with no job number. That is handled by asking the owner, never by guessing (PR #123).
   - A wider target can blur focus. The plan's scorecard (Nov 13) decides which groups to keep.
 - Evidence / links: PR #122 and its manual review; PR #123; the 2026-10-22 customer plan (shared with Abrey as a claude.ai document, not in this repository).
+
+### D-008 — Real shop data in the lean website trial, one approved shop at a time
+- Date: 2026-11-04
+- Status: Accepted (in force once the PR adding this entry is merged with the owner's approval). **It allows no real data by itself:** for each shop, real data starts only when every condition in item 2 holds.
+- Decided by: Human owner (MrTooi), in a Claude Code session on 2026-11-04. Asked whether a shop may upload its own report to its private copy after the checks, its signed terms and his yes for that shop, he answered: "yes of course they would need to use their real files". Recorded on issue #131.
+- Context:
+  - D-003 requires an owner decision before any real customer data is used. Earlier records reserved "D-008 or later" for that.
+  - Issue #131's lean v1.2 plan (manual review PASS WITH WARNINGS, 2026-11-04) is a two-week trial on a private MargenX website: one shop at a time, one named person, the shop's own running copy, and one supported export (QuickBooks Profit and Loss Detail, read by the #128 work).
+- Decision:
+  1. **Scope.** A named shop may upload **its own export in the supported profile** to **its own private MargenX copy** in the website trial of #131. Only that shop's one named person, who signed its trial terms, may upload.
+  2. **Conditions, all required for each shop before its invite is added** (lean v1.2, section 3.5):
+     - the shop's fit check passed (its export matches the written profile, and its sales and job-cost lines carry the customer and job);
+     - its named person accepted the trial terms, whose final text Alex approved in writing;
+     - the provider retention evidence (lean v1.2, section 3.4) is complete for the exact host and data path;
+     - the six release checks passed on the operator-only baseline, and the shop's copy was verified against that baseline with the shop still blocked;
+     - the closeout date and time are recorded, with a named, authorised backup (D-009);
+     - **Alex's explicit yes for that shop**, recorded on issue #131 as "shop A", "shop B" and so on, never by name.
+  3. **What may be uploaded:** the shop's own export in the supported profile only. Bank and card details, tax IDs and individual payroll records are left out. The named person confirms they are allowed to share the export. MargenX refuses files outside the profile.
+  4. **Ending:** at the closeout, or earlier, the trial ends with the stop procedure (D-009). A closed trial stays closed.
+- Not changed:
+  - Every money-safety rule in `AGENTS.md`, including **Needs a check**: a file that can't prove its coverage never yields a Complete total (lean v1.2, section 3.1).
+  - This covers the website trial only. The sit-down pilot on the team laptop still needs its own owner decision for a named shop.
+  - D-004 and D-005; merging still needs the owner's explicit approval for each PR.
+- Consequences / risks:
+  - The first real financial files would be handled by MargenX, Cloudflare and the host. The retention evidence and the release checks are the safeguards, and missing evidence keeps real uploads off.
+  - Per-shop records (names, emails, closeout) are kept privately, not in this public repository.
+- Evidence / links: issue #131 (lean v1.2 and its reviews; the owner's answers of 2026-11-04); research `docs/research/TRIAL_HOSTING_AND_LOGIN.md` (#132); #128 and #129.
+
+### D-009 — A private, invite-only MargenX website for the trial: first an operator-only test copy, then one shop's copy at a time
+- Date: 2026-11-04 (building it was decided on 2026-11-02)
+- Status: Accepted (in force once the PR adding this entry is merged with the owner's approval). Part 1 applies from then on. Part 2 applies to each shop only under D-008's conditions.
+- Decided by: Human owner (MrTooi), in Claude Code sessions, all recorded on issue #131:
+  - 2026-10-26: a private website with a login, rather than an installed app;
+  - 2026-11-02: start building now; Cloudflare Access on the free plan; the existing domain margenx.org;
+  - 2026-11-04: the smaller "lean v1" plan; the online test copy ("Yes, test copy OK"); the simple logout promise ("simple is fine"); Abrey as the closeout backup ("abrey will do it").
+- Context: this is a production deployment of MargenX, which needs an owner decision (`CLAUDE.md`, D-003). Lean v1.2 on #131 passed its manual review on 2026-11-04.
+- Decision:
+  1. **Part 1, the operator-only test copy.** MargenX may run online behind Cloudflare Access (emailed one-time code, exact invited email), with **only Alex invited** and **made-up files only**. The server has no public address (a tunnel), and no shop can reach it. It's used to build and test PR A and to run PR B's release checks.
+  2. **Part 2, one shop's copy at a time,** started from the approved version, under D-008's conditions and the go-live order of lean v1.2 (the invite is added last). Up to three trials in a row, never overlapping.
+  3. **Ending a trial:** one stop procedure for the closeout, an early end and an emergency: stop that shop's copy first, then remove its invite, revoke its Access sessions, and verify the cutoff. Removing an invite without stopping the copy never counts as ending a trial. Nothing restarts a stopped copy by itself.
+  4. **Closeout cover:** Abrey is the named backup. Before any trial opens, he has the short stop checklist and the access he needs, with two-step login.
+  5. **The logout promise is the simple one:** "Log out ends your MargenX session; the login may take a moment to end everywhere." There is no instant-everywhere promise.
+  6. **Not allowed without a new decision:**
+     - overlapping trials, several users per shop, invitations by anyone but Alex, or an automatically enforced deadline (these return to the fuller plan v7);
+     - a public sign-up;
+     - storing files or results;
+     - paid plans or pricing claims.
+- Not changed:
+  - **No purchase** (server, domain, anything else) before Alex approves a budget.
+  - The hosting provider is chosen by Alex before the deployment. Only a provider whose retention evidence is complete may serve real files (D-008).
+  - The move of margenx.org's DNS to Cloudflare needs Alex's approval and Abrey's agreement at the time, with a separate small domain as the fallback.
+  - Automatic deploys stay off during a trial. Merging still needs the owner's explicit approval for each PR, and deployment-related PRs get a manual review (D-004).
+- Consequences / risks:
+  - We become responsible for an online service: its access settings, its providers' data handling, and stopping it on time.
+  - The admin accounts (Cloudflare, the host, Porkbun, GitHub) need two-step login.
+  - Running costs start once Alex approves a budget.
+- Evidence / links: issue #131 (lean v1.2, its reviews, and the owner's decisions of 2026-10-26, 2026-11-02 and 2026-11-04); research `docs/research/TRIAL_HOSTING_AND_LOGIN.md` (#132).
