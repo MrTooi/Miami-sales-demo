@@ -101,6 +101,7 @@ def line_amount(text: str) -> Decimal | None:
 class LedgerLine:
     """One money line of the report and its outcome (S6)."""
     source: str  # the file it came from
+    sheet: str  # the sheet it came from (S6)
     row: int  # its Excel row number
     date: str  # as written
     transaction_type: str
@@ -162,7 +163,9 @@ class SectionCoverage:
 
     @property
     def status(self) -> str:
-        """Complete only when the section passed every check and every line in it is included."""
+        """Complete only when the section passed every check and every line in it is included. This is about
+        the rows in the file only: a filtered export can add up and still leave an account out, so it is
+        never, on its own, proof that a shop's figures are complete (the PR #136 review)."""
         return COMPLETE if self.verified and self.adds_up and self.not_resolved_lines == 0 else NEEDS_A_CHECK
 
 
@@ -354,9 +357,13 @@ class _Reader:
                 self.sections.setdefault(text, group)
                 self.stack = [group]
             elif kind == "heading_b":
-                # Only an empty "Other Income" was seen in column B; anything else there holds the whole report.
+                # Only an empty "Other Income" was seen in column B; anything else there holds the whole report,
+                # and the row is kept in the ledger (it may be a line with its other cells missing).
                 self.problem(row, f"row {row} has '{text}' alone in column B, which the layout MargenX knows "
                              "doesn't have", None)
+                self.placed.append((row, cells, self.stack[0].section if self.stack else None, self.path_of(),
+                                    f"Row {row} has only '{qr._shown(text)}', in column B, so what it is can't be "
+                                    "told."))
             elif kind == "heading" and (text in SUMMARIES or TOTAL_PLAIN.fullmatch(text)):
                 self.problem(row, f"'{text}' has no amount")
             elif kind == "heading":
@@ -500,7 +507,7 @@ def _date(text: str) -> date | None:
         return None
 
 
-def reconcile(layout: qlayouts.ProfitAndLossDetailLayout, source: str) -> ProfitAndLossDetail:
+def reconcile(layout: qlayouts.ProfitAndLossDetailLayout, source: str, sheet: str = "") -> ProfitAndLossDetail:
     """Read, check and account for every line of a recognised Profit and Loss Detail (step 3)."""
     reader = _Reader(layout)
     reader.read()
@@ -545,7 +552,7 @@ def reconcile(layout: qlayouts.ProfitAndLossDetailLayout, source: str) -> Profit
             if outcome.counts_as in (qr.SALE, qr.COST):
                 counts_as = outcome.counts_as
         lines.append(LedgerLine(
-            source=source, row=row, date=raw(cells, "Transaction date"), transaction_type=raw(cells, "Transaction type"),
+            source=source, sheet=sheet, row=row, date=raw(cells, "Transaction date"), transaction_type=raw(cells, "Transaction type"),
             num=raw(cells, "Num"), name=raw(cells, "Name"), description=raw(cells, "Description"),
             amount_text=raw(cells, "Amount"), amount=amount, section=canonical, account_path=path,
             outcome=INCLUDED if counts_as else NOT_RESOLVED, counts_as=counts_as,
@@ -582,9 +589,9 @@ def read_profit_and_loss_detail(name: str, data: bytes) -> ProfitAndLossDetail:
     is_xlsx = name.lower().endswith(".xlsx")
     if not is_xlsx or not data.startswith(b"PK\x03\x04"):
         raise ji.IntakeError("MargenX reads QuickBooks' Profit and Loss Detail only as an Excel (.xlsx) file.")
-    table = ji._xlsx_rows(data)
+    sheet, table = ji._xlsx_sheet(data)
     found = qlayouts.recognise_profit_and_loss_detail(table, is_xlsx=True)
     if found.layout is None:
         raise ji.IntakeError(qlayouts.quickbooks_refusal(table, ji.MAX_TITLE_LINES, is_xlsx=True)
                              or "This isn't QuickBooks' Profit and Loss Detail report.")
-    return reconcile(found.layout, name)
+    return reconcile(found.layout, name, sheet)

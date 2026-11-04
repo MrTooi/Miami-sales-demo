@@ -270,9 +270,13 @@ def quickbooks_refusal(table: list[tuple[int, list[str]]], title_lines: int, *, 
     reason = (f"This looks like a QuickBooks report (it has {sign}), and MargenX can't read this QuickBooks report "
               f"yet, so nothing from this file was used. {PLAIN_LIST}")
     if not sign.startswith("the title"):
-        # Says what to change without asking the owner to delete anything (the PR #134 review).
-        advice = {"the columns": "rename those columns", "the column": "rename that column"}.get(
-            sign.split(" '")[0], "reword the first cell of that row")
-        reason += (f" If this file didn't come from QuickBooks, {advice} and upload it again: QuickBooks uses "
-                   "the same words.")
+        # Says what to change without asking the owner to delete anything (the PR #134 review), and never
+        # suggests relabelling a real subtotal (the PR #136 review).
+        if sign.startswith("the column"):
+            which = "those columns" if sign.startswith("the columns") else "that column"
+            reason += (f" If this file didn't come from QuickBooks, rename {which} and upload it again: QuickBooks "
+                       "uses the same words.")
+        else:
+            reason += (" If this file didn't come from QuickBooks, upload a list of the sales or costs themselves, "
+                       "one per row, without total or summary rows.")
     return reason

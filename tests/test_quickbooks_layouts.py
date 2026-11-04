@@ -223,12 +223,14 @@ class RefusalWordingTests(unittest.TestCase):
         cases = {
             "rename that column": [["Invoice", "Date", "Customer", "Split", "Amount"], self.PLAIN[1]],
             "rename those columns": [["Num", "Date", "Customer", "Transaction type", "Amount"], self.PLAIN[1]],
-            "reword the first cell of that row": [*self.PLAIN, ["Total for Bakery (fictional)", "", "", "", "40.00"]],
+            "upload a list of the sales or costs themselves, one per row, without total or summary rows": [
+                *self.PLAIN, ["Total for Bakery (fictional)", "", "", "", "40.00"]],
         }
         for advice, rows in cases.items():
             with self.subTest(advice):
                 reason = refusal(fx.csv_bytes(rows), "file.csv")
-                self.assertIn(f"If this file didn't come from QuickBooks, {advice} and upload it again", reason)
+                self.assertIn(f"If this file didn't come from QuickBooks, {advice}", reason)
+                self.assertNotIn("reword", reason)
                 self.assertIn("upload a plain list with one row per sale or cost", reason)
 
     def test_a_title_says_what_to_upload_instead_without_rename_advice(self):
