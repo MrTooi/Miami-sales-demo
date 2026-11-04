@@ -78,6 +78,11 @@ def _request_headers():
 
 TRIAL_CONFIG = ta.TrialConfig.from_environ(os.environ)
 TRIAL = TRIAL_CONFIG is not None
+if ta.TrialConfig.requested(os.environ) and not TRIAL:
+    # The trial switch is on but its settings are missing or invalid: show nothing rather than fall back
+    # to the ordinary page (the gate in front refuses every request in this case too).
+    st.error("This MargenX trial copy isn't set up correctly, so it can't open. Please tell the MargenX team.")
+    st.stop()
 # The two modes never mix: the website trial is never the laptop pilot.
 PILOT = False if TRIAL else ps.pilot_mode(os.environ, st.get_option("server.address"), _request_headers())
 

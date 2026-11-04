@@ -5,6 +5,7 @@ emails are example.com addresses. No network, no real login service.
 """
 import asyncio
 import contextlib
+import io
 import json
 import threading
 import time
@@ -70,6 +71,12 @@ class ConfigTests(unittest.TestCase):
                 self.assertIsNone(ta.TrialConfig.from_environ({**SETTINGS, name: ""}), name)
         self.assertEqual(INVITED, CONFIG.invited_email)
 
+    def test_the_switch_counts_as_requested_even_when_the_settings_are_bad(self):
+        self.assertFalse(ta.TrialConfig.requested({}))
+        self.assertFalse(ta.TrialConfig.requested({"MARGINX_TRIAL": "0"}))
+        self.assertTrue(ta.TrialConfig.requested({"MARGINX_TRIAL": "yes"}))
+        self.assertTrue(ta.TrialConfig.requested({**SETTINGS, "MARGINX_HOST": ""}))
+
     def test_bad_values_are_refused(self):
         for name, bad in (("MARGINX_TRIAL_TEAM_DOMAIN", "https://evil.example.com"),
                           ("MARGINX_TRIAL_TEAM_DOMAIN", "http://margenx-test.cloudflareaccess.com"),
@@ -107,21 +114,33 @@ class TokenTests(unittest.TestCase):
     def test_no_single_key_is_cached_beyond_the_key_set(self):
         self.assertFalse(hasattr(ta.TokenChecker(CONFIG)._keys.get_signing_key, "cache_info"))
 
-    def test_a_key_fetch_gives_up_after_a_few_seconds(self):
-        self.assertEqual(ta.KEY_FETCH_TIMEOUT_SECONDS, ta.TokenChecker(CONFIG)._keys.timeout)
-        self.assertLessEqual(ta.KEY_FETCH_TIMEOUT_SECONDS, 5)
-
-    def test_a_key_cloudflare_removed_stops_working_once_the_set_is_fetched_again(self):
+    def test_a_key_cloudflare_removed_stops_working_once_the_cached_set_expires(self):
+        """The real PyJWKClient and its real fetch and cache code; only the network connection is replaced,
+        so every fetch is counted."""
         served = {"set": key_set(("old", KEY))}
-        with mock.patch.object(ta, "KEY_SET_SECONDS", 0.2), \
-                mock.patch.object(jwt.PyJWKClient, "fetch_data", lambda client: served["set"]):
-            c = ta.TokenChecker(CONFIG)  # the real key client, with its network fetch replaced
+        fetches = []
+
+        class Network:
+            def open(self, request, timeout):
+                fetches.append((request.full_url, timeout))
+                return io.BytesIO(json.dumps(served["set"]).encode())
+        with mock.patch.object(ta, "KEY_SET_SECONDS", 0.5), \
+                mock.patch("urllib.request.build_opener", return_value=Network()):
+            c = ta.TokenChecker(CONFIG)
             old = token(kid="old")
-            self.assertEqual(INVITED, c.claims(old)["email"])
+            for _ in range(3):
+                self.assertEqual(INVITED, c.claims(old)["email"])
+            # One fetch, from Cloudflare's key address, with the short network timeout; then the cached set.
+            self.assertEqual([(CONFIG.certs_url, ta.KEY_FETCH_TIMEOUT_SECONDS)], fetches)
             served["set"] = key_set(("new", OTHER_KEY))  # Cloudflare rotated: the old key is gone
-            time.sleep(0.3)
-            self.assertIsNone(c.claims(old))
+            # The known limit: until the cached set expires, the removed key still works.
+            self.assertEqual(INVITED, c.claims(old)["email"])
+            self.assertEqual(1, len(fetches))
+            time.sleep(0.6)
+            self.assertIsNone(c.claims(old))  # expired: fetched again, and the removed key is refused
+            self.assertEqual(2, len(fetches))
             self.assertEqual(INVITED, c.claims(token(key=OTHER_KEY, kid="new"))["email"])
+            self.assertEqual(2, len(fetches))  # the new key came from that same fetch
 
 
 class RegisterTests(unittest.TestCase):
@@ -661,6 +680,21 @@ class TrialPageTests(unittest.TestCase):
         rec = run({"register": register}, ws_scope(tok=token(iat=time.time()), resume=late))
         self.assertTrue(rec.closed())
         self.assertFalse(rec.app_called)
+
+    def test_a_trial_with_bad_settings_shows_nothing_instead_of_the_ordinary_page(self):
+        for environ in ({"MARGINX_TRIAL_HOST": ""}, {"MARGINX_TRIAL": "yes"},
+                        {"MARGINX_TRIAL_AUDIENCE": "", "MARGINX_PILOT": "1"}):
+            register, patches = self.page(environ=environ)
+            with contextlib.ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
+                at = AppTest.from_file(PAGE, default_timeout=30)
+                at.run()
+            self.assertFalse(at.exception, at.exception)
+            self.assertIn("isn't set up correctly", at.error[0].value, environ)
+            self.assertEqual(0, len(at.toggle), environ)
+            self.assertEqual(0, len(at.get("file_uploader")), environ)
+            self.assertEqual(0, len(at.checkbox), environ)
 
     def test_the_trial_never_turns_into_the_laptop_pilot(self):
         at, _ = self.run_page(environ={"MARGINX_PILOT": "1"})

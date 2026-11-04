@@ -30,8 +30,10 @@ Limits, stated honestly:
   session Streamlit could still resume escapes a logout. A restart forgets all that, but a
   restart also ends every session.
 - Checking a token can mean fetching Cloudflare's keys over the network. That runs off Streamlit's
-  event loop (in a worker thread, with a short timeout), so a slow fetch never holds up other
-  requests, live connections or a logout; the login is checked again on the loop afterwards.
+  event loop, in a worker thread, so a slow fetch never holds up other requests, live connections
+  or a logout; the login is checked again on the loop afterwards. Each network wait in a fetch gives
+  up after KEY_FETCH_TIMEOUT_SECONDS. That is not a total deadline: a server trickling data slowly
+  could take longer, but only the request waiting for it is delayed, and it's then refused.
 - A live connection is checked about once a second and on every message: it is closed once the
   login has expired or been logged out, and nothing more is sent on it. Figures already on screen
   stay visible (behind Streamlit's "Connection error" box) until the tab is closed.
@@ -65,7 +67,8 @@ ADDED_HEADERS = ((b"content-security-policy", b"frame-ancestors 'none'"),)
 SECURITY_HEADERS = FORCED_HEADERS + ADDED_HEADERS
 # Cloudflare's key set is fetched again after this many seconds; a key it has removed stops working then.
 KEY_SET_SECONDS = 300
-# How long one fetch of Cloudflare's keys may take before the request is refused (PyJWT's default is 30).
+# How long each network wait in a fetch of Cloudflare's keys may take (PyJWT's default is 30). Not a total
+# deadline for the whole fetch; see the module notes.
 KEY_FETCH_TIMEOUT_SECONDS = 5
 CHECK_EVERY_SECONDS = 1.0
 SAMPLES_ONLY_NOTE = (
@@ -95,6 +98,12 @@ class TrialConfig:
     @property
     def origin(self) -> str:
         return f"https://{self.host}"
+
+    @staticmethod
+    def requested(environ: Mapping[str, str]) -> bool:
+        """Whether the trial switch is set at all (anything but empty or "0"). With the switch set but the
+        settings invalid, the page refuses to run rather than fall back to the ordinary page (fail closed)."""
+        return environ.get(TRIAL_ENV, "").strip() not in ("", "0")
 
     @staticmethod
     def from_environ(environ: Mapping[str, str]) -> TrialConfig | None:
