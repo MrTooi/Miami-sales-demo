@@ -242,12 +242,17 @@ def _icon(name: str) -> str:
     return f'<svg viewBox="0 0 24 24" aria-hidden="true">{_ICONS[name]}</svg>'
 
 
-def top_bar(pilot: bool) -> None:
-    """The app's top bar: logo, name, and whether this is a pilot session or made-up data only."""
+def top_bar(pilot: bool, trial: bool = False) -> None:
+    """The app's top bar: logo, name, and whether this is a pilot session, the private website trial,
+    or made-up data only."""
     name = escape(BRAND)
     brand = f"{name[:-1]}<b>{name[-1]}</b>" if name.endswith("X") else name
-    live = ('<span class="mx-live"><i></i>Pilot session · this laptop only</span>' if pilot
-            else '<span class="mx-live demo"><i></i>Example data only</span>')
+    if trial:
+        live = '<span class="mx-live"><i></i>Private trial · invited only</span>'
+    elif pilot:
+        live = '<span class="mx-live"><i></i>Pilot session · this laptop only</span>'
+    else:
+        live = '<span class="mx-live demo"><i></i>Example data only</span>'
     _html(f'<div class="mx-bar"><img class="mx-logo" src="{_LOGO_SRC}" alt="{name} logo"><span class="name">{brand}</span>'
           f'<span class="sep"></span><span class="ws">{escape(TAGLINE)}</span>{live}</div>')
 
@@ -285,16 +290,20 @@ def card_title(title: str, note: str) -> None:
     _html(f'<div class="mx-cardt">{escape(title)}</div><div class="mx-cards">{escape(note)}</div>')
 
 
-def privacy_points(pilot: bool) -> None:
+def privacy_points(pilot: bool, trial: bool = False) -> None:
     """What happens to the files, in three short lines (the consent box says it in full).
 
     "Stays on this laptop" is said only in a pilot session, which pilot_safety has verified runs on
     this laptop for a local browser. End session is an instruction, not a promise: when it can't
     confirm the files were cleared, the page says so.
     """
-    first = (("laptop", "Stays on this laptop, never sent online") if pilot else ("file", "Made-up files only"))
-    points = (first, ("lock", "Read in memory, never saved" if pilot else "Checked in memory, never saved"),
-              ("trash", "End session clears the app's data"))
+    if trial:  # the website trial (trial_access): only the invited person can log in
+        points = (("lock", "Private: only you can log in"), ("file", "Read in memory, not saved by MargenX"),
+                  ("trash", "End session clears the app's data"))
+    else:
+        first = (("laptop", "Stays on this laptop, never sent online") if pilot else ("file", "Made-up files only"))
+        points = (first, ("lock", "Read in memory, never saved" if pilot else "Checked in memory, never saved"),
+                  ("trash", "End session clears the app's data"))
     _html('<div class="mx-trust">' + "".join(f'<div><span class="mx-ico2">{_icon(i)}</span>{escape(t)}</div>'
                                             for i, t in points) + "</div>")
 

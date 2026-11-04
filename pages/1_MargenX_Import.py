@@ -10,6 +10,10 @@ mode switched on and the app reachable from that computer alone (pilot_safety),
 a pilot shop's own files may be read with the owner's consent. Either way, files
 are processed in memory for this session only and never saved; "End session"
 forgets everything.
+
+In the website trial (trial_access, issue #131), only the invited person gets in, the page checks
+their login itself, consent is reported to the gate in front of the upload address, and, until the
+QuickBooks Profit and Loss Detail reading (#128) is finished, every uploaded file is refused.
 """
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ import job_profit as jp  # noqa: E402
 import marginx_insights as mi  # noqa: E402
 import marginx_ui as ui  # noqa: E402
 import pilot_safety as ps  # noqa: E402
+import trial_access as ta  # noqa: E402
 
 SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"
 SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")
@@ -70,7 +75,10 @@ def _request_headers():
         return None
 
 
-PILOT = ps.pilot_mode(os.environ, st.get_option("server.address"), _request_headers())
+TRIAL_CONFIG = ta.TrialConfig.from_environ(os.environ)
+TRIAL = TRIAL_CONFIG is not None
+# The two modes never mix: the website trial is never the laptop pilot.
+PILOT = False if TRIAL else ps.pilot_mode(os.environ, st.get_option("server.address"), _request_headers())
 
 # The app's frame: a top bar (brand, session, End session), the check-up's steps down the side, and
 # the page beside them. "End session" forgets every file, answer and result: the session's state is
@@ -89,11 +97,50 @@ def _release_uploads() -> bool:
         return False
 
 
+def _session_id() -> str | None:
+    try:
+        from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
+
+        ctx = get_script_run_ctx()
+        return ctx.session_id if ctx else None
+    except Exception:
+        return None
+
+
+TRIAL_EMAIL = None
+if TRIAL:
+    # The page checks the login itself, and ties this session to that one person for good.
+    TRIAL_SID = _session_id()
+    TRIAL_EMAIL = ta.identity_from_headers(_request_headers(), ta.checker_for(TRIAL_CONFIG))
+    try:
+        from streamlit.runtime import Runtime
+
+        if Runtime.exists():
+            ta.REGISTER.prune(Runtime.instance().is_active_session)
+    except Exception:
+        pass
+    if TRIAL_EMAIL is None or TRIAL_SID is None or not ta.REGISTER.bind(TRIAL_SID, TRIAL_EMAIL):
+        _release_uploads()
+        st.session_state.clear()
+        st.error("Your login has ended or couldn't be checked. Reload this page to log in again.")
+        st.stop()
+
+
 with st.container(key="mx-bar"):
     bar_brand, bar_end = st.columns([3.2, 1.6], vertical_alignment="center")
     with bar_brand:
-        ui.top_bar(PILOT)
+        ui.top_bar(PILOT, TRIAL)
     end_clicked = bar_end.button("End session and clear everything", width="stretch")
+    logout_clicked = bar_end.button("Log out", width="stretch") if TRIAL else False
+if logout_clicked:
+    # Log out ends every MargenX session of this person and refuses their earlier logins, then sends the
+    # browser to Cloudflare's own logout. Cloudflare can take a short moment to end the login everywhere.
+    _release_uploads()
+    ta.REGISTER.log_out(TRIAL_EMAIL)
+    st.session_state.clear()
+    st.info("You're logged out of MargenX. Your files and results were cleared from this session.")
+    st.html('<script>window.location.href = "/cdn-cgi/access/logout";</script>', unsafe_allow_javascript=True)
+    st.stop()
 if end_clicked:
     released = _release_uploads()
     st.session_state.clear()
@@ -125,7 +172,12 @@ with side:
     ui.what_you_get()
 
 with main:
-    if PILOT:
+    if TRIAL:
+        st.info(
+            "**Private MargenX trial.** Only you can log in. Files are read in memory for this session and are not "
+            "saved by MargenX. **End session** clears them; **Log out** ends your login."
+        )
+    elif PILOT:
         st.warning(
             "**Pilot session on this laptop.** A pilot shop's own files may be used only with the shop owner present "
             "and agreeing below. Files are read in memory only, never saved, and forgotten when you press "
@@ -151,21 +203,36 @@ with main:
         heading = st.empty()  # shown only until files arrive: then the results take over
         with st.container(key="mx-consent"):
             ui.card_title("Before we start", "The owner reads and ticks this." if PILOT
-                          else "Only made-up files outside a pilot session.")
+                          else "You read and tick this." if TRIAL else "Only made-up files outside a pilot session.")
             consent_col, points_col = st.columns([1.6, 1], vertical_alignment="center")
             # The box comes first: the upload area isn't shown, so no file can be received, until it is ticked.
-            confirmed = consent_col.checkbox(ps.CONSENT_TEXT if PILOT else ps.MADE_UP_TEXT, key=f"confirm-{session}")
+            consent_text = ta.CONSENT_TEXT if TRIAL else ps.CONSENT_TEXT if PILOT else ps.MADE_UP_TEXT
+            confirmed = consent_col.checkbox(consent_text, key=f"confirm-{session}")
+            if TRIAL:
+                # The gate in front of the upload address allows uploads only while this is ticked. Unticking
+                # throws away anything already uploaded, unread, and gives the upload box a new key.
+                if st.session_state.get("trial_consent_was") and not confirmed:
+                    _release_uploads()
+                    st.session_state["upload_round"] = st.session_state.get("upload_round", 0) + 1
+                st.session_state["trial_consent_was"] = confirmed
+                ta.REGISTER.set_consent(TRIAL_SID, TRIAL_EMAIL, confirmed)
             with points_col:
-                ui.privacy_points(PILOT)
+                ui.privacy_points(PILOT, TRIAL)
         with st.container(key="mx-files"):
             ui.card_title("Drop your reports", "Both files at once, or one at a time.")
             if not confirmed:
                 ui.locked_drop()
             else:
                 uploads = st.file_uploader("Drop your sales and cost files here (CSV or Excel)", type=["csv", "xlsx"],
-                                           accept_multiple_files=True, key=f"upload-{session}",
+                                           accept_multiple_files=True,
+                                           key=f"upload-{session}-{st.session_state.get('upload_round', 0)}",
                                            label_visibility="collapsed")
-                if ps.upload_allowed(False, bool(uploads), confirmed):
+                if TRIAL and uploads:
+                    # Until #128's Profit and Loss Detail reading is merged, a trial copy reads no uploaded file.
+                    _release_uploads()
+                    st.session_state["upload_round"] = st.session_state.get("upload_round", 0) + 1
+                    st.warning(ta.NOT_YET_SUPPORTED)
+                elif ps.upload_allowed(False, bool(uploads), confirmed):
                     files = [(u.name, u.getvalue()) for u in uploads]
             slots = st.empty()
             with slots.container():
