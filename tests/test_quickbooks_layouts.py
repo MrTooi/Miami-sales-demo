@@ -82,6 +82,10 @@ class RecognisedLayoutTests(unittest.TestCase):
         layout = recognise(fx.xlsx(fx.pnl_rows(period="November 1, 2025-October 31, 2026",
                                                footer="Accrual Basis Tuesday, November 3, 2026 09:15 AM GMT-05:00"))).layout
         self.assertEqual((date(2025, 11, 1), date(2026, 10, 31)), (layout.period_start, layout.period_end))
+        for offset in ("+14:00", "+05:30", "+05:45", "-00:00"):
+            with self.subTest(offset):
+                footer = f"Accrual Basis Monday, October 26, 2026 07:04 PM GMT{offset}"
+                self.assertIsNotNone(recognise(fx.xlsx(fx.pnl_rows(footer=footer))).layout)
 
     def test_repeated_spaces_in_the_title_rows_change_nothing(self):
         layout = recognise(fx.xlsx(fx.pnl_rows(company=" Biscayne  Landscaping (fictional)",
@@ -120,6 +124,17 @@ class VariantTests(unittest.TestCase):
             "can't tell whether it's accrual or cash": fx.pnl_rows(footer=None),
             "isn't the basis line MargenX knows": fx.pnl_rows(footer="Accrual basis Monday, October 26, 2026 07:04 PM"),
             "doesn't hold a real date and time": fx.pnl_rows(footer="Accrual Basis Sunday, October 26, 2026 07:04 PM GMTZ"),
+            "'Accrual Basis Monday, October 26, 2026 13:04 PM GMTZ', doesn't hold a real date and time":
+                fx.pnl_rows(footer="Accrual Basis Monday, October 26, 2026 13:04 PM GMTZ"),
+            "'Accrual Basis Monday, October 26, 2026 07:60 PM GMTZ', doesn't hold a real date and time":
+                fx.pnl_rows(footer="Accrual Basis Monday, October 26, 2026 07:60 PM GMTZ"),
+            # Automated review of 51ca08f: an offset that can't exist must not pass.
+            "'Accrual Basis Monday, October 26, 2026 07:04 PM GMT+99:99', doesn't hold a real date and time":
+                fx.pnl_rows(footer="Accrual Basis Monday, October 26, 2026 07:04 PM GMT+99:99"),
+            "'Accrual Basis Monday, October 26, 2026 07:04 PM GMT-05:75', doesn't hold a real date and time":
+                fx.pnl_rows(footer="Accrual Basis Monday, October 26, 2026 07:04 PM GMT-05:75"),
+            "'Accrual Basis Monday, October 26, 2026 07:04 PM GMT+15:00', doesn't hold a real date and time":
+                fx.pnl_rows(footer="Accrual Basis Monday, October 26, 2026 07:04 PM GMT+15:00"),
             "row 4 should be empty, but it holds 'Customer: Coral Cafe (fictional)'":
                 fx.pnl_rows(row4=["Customer: Coral Cafe (fictional)"]),
             "row 4 should be empty, but it holds 'Currency: USD'": fx.pnl_rows(row4=["Currency: USD"]),
