@@ -84,6 +84,7 @@ MIXED_ACCOUNT = "mixed"
 NOT_SURE_ACCOUNT = "not sure"
 ACCOUNT_USES = (JOB_COSTS_ACCOUNT, OVERHEAD_ACCOUNT, MIXED_ACCOUNT, NOT_SURE_ACCOUNT)
 
+CROSS_CHECK_REPORT = "Sales by Customer Detail"
 ONE_REPORT = ("One report alone can't make a job's profit Complete: a second report has to cross-check its "
               "sales first (issue #128, S3).")
 
@@ -153,6 +154,7 @@ class Hold:
     row: int | None  # the line that holds the figure, or None for the report itself
     amount: Decimal | None  # the amount being held (None when it isn't known)
     reason: str
+    report: str = "Profit and Loss Detail"  # which report the row is in (step 5b: the cross-check's rows too)
 
 
 @dataclass(frozen=True)
@@ -170,7 +172,7 @@ class Figure:
         seen = {}
         for hold in self.holds:
             if hold.row is not None and hold.amount is not None:
-                seen[hold.row] = hold.amount
+                seen[(hold.report, hold.row)] = hold.amount
         return sum(seen.values(), ZERO)
 
     @property
@@ -239,8 +241,10 @@ class _JobsOf:
 
 
 class _Builder:
-    def __init__(self, report: qp.ProfitAndLossDetail, answers: OwnerAnswers):
+    def __init__(self, report: qp.ProfitAndLossDetail, answers: OwnerAnswers, cross_check=None):
         self.report = report
+        self.cross_check = cross_check
+        self.one_report = True  # S3, until a usable cross-check lifts it (step 5b)
         self.warnings: list[str] = []
         if answers != OwnerAnswers() and answers.report != report_fingerprint(report):
             self.warnings.append("These answers were given for a different report, or for an earlier version of this "
@@ -513,6 +517,7 @@ class _Builder:
     # -- the whole report --
     def build(self) -> Figures:
         resolutions = [self.place(line) for line in self.report.lines]
+        self.apply_cross_check(resolutions)
         for problem in self.report.problems:
             # A total that doesn't match, or a row that can't be placed: every figure its section feeds needs
             # a check, whatever the answers (S6). It isn't tied to one line, so its amount isn't known.
@@ -538,6 +543,49 @@ class _Builder:
             if tuple(path) not in paths:
                 self.warn(f"There's no account '{' › '.join(path)}' in this report, so that answer wasn't used.")
         return Figures(self.scope(), self.jobs_on, *self.assemble(), tuple(resolutions), tuple(self.warnings))
+
+    def apply_cross_check(self, resolutions: list[Resolution]) -> None:
+        """Step 5b (S3, S4): a usable cross-check by Sales by Customer Detail lifts the one-report rule on jobs.
+        Every line that doesn't match, in either report, holds the sales figures it could change; so does a
+        matched line the owner's answers put in another customer or job than the other report shows."""
+        check = self.cross_check
+        if check is None:
+            return
+        if check.pnl_fingerprint != report_fingerprint(self.report):
+            self.warn("The cross-check was made for another Profit and Loss Detail, so it wasn't used.")
+            return
+        if not check.usable:
+            self.warn("Sales by Customer Detail couldn't be used as the cross-check: " + "; ".join(check.reasons) + ".")
+            return
+        self.one_report = False
+        by_row = {r.row: r for r in resolutions}
+        for row in check.pnl_unmatched:
+            line = self.lines[row]
+            shown = f"{line.amount:,.2f}" if line.amount is not None else "amount unknown"
+            customer, job = self.who(line, None)
+            hold = Hold(row, line.amount, f"Row {row} ({shown}) isn't in Sales by Customer Detail, so the two reports "
+                                          "don't agree on it.")
+            self.hold("company", None, "sales", hold)
+            self.hold_customer_and_jobs(customer, job, "sales", hold)
+        for row, amount in check.sbcd_unmatched_amounts:
+            shown = f"{amount:,.2f}" if amount is not None else "amount unknown"
+            # Its owner isn't proven by that report alone (step 5a), so every customer's and job's sales need a check.
+            hold = Hold(row, amount, f"Sales by Customer Detail row {row} ({shown}) isn't in Profit and Loss Detail, "
+                                     "so the two reports don't agree on it.", CROSS_CHECK_REPORT)
+            self.hold("company", None, "sales", hold)
+            self.hold_customer_and_jobs(None, None, "sales", hold)
+        for row, (customer, job) in check.sbcd_jobs.items():
+            resolution = by_row.get(row)
+            if resolution is None or resolution.kind not in (REVENUE, REDUCTION):
+                continue
+            mismatch = (resolution.customer is not None and customer is not None and resolution.customer != customer) or (
+                self.jobs_on and resolution.job is not None and job is not None and resolution.job != job)
+            if mismatch:
+                hold = Hold(row, resolution.amount, f"Row {row} is counted for {resolution.customer}"
+                            + (f" › {resolution.job}" if resolution.job else "") + ", but Sales by Customer Detail "
+                            f"lists it under {customer}" + (f" › {job}" if job else "") + ".")
+                self.hold("company", None, "sales", hold)
+                self.hold_customer_and_jobs(None, None, "sales", hold)
 
     def scope(self) -> str:
         layout = self.report.layout
@@ -594,10 +642,12 @@ class _Builder:
         for job in sorted(self.jobs):
             s, c = figure(("job", job, "sales")), figure(("job", job, "job_costs"))
             jobs[job] = {"sales": s, "job_costs": c,
-                         "profit_after_job_costs": derived(s.amount - c.amount, s, c, extra=(Hold(None, None, ONE_REPORT),))}
+                         "profit_after_job_costs": derived(s.amount - c.amount, s, c,
+                                                           extra=(Hold(None, None, ONE_REPORT),) if self.one_report else ())}
         return company, customers, jobs
 
 
-def figures(report: qp.ProfitAndLossDetail, answers: OwnerAnswers | None = None) -> Figures:
-    """Company, customer and job figures from a checked Profit and Loss Detail and the owner's answers."""
-    return _Builder(report, answers or OwnerAnswers()).build()
+def figures(report: qp.ProfitAndLossDetail, answers: OwnerAnswers | None = None, cross_check=None) -> Figures:
+    """Company, customer and job figures from a checked Profit and Loss Detail and the owner's answers; with a
+    usable cross-check by Sales by Customer Detail (quickbooks_crosscheck.cross_check), jobs can be Complete."""
+    return _Builder(report, answers or OwnerAnswers(), cross_check).build()

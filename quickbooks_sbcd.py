@@ -175,6 +175,19 @@ class _Reader:
         self.placed: list[tuple[int, tuple[str, ...], tuple[str, ...], str | None]] = []  # row, cells, path, note
         self.grand_total: Decimal | None = None
         self.grand_seen = False
+        # Where each closing row is, by the name it closes, so a lookahead never rescans the report (the PR #139
+        # review: one scan per customer made large reports slow).
+        self.closings: dict[str, list[tuple[int, bool]]] = {}
+        self.grand_index: int | None = None
+        for index, (_, cells) in enumerate(self.rows):
+            kind, text = self.kind(cells)
+            if kind != "labelled":
+                continue
+            if text == GRAND_TOTAL and self.grand_index is None:
+                self.grand_index = index
+            match = TOTAL_FOR.fullmatch(text)
+            if match:
+                self.closings.setdefault(match.group(1), []).append((index, bool(match.group(2))))
 
     # -- helpers --
     def problem(self, row: int, text: str, customer: str | None | object = "current") -> None:
@@ -199,16 +212,17 @@ class _Reader:
     def lookahead_is_child(self, index: int, group: _Group) -> bool:
         """After a customer's own "Total for X", is the next heading its sub-customer? Only when the next
         closing row naming it or a group above it is "Total for X with sub-customers"."""
-        above = {g.name for g in self.stack[:-1]}
-        for _, cells in self.rows[index:]:
-            kind, text = self.kind(cells)
-            if kind == "labelled":
-                match = TOTAL_FOR.fullmatch(text)
-                if match and match.group(1) == group.name and match.group(2):
-                    return True
-                if (match and match.group(1) in above) or text == GRAND_TOTAL:
-                    return False
-        return False
+        def first_at_or_after(entries, wanted_with_sub=None):
+            positions = [i for i, with_sub in entries if i >= index and (wanted_with_sub is None or with_sub == wanted_with_sub)]
+            return positions[0] if positions else None
+
+        own = first_at_or_after(self.closings.get(group.name, []), True)
+        if own is None:
+            return False
+        stops = [first_at_or_after(self.closings.get(g.name, [])) for g in self.stack[:-1]]
+        if self.grand_index is not None and self.grand_index >= index:
+            stops.append(self.grand_index)
+        return all(stop is None or own < stop for stop in stops)
 
     def close_finished(self, index: int | None = None, upto: str | None = None) -> None:
         while self.stack and self.stack[-1].direct_closed:
@@ -456,9 +470,12 @@ def reconcile(layout: qlayouts.ReportLayout, source: str, sheet: str = "") -> Sa
             amount=amount, customer_path=path, outcome=qp.INCLUDED if counts_as else qp.NOT_RESOLVED,
             counts_as=counts_as, reason=reason))
 
+    by_customer: dict[str, list[SalesLine]] = {}
+    for line in lines:
+        by_customer.setdefault(line.customer, []).append(line)
     coverage = {}
     for name, group in reader.customers.items():
-        mine = [l for l in lines if l.customer == name]
+        mine = by_customer.get(name, [])
         known = [l for l in mine if l.amount is not None]
         line_sum, _ = reader.sums(group.all_lines())
         coverage[name] = CustomerCoverage(
