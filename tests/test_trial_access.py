@@ -106,6 +106,10 @@ class TokenTests(unittest.TestCase):
     def test_no_single_key_is_cached_beyond_the_key_set(self):
         self.assertFalse(hasattr(ta.TokenChecker(CONFIG)._keys.get_signing_key, "cache_info"))
 
+    def test_a_key_fetch_gives_up_after_a_few_seconds(self):
+        self.assertEqual(ta.KEY_FETCH_TIMEOUT_SECONDS, ta.TokenChecker(CONFIG)._keys.timeout)
+        self.assertLessEqual(ta.KEY_FETCH_TIMEOUT_SECONDS, 5)
+
     def test_a_key_cloudflare_removed_stops_working_once_the_set_is_fetched_again(self):
         served = {"set": key_set(("old", KEY))}
         with mock.patch.object(ta, "KEY_SET_SECONDS", 0.2), \
@@ -144,12 +148,13 @@ class RegisterTests(unittest.TestCase):
         self.assertTrue(r.login_allowed(INVITED, 1001))
         self.assertTrue(r.bind("s3", INVITED))  # a new login gets a new session
 
-    def test_closed_sessions_are_forgotten(self):
+    def test_no_session_is_forgotten_before_a_logout(self):
+        # Streamlit keeps a disconnected tab's session so it can reconnect: its owner must stay known.
         r = ta.SessionRegister()
+        r.bind("disconnected", INVITED)
         r.bind("open", INVITED)
-        r.bind("closed", INVITED)
-        r.prune(lambda sid: sid == "open")
-        self.assertEqual(["open"], r.log_out(INVITED))
+        self.assertFalse(hasattr(r, "prune"))
+        self.assertEqual(["disconnected", "open"], sorted(r.log_out(INVITED)))
 
 
 class EndSessionsTests(unittest.TestCase):
@@ -400,9 +405,9 @@ class GateTests(unittest.TestCase):
         got, sent = self.live(expire)
         self.assertEqual(["websocket.accept", "websocket.send", "websocket.close"], [m["type"] for m in sent])
 
-    def log_out_via_link(self, tok=None, method="GET", site="same-origin"):
+    def log_out_via_button(self, tok=None, method="POST", site="same-origin", origin=ORIGIN, register=None):
         closed = []
-        register = self.register
+        register = register or self.register
 
         async def scenario():
             rt = SimpleNamespace(close_session=closed.append,
@@ -410,45 +415,132 @@ class GateTests(unittest.TestCase):
             rec = Recorder()
             gate = ta.TrialGate(rec.app, config=CONFIG, checker=checker(), register=register, runtime=lambda: rt)
             extra = [(b"sec-fetch-site", site.encode())] if site else []
-            await gate(http_scope(ta.LOGOUT_PATH, method=method, tok=tok or token(iat=time.time() - 30), extra=extra),
-                       rec.receive, rec.send)
+            await gate(http_scope(ta.LOGOUT_PATH, method=method, tok=tok or token(iat=time.time() - 30), origin=origin,
+                                  length=0, extra=extra), rec.receive, rec.send)
             await asyncio.sleep(0.05)  # the closing runs on the event loop
             return rec
         return asyncio.run(scenario()), closed
 
-    def test_the_log_out_link_ends_everything_and_goes_to_cloudflares_logout(self):
+    def test_log_out_ends_everything_and_goes_to_cloudflares_logout(self):
         self.register.bind("s1", INVITED)
         self.register.bind("s2", INVITED)
         self.register.bind("x", "someone@example.com")
-        rec, closed = self.log_out_via_link()
+        rec, closed = self.log_out_via_button()
         self.assertEqual(303, rec.status())
         self.assertEqual(b"/cdn-cgi/access/logout", dict(rec.sent[0]["headers"])[b"location"])
         self.assertFalse(rec.app_called)  # answered by the gate: works even though the page can't load
+        self.assertFalse(rec.body_read)
         self.assertEqual(["s1", "s2"], sorted(closed))
         self.assertFalse(self.register.login_allowed(INVITED, time.time() - 1))
         self.assertFalse(self.register.bind("s1", INVITED))
         self.assertTrue(self.register.may_resume("x", "someone@example.com"))
 
-    def test_typed_in_or_older_browsers_can_log_out_too(self):
-        for site in ("none", None):
-            self.register = ta.SessionRegister()
-            rec, _ = self.log_out_via_link(site=site)
-            self.assertEqual(303, rec.status(), site)
+    def test_older_browsers_without_fetch_metadata_can_log_out_from_the_page(self):
+        rec, _ = self.log_out_via_button(site=None)  # Origin is still checked
+        self.assertEqual(303, rec.status())
 
     def test_another_site_cannot_log_the_person_out(self):
         self.register.bind("s1", INVITED)
-        for method, site in (("GET", "cross-site"), ("GET", "same-site"), ("POST", "same-origin"),
-                             ("HEAD", "same-origin")):
-            rec, closed = self.log_out_via_link(method=method, site=site)
-            self.assertEqual(403, rec.status(), (method, site))
-            self.assertEqual([], closed)
+        attempts = {
+            "GET, no fetch metadata (a link or image on another site)": {"method": "GET", "site": None, "origin": None},
+            "GET, same-origin": {"method": "GET"},
+            "GET, typed in": {"method": "GET", "site": "none", "origin": None},
+            "HEAD": {"method": "HEAD"},
+            "POST from another site": {"origin": "https://evil.example.com", "site": "cross-site"},
+            "POST from another site, no fetch metadata": {"origin": "https://evil.example.com", "site": None},
+            "POST with no Origin": {"origin": None, "site": None},
+            "POST, sibling site": {"site": "same-site"},
+            "POST, Origin null": {"origin": "null", "site": None},
+        }
+        for name, kw in attempts.items():
+            rec, closed = self.log_out_via_button(**kw)
+            self.assertEqual(403, rec.status(), name)
+            self.assertEqual([], closed, name)
         self.assertTrue(self.register.login_allowed(INVITED, time.time() - 1))
         self.assertTrue(self.register.bind("s1", INVITED))
 
-    def test_the_log_out_link_needs_a_valid_login_like_everything_else(self):
-        rec, closed = self.log_out_via_link(tok=token(email="someone@example.com"))
+    def test_log_out_needs_a_valid_login_like_everything_else(self):
+        rec, closed = self.log_out_via_button(tok=token(email="someone@example.com"))
         self.assertEqual(403, rec.status())
         self.assertTrue(self.register.login_allowed(INVITED, time.time() - 1))
+
+    def test_a_disconnected_tab_is_ended_by_a_logout_in_another_tab_and_cannot_come_back(self):
+        """The round-2 regression: tab A disconnects (Streamlit keeps its session to reconnect), tab B
+        reruns, B logs out, then A's old session ID is tried with a fresh login."""
+        register = ta.SessionRegister()
+        register.bind("tab-a", INVITED)
+        # Tab B's page runs while Streamlit reports A as inactive (disconnected, kept for reconnecting).
+        from streamlit.runtime import Runtime
+
+        real_instance = Runtime.instance
+
+        def instance():
+            rt = mock.MagicMock(wraps=real_instance()) if Runtime.exists() else mock.MagicMock()
+            rt.is_active_session.side_effect = lambda sid: sid != "tab-a"
+            return rt
+        with mock.patch.dict("os.environ", SETTINGS), mock.patch.object(ta, "REGISTER", register), \
+                mock.patch.object(ta, "identity_from_headers", return_value=INVITED), \
+                mock.patch.object(Runtime, "instance", side_effect=instance):
+            at = AppTest.from_file(PAGE, default_timeout=30)
+            at.run()
+        self.assertFalse(at.exception, at.exception)
+        rec, closed = self.log_out_via_button(register=register)  # B logs out
+        self.assertEqual(303, rec.status())
+        self.assertIn("tab-a", closed)  # A's kept session is closed too
+        time.sleep(1.1)  # token times are whole seconds: a login after the logout
+        fresh = token(iat=time.time())
+        self.assertEqual(200, run({"register": register}, http_scope(tok=fresh)).status())  # the new login works
+        rec = run({"register": register}, ws_scope(tok=fresh, resume="tab-a"))
+        self.assertTrue(rec.closed())
+        self.assertFalse(rec.app_called)  # ...but A's old session can't be picked up again
+
+    def slow_checker(self, seconds, during=None):
+        """A token check that blocks its thread, as a slow fetch of Cloudflare's keys would."""
+        inner = checker()
+
+        class Slow:
+            def claims(self, token):
+                if during:
+                    during()
+                time.sleep(seconds)
+                return inner.claims(token)
+        return Slow()
+
+    def test_a_slow_key_fetch_never_holds_up_the_event_loop(self):
+        ticks = []
+
+        async def scenario():
+            async def ticker():
+                while True:
+                    ticks.append(time.monotonic())
+                    await asyncio.sleep(0.01)
+            t = asyncio.create_task(ticker())
+            rec = Recorder()
+            gate = ta.TrialGate(rec.app, config=CONFIG, checker=self.slow_checker(0.3), register=self.register)
+            await gate(http_scope(tok=token()), rec.receive, rec.send)
+            t.cancel()
+            return rec
+        rec = asyncio.run(scenario())
+        self.assertEqual(200, rec.status())
+        self.assertGreater(len(ticks), 10)  # the loop kept running while the token was being checked
+
+    def test_a_logout_during_a_slow_token_check_still_refuses_the_request(self):
+        holder = {}
+
+        def log_out_meanwhile():
+            # The logout lands on the event loop while this request's token is still being checked.
+            holder["loop"].call_soon_threadsafe(self.register.log_out, INVITED, time.time())
+
+        async def scenario():
+            holder["loop"] = asyncio.get_running_loop()
+            rec = Recorder()
+            gate = ta.TrialGate(rec.app, config=CONFIG, checker=self.slow_checker(0.2, log_out_meanwhile),
+                                register=self.register)
+            await gate(http_scope(tok=token(iat=time.time() - 30)), rec.receive, rec.send)
+            return rec
+        rec = asyncio.run(scenario())
+        self.assertEqual(403, rec.status())
+        self.assertFalse(rec.app_called)
 
     def test_after_logout_earlier_logins_are_refused_and_new_ones_work(self):
         old = token(iat=time.time() - 30)
@@ -498,12 +590,13 @@ class TrialPageTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         return at, register
 
-    def test_trial_mode_shows_samples_only_and_a_log_out_link(self):
+    def test_trial_mode_shows_samples_only_and_a_log_out_button(self):
         at, register = self.run_page()
         self.assertIn("Private MargenX trial", at.info[0].value)
         self.assertIn("made-up sample files", at.info[0].value)
-        links = [m.value for m in at.markdown if m.value.startswith('<a class="mx-logout"')]
-        self.assertEqual([f'<a class="mx-logout" href="{ta.LOGOUT_PATH}" target="_self">Log out</a>'], links)
+        forms = [m.value for m in at.markdown if m.value.startswith('<form class="mx-logout"')]
+        self.assertEqual([f'<form class="mx-logout" method="post" action="{ta.LOGOUT_PATH}">'
+                          '<button type="submit">Log out</button></form>'], forms)
         self.assertNotIn("Log out", [b.label for b in at.button])
         self.assertEqual(1, len(register._sessions))
 
@@ -551,12 +644,12 @@ class TrialPageTests(unittest.TestCase):
         for laptop_words in ("laptop", "Ctrl", "stop MargenX", "upload"):
             self.assertNotIn(laptop_words, message)
 
-    def test_the_laptop_pilot_has_no_log_out_link(self):
+    def test_the_laptop_pilot_has_no_log_out_button(self):
         with mock.patch.dict("os.environ", {"MARGINX_TRIAL": ""}):
             at = AppTest.from_file(PAGE, default_timeout=30)
             at.run()
         self.assertFalse(at.exception, at.exception)
-        self.assertEqual([], [m for m in at.markdown if m.value.startswith('<a class="mx-logout"')])
+        self.assertEqual([], [m for m in at.markdown if m.value.startswith('<form class="mx-logout"')])
 
 
 if __name__ == "__main__":

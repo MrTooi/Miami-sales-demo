@@ -110,16 +110,10 @@ def _session_id() -> str | None:
 
 TRIAL_EMAIL = None
 if TRIAL:
-    # The page checks the login itself, and ties this session to that one person for good.
+    # The page checks the login itself, and ties this session to that one person for good. The register
+    # never forgets that while the process runs, so a logout also reaches tabs that have disconnected.
     TRIAL_SID = _session_id()
     TRIAL_EMAIL = ta.identity_from_headers(_request_headers(), ta.checker_for(TRIAL_CONFIG))
-    try:
-        from streamlit.runtime import Runtime
-
-        if Runtime.exists():
-            ta.REGISTER.prune(Runtime.instance().is_active_session)
-    except Exception:
-        pass
     if TRIAL_EMAIL is None or TRIAL_SID is None or not ta.REGISTER.bind(TRIAL_SID, TRIAL_EMAIL):
         _release_uploads()
         st.session_state.clear()
@@ -133,10 +127,10 @@ with st.container(key="mx-bar"):
         ui.top_bar(PILOT, TRIAL)
     end_clicked = bar_end.button("End session and clear everything", width="stretch")
     if TRIAL:
-        # Log out is a plain link that the gate answers itself (trial_access.TrialGate._log_out): it ends
-        # the login and every MargenX session of this person, then sends the browser to Cloudflare's logout.
+        # Log out posts to the gate, which answers it itself (trial_access.TrialGate._log_out): it ends the
+        # login and every MargenX session of this person, then sends the browser to Cloudflare's logout.
         with bar_end:
-            ui.logout_link(ta.LOGOUT_PATH)
+            ui.logout_button(ta.LOGOUT_PATH)
 if end_clicked:
     released = _release_uploads()
     st.session_state.clear()

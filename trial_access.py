@@ -20,12 +20,18 @@ separate and unchanged.
 Limits, stated honestly:
 - The gate trusts Cloudflare's signing keys, fetched from the team's own address. Release check 1
   shows the server is reachable only through the tunnel.
-- Log out is handled here, not by the page: the Log out link opens LOGOUT_PATH, and the gate
-  refuses that person's logins issued up to then, retires and closes every MargenX session of
-  theirs in this process (state and any uploaded files), and sends the browser on to Cloudflare's
-  own logout. A plain redirect, so it works even though the page can no longer load anything.
-  A retired session can never be resumed. A restart forgets all that, but a restart also ends
-  every session.
+- Log out is handled here, not by the page: the Log out button posts to LOGOUT_PATH from the
+  trial's own page (checked by Origin), and the gate refuses that person's logins issued up to
+  then, retires and closes every MargenX session of theirs in this process, including any tab
+  that has disconnected but that Streamlit keeps for a while so it can reconnect (state and any
+  uploaded files), and sends the browser on to Cloudflare's own logout. A plain redirect, so it
+  works even though the page can no longer load anything. A retired session can never be resumed.
+  The register never forgets which person a session belongs to while the process runs, so no
+  session Streamlit could still resume escapes a logout. A restart forgets all that, but a
+  restart also ends every session.
+- Checking a token can mean fetching Cloudflare's keys over the network. That runs off Streamlit's
+  event loop (in a worker thread, with a short timeout), so a slow fetch never holds up other
+  requests, live connections or a logout; the login is checked again on the loop afterwards.
 - A live connection is checked about once a second and on every message: it is closed once the
   login has expired or been logged out, and nothing more is sent on it. Figures already on screen
   stay visible (behind Streamlit's "Connection error" box) until the tab is closed.
@@ -45,7 +51,7 @@ UPLOAD_PREFIX = "/_stcore/upload_file"
 READ_METHODS = ("GET", "HEAD", "OPTIONS")
 # Headers that must appear at most once: with two copies, the gate and Streamlit could read different ones.
 SINGLE_HEADERS = (b"host", b"origin", TOKEN_HEADER.encode(), b"sec-websocket-protocol", b"sec-fetch-site")
-# The Log out link's address, answered by the gate itself; then on to Cloudflare's own logout.
+# The Log out button posts here; the gate answers it itself, then sends the browser to Cloudflare's own logout.
 LOGOUT_PATH = "/_trial/logout"
 CLOUDFLARE_LOGOUT = "/cdn-cgi/access/logout"
 # Replaced on every response: nothing from the trial is stored by the browser or any cache, and no other
@@ -56,6 +62,8 @@ ADDED_HEADERS = ((b"content-security-policy", b"frame-ancestors 'none'"),)
 SECURITY_HEADERS = FORCED_HEADERS + ADDED_HEADERS
 # Cloudflare's key set is fetched again after this many seconds; a key it has removed stops working then.
 KEY_SET_SECONDS = 300
+# How long one fetch of Cloudflare's keys may take before the request is refused (PyJWT's default is 30).
+KEY_FETCH_TIMEOUT_SECONDS = 5
 CHECK_EVERY_SECONDS = 1.0
 SAMPLES_ONLY_NOTE = (
     "This trial shows MargenX with made-up sample files for now. Reading your own QuickBooks report isn't "
@@ -113,10 +121,12 @@ class TokenChecker:
             import jwt
 
             # Only the whole key set is cached, for KEY_SET_SECONDS; no single key is kept beyond it
-            # (cache_keys=False). So a key Cloudflare has removed stops working within that time. An
-            # unknown key ID fetches the set again at once (keys rotate).
+            # (cache_keys=False). So a key Cloudflare has removed stops working once the set expires. A
+            # token with an unknown key ID fetches the set again at once, but PyJWT allows that at most
+            # once per 30 seconds (its refresh cooldown): a token signed with a brand-new key may be
+            # refused for up to 30 seconds after another unknown-key fetch. Refusing is the safe side.
             key_source = jwt.PyJWKClient(config.certs_url, cache_keys=False, cache_jwk_set=True,
-                                         lifespan=KEY_SET_SECONDS)
+                                         lifespan=KEY_SET_SECONDS, timeout=KEY_FETCH_TIMEOUT_SECONDS)
         self._keys = key_source
 
     def claims(self, token: str | None) -> dict | None:
@@ -142,7 +152,11 @@ class TokenChecker:
 class SessionRegister:
     """Which person each MargenX session belongs to, which sessions were ended by a logout, and when
     each person last logged out. In memory only; thread-safe (Streamlit runs scripts in other threads).
-    `loop` is Streamlit's event loop, noted by the gate, so a logout can close sessions on it."""
+    `loop` is Streamlit's event loop, noted by the gate, so a logout can close sessions on it.
+
+    Nothing is ever forgotten while the process runs: Streamlit keeps a disconnected tab's session for
+    a while so it can reconnect, and its owner must stay known until a logout retires it. The records
+    are a few short strings per page load, for one invited person over a two-week trial."""
 
     _sessions: dict[str, str] = field(default_factory=dict)  # session ID -> email
     _retired: set[str] = field(default_factory=set)  # ended by a logout: never usable again
@@ -180,12 +194,6 @@ class SessionRegister:
         with self._lock:
             ended = self._logged_out_at.get(email)
             return ended is None or issued_at > ended
-
-    def prune(self, is_active) -> None:
-        """Forget sessions Streamlit no longer has (a closed tab is dropped after about 10 seconds)."""
-        with self._lock:
-            for sid in [sid for sid in self._sessions if not is_active(sid)]:
-                del self._sessions[sid]
 
 
 REGISTER = SessionRegister()
@@ -284,7 +292,13 @@ class TrialGate:
             await self.app(scope, receive, send)  # lifespan events carry no request
             return
         self.register.loop = asyncio.get_running_loop()
-        claims = self._allowed(scope)
+        headers = self._before_token(scope)
+        claims = None
+        if headers is not None:
+            token = headers.get(TOKEN_HEADER.encode())
+            # Off the event loop: checking a token may fetch Cloudflare's keys over the network.
+            found = await asyncio.to_thread(self.checker.claims, token) if token else None
+            claims = self._after_token(scope, headers, found)  # on the loop again: the latest logouts count
         if claims is None:
             await self._refuse(scope, send)
             return
@@ -298,10 +312,12 @@ class TrialGate:
 
     async def _log_out(self, scope, send, claims):
         """Log out: refuse this person's logins issued up to now, retire and close all their sessions,
-        then send the browser to Cloudflare's own logout. Only a plain GET from the trial's own page (or
-        typed in), so another site can't log the person out."""
-        site = _single_headers(scope).get(b"sec-fetch-site")
-        if scope.get("method") != "GET" or site not in (None, "same-origin", "none"):
+        then send the browser to Cloudflare's own logout. Only a POST from the trial's own page: its
+        Origin must be the trial's (every browser sends Origin on a POST), and Sec-Fetch-Site, when sent,
+        must say same-origin. So another site can't log the person out. The body is never read."""
+        headers = _single_headers(scope)
+        if (scope.get("method") != "POST" or headers.get(b"origin") != self.config.origin
+                or headers.get(b"sec-fetch-site") not in (None, "same-origin")):
             await self._refuse(scope, send)
             return
         ended = self.register.log_out(claims["email"], now=self.clock())
@@ -310,8 +326,8 @@ class TrialGate:
                     "headers": [(b"location", CLOUDFLARE_LOGOUT.encode()), *SECURITY_HEADERS]})
         await send({"type": "http.response.body", "body": b""})
 
-    def _allowed(self, scope) -> dict | None:
-        """The token's claims if this request may go on; None to refuse it (without reading any body)."""
+    def _before_token(self, scope) -> dict[bytes, str] | None:
+        """The checks that need no token: the headers the gate reads, or None to refuse (no body read)."""
         if self.config is None or self.checker is None:
             return None  # not configured: fail closed
         headers = _single_headers(scope)
@@ -320,11 +336,15 @@ class TrialGate:
         if headers.get(b"host", "").lower() != self.config.host:
             return None  # exactly the trial's address: no port, no other name
         if scope["type"] == "http":
-            if scope.get("method", "GET") not in READ_METHODS:
-                return None  # uploads are off, and nothing else in the trial sends data
-            if scope.get("path", "").startswith(UPLOAD_PREFIX):
-                return None
-        claims = self.checker.claims(headers.get(TOKEN_HEADER.encode()))
+            method, path = scope.get("method", "GET"), scope.get("path", "")
+            if path.startswith(UPLOAD_PREFIX):
+                return None  # uploads are off
+            if method not in READ_METHODS and not (method == "POST" and path == LOGOUT_PATH):
+                return None  # nothing else in the trial sends data
+        return headers
+
+    def _after_token(self, scope, headers: dict[bytes, str], claims: dict | None) -> dict | None:
+        """The token's claims if this request may go on; None to refuse it (without reading any body)."""
         if claims is None or not self.register.login_allowed(claims["email"], float(claims["iat"])):
             return None
         if scope["type"] == "websocket":

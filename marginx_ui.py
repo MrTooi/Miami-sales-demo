@@ -133,8 +133,9 @@ _APP_CSS = """
 @media(min-width:701px){[data-testid="stLayoutWrapper"]:has(>.st-key-mx-bar){position:sticky;top:0;z-index:999}}
 .st-key-mx-bar div.stButton>button{background:transparent!important;color:#E8EFEC!important;border:1px solid #3A5247!important}
 .st-key-mx-bar div.stButton>button:hover{border-color:#1DBA85!important;color:#7FE0B9!important}
-.st-key-mx-bar a.mx-logout{display:block;text-align:center;text-decoration:none;color:#E8EFEC;border:1px solid #3A5247;border-radius:.5rem;padding:.4rem .75rem;font-size:.85rem;line-height:1.2}
-.st-key-mx-bar a.mx-logout:hover{border-color:#1DBA85;color:#7FE0B9}
+.st-key-mx-bar form.mx-logout{margin:0}
+.st-key-mx-bar form.mx-logout button{display:block;width:100%;cursor:pointer;background:transparent;font:inherit;color:#E8EFEC;border:1px solid #3A5247;border-radius:.5rem;padding:.4rem .75rem;font-size:.85rem;line-height:1.2}
+.st-key-mx-bar form.mx-logout button:hover{border-color:#1DBA85;color:#7FE0B9}
 /* The End session label is never cut off: it wraps onto two lines on a narrow screen. */
 .st-key-mx-bar div.stButton>button p{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.2;font-size:.85rem}
 @media(max-width:1250px){.mx-bar .ws,.mx-bar .sep{display:none}}
@@ -292,10 +293,12 @@ def card_title(title: str, note: str) -> None:
     _html(f'<div class="mx-cardt">{escape(title)}</div><div class="mx-cards">{escape(note)}</div>')
 
 
-def logout_link(href: str) -> None:
-    """The website trial's Log out, styled like the bar's buttons. A plain link in the same tab: the gate
-    in front of the app answers it (trial_access.LOGOUT_PATH), so it works without the page running."""
-    _html(f'<a class="mx-logout" href="{escape(href)}" target="_self">Log out</a>')
+def logout_button(action: str) -> None:
+    """The website trial's Log out, styled like the bar's buttons. A plain form post in the same tab: the
+    gate in front of the app answers it (trial_access.LOGOUT_PATH) and checks it came from this page, so
+    it works without the page running and another site can't trigger it."""
+    _html(f'<form class="mx-logout" method="post" action="{escape(action)}">'
+          '<button type="submit">Log out</button></form>')
 
 
 def privacy_points(pilot: bool) -> None:
