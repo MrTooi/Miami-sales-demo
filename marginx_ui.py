@@ -133,6 +133,9 @@ _APP_CSS = """
 @media(min-width:701px){[data-testid="stLayoutWrapper"]:has(>.st-key-mx-bar){position:sticky;top:0;z-index:999}}
 .st-key-mx-bar div.stButton>button{background:transparent!important;color:#E8EFEC!important;border:1px solid #3A5247!important}
 .st-key-mx-bar div.stButton>button:hover{border-color:#1DBA85!important;color:#7FE0B9!important}
+.st-key-mx-bar form.mx-logout{margin:0}
+.st-key-mx-bar form.mx-logout button{display:block;width:100%;cursor:pointer;background:transparent;font:inherit;color:#E8EFEC;border:1px solid #3A5247;border-radius:.5rem;padding:.4rem .75rem;font-size:.85rem;line-height:1.2}
+.st-key-mx-bar form.mx-logout button:hover{border-color:#1DBA85;color:#7FE0B9}
 /* The End session label is never cut off: it wraps onto two lines on a narrow screen. */
 .st-key-mx-bar div.stButton>button p{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.2;font-size:.85rem}
 @media(max-width:1250px){.mx-bar .ws,.mx-bar .sep{display:none}}
@@ -242,12 +245,17 @@ def _icon(name: str) -> str:
     return f'<svg viewBox="0 0 24 24" aria-hidden="true">{_ICONS[name]}</svg>'
 
 
-def top_bar(pilot: bool) -> None:
-    """The app's top bar: logo, name, and whether this is a pilot session or made-up data only."""
+def top_bar(pilot: bool, trial: bool = False) -> None:
+    """The app's top bar: logo, name, and whether this is a pilot session, the private website trial,
+    or made-up data only."""
     name = escape(BRAND)
     brand = f"{name[:-1]}<b>{name[-1]}</b>" if name.endswith("X") else name
-    live = ('<span class="mx-live"><i></i>Pilot session · this laptop only</span>' if pilot
-            else '<span class="mx-live demo"><i></i>Example data only</span>')
+    if trial:
+        live = '<span class="mx-live"><i></i>Private trial · invited only</span>'
+    elif pilot:
+        live = '<span class="mx-live"><i></i>Pilot session · this laptop only</span>'
+    else:
+        live = '<span class="mx-live demo"><i></i>Example data only</span>'
     _html(f'<div class="mx-bar"><img class="mx-logo" src="{_LOGO_SRC}" alt="{name} logo"><span class="name">{brand}</span>'
           f'<span class="sep"></span><span class="ws">{escape(TAGLINE)}</span>{live}</div>')
 
@@ -283,6 +291,14 @@ def step_heading(step: int, title: str, lead: str) -> None:
 
 def card_title(title: str, note: str) -> None:
     _html(f'<div class="mx-cardt">{escape(title)}</div><div class="mx-cards">{escape(note)}</div>')
+
+
+def logout_button(action: str) -> None:
+    """The website trial's Log out, styled like the bar's buttons. A plain form post in the same tab: the
+    gate in front of the app answers it (trial_access.LOGOUT_PATH) and checks it came from this page, so
+    it works without the page running and another site can't trigger it."""
+    _html(f'<form class="mx-logout" method="post" action="{escape(action)}">'
+          '<button type="submit">Log out</button></form>')
 
 
 def privacy_points(pilot: bool) -> None:
