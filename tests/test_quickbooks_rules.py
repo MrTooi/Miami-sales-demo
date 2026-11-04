@@ -364,7 +364,7 @@ class QuickBooksLookAlikeTests(unittest.TestCase):
             for name in ("report.xlsx", "report.csv"):
                 with self.subTest(title=rows[1][0], name=name):
                     reason = self.refusal(rows, name)
-                    if rows is PNL_REPORT and name.endswith(".xlsx"):  # recognised (step 2), not read yet
+                    if name.endswith(".xlsx"):  # recognised (steps 2 and 5a), not used yet
                         self.assertIn("MargenX recognises this report, but MargenX can't use QuickBooks reports yet", reason)
                     else:
                         self.assertIn(f"it has the title '{rows[1][0]}'", reason)

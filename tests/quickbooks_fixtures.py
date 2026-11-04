@@ -180,3 +180,48 @@ def report_rows(sections: dict[str, list[tuple[str, list[list]]]]) -> list[list]
         ordinary += sums["Other Income"] - sums["Other Expense"]
     body.append(total_row("Net Income", money(ordinary)))
     return pnl_rows(body=body)
+
+
+# --- Sales by Customer Detail, in the layout seen (step 5a) ----------------------------------------
+
+SBCD_COLUMNS = [None, "Transaction date", "Transaction type", "Num", "Product/Service full name", "Description",
+                "Quantity", "Sales price", "Amount", "Balance"]
+
+
+def sale(day: int, kind: str, num: str, product: str, quantity, price, amount=None, description: str = "") -> list:
+    """One Sales by Customer Detail line, as QuickBooks writes it. Amount = Quantity × Sales price unless given."""
+    quantity, price = Decimal(str(quantity)), Decimal(str(price))
+    if amount is None:
+        amount = (quantity * price).quantize(Decimal("0.01"))
+    return [None, f"10/{day:02d}/2026", kind, num, product, description, quantity, price, Decimal(str(amount)), None]
+
+
+def sbcd_rows(customers, *, company=COMPANY, period=PERIOD, footer=FOOTER, row4=None, columns=None) -> list[list]:
+    """A whole Sales by Customer Detail from customers given as (name, own lines, [(sub-customer, lines)]), with
+    every total (Amount and Quantity) worked out exactly here, and the grand TOTAL."""
+    def sums(lines):
+        return (sum((Decimal(str(l[8])) for l in lines), Decimal("0")),
+                sum((Decimal(str(l[6])) for l in lines if l[6] not in (None, "")), Decimal("0")))
+
+    def total(label, lines):
+        amount, quantity = sums(lines)
+        return [label, None, None, None, None, None, quantity, None, amount]
+
+    body, everything = [], []
+    for name, lines, subs in customers:
+        body.append([name])
+        body.extend(lines)
+        if lines or not subs:
+            body.append(total(f"Total for {name}", lines))
+        mine = list(lines)
+        for sub, sub_lines in subs:
+            body.append([sub])
+            body.extend(sub_lines)
+            body.append(total(f"Total for {sub}", sub_lines))
+            mine += sub_lines
+        if subs:
+            body.append(total(f"Total for {name} with sub-customers", mine))
+        everything += mine
+    body.append(total("TOTAL", everything))
+    head = [[company], ["Sales by Customer Detail"], [period], row4 or [], list(columns or SBCD_COLUMNS)]
+    return [*head, *body, [], [], [], [footer]]

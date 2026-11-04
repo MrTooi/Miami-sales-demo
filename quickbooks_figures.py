@@ -311,8 +311,14 @@ class _Builder:
         """Why an answer can't be used for this line; empty when it can."""
         section = line.section
         if answer.kind == DUPLICATE:
+            # Says which dollars are already in the figures (the PR #138 confirmation review's warning).
+            counted = line.outcome == qp.INCLUDED
             return ("MargenX can't prove yet that two lines are the same money: Profit and Loss Detail has nothing "
-                    "that ties a deposit to the sale it may repeat, so the line stays held, with its amount shown")
+                    "that ties a deposit to the sale it may repeat, so this line isn't set aside. "
+                    + ("MargenX counts it by itself, so its amount stays in the figures, and the figures it could "
+                       "change need a check" if counted else
+                       "It stays not resolved, so its amount isn't in the figures, and the figures it could change "
+                       "need a check"))
         if section not in ALLOWED or answer.kind not in ALLOWED[section]:
             return (f"a line in {section or 'no section'} can't be '{answer.kind}'; it can be "
                     + ", ".join(sorted(ALLOWED.get(section, {OUTSIDE_PERIOD}))))

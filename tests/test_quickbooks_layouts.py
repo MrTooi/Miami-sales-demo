@@ -234,8 +234,8 @@ class RefusalWordingTests(unittest.TestCase):
                 self.assertIn("upload a plain list with one row per sale or cost", reason)
 
     def test_a_title_says_what_to_upload_instead_without_rename_advice(self):
-        reason = refusal(fx.csv_bytes([["Sales by Customer Detail"], *self.PLAIN]), "file.csv")
-        self.assertIn("it has the title 'Sales by Customer Detail'", reason)
+        reason = refusal(fx.csv_bytes([["Sales by Product/Service Detail"], *self.PLAIN]), "file.csv")
+        self.assertIn("it has the title 'Sales by Product/Service Detail'", reason)
         self.assertIn("MargenX can't read this QuickBooks report yet", reason)
         self.assertIn("upload a plain list with one row per sale or cost", reason)
         self.assertNotIn("rename", reason)

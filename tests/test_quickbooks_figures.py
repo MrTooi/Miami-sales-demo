@@ -244,6 +244,9 @@ class S9DuplicateTests(unittest.TestCase):
                                                 deposits[1]: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt),
                                                 cost: qf.LineAnswer(qf.DUPLICATE, duplicate_of=first)}))
         self.assertEqual(4, sum("can't prove yet" in w for w in result.warnings))
+        warnings = {int(w.split(":")[0].removeprefix("Row ")): w for w in result.warnings}
+        self.assertIn("its amount stays in the figures", warnings[second])  # an Invoice MargenX counts by itself
+        self.assertIn("its amount isn't in the figures", warnings[deposits[0]])  # a Deposit it holds
         self.assertEqual((D("2100"), qp.NEEDS_A_CHECK), (result.company["sales"].amount, result.company["sales"].status))
         self.assertEqual((D("700"), qp.NEEDS_A_CHECK), (result.company["job_costs"].amount,
                                                        result.company["job_costs"].status))
