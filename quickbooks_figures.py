@@ -26,12 +26,15 @@ The rules, from plan v7:
     | Expenses            | a job cost, overhead                                     |
     | Other Income        | other income                                             |
     | Other Expense       | other expense                                            |
-    | any                 | a duplicate of a counted line, or dated outside the period |
+    | any                 | dated outside the period (it then leaves the figures: "excluded") |
 
-  Only the last row leaves the figures ("excluded").
+  A duplicate of a counted line isn't supported yet. Profit and Loss Detail has nothing that ties a
+  deposit to the sale it may repeat (two same-day $700 lines can be one payment or two), so an answer
+  saying "duplicate" is refused and the line stays held, with its amount shown, until real exports
+  show what can link them (the PR #138 manual reviews; plan v7's duplicate example is held for now).
   Money received or moved (a Payment, Deposit, Transfer...: quickbooks_rules.PAYMENT_TYPES) is never
   counted, even on the owner's word: AGENTS.md rule 4 says it is cash movement, never new revenue. It
-  can only be shown to be a duplicate or outside the period; otherwise it stays held. (Plan v7's
+  can only be shown to be dated outside the period; otherwise it stays held. (Plan v7's
   deposit example lets the owner confirm a Deposit as revenue; AGENTS.md wins, and the mismatch is
   raised for the owner on PR #138.)
 - S3. One report never makes a job's profit Complete by itself: every job's profit keeps that hold
@@ -63,14 +66,14 @@ DUPLICATE = "duplicate"
 OUTSIDE_PERIOD = "outside the period"
 COST_KIND_UNKNOWN = "cost, job cost or overhead not yet known"
 NOT_RESOLVED = "not resolved"
-EXCLUDED_KINDS = (DUPLICATE, OUTSIDE_PERIOD)
+EXCLUDED_KINDS = (OUTSIDE_PERIOD,)
 
 ALLOWED = {
-    "Income": {REVENUE, REDUCTION, DUPLICATE, OUTSIDE_PERIOD},
-    "Cost of Goods Sold": {JOB_COST, OVERHEAD, DUPLICATE, OUTSIDE_PERIOD},
-    "Expenses": {JOB_COST, OVERHEAD, DUPLICATE, OUTSIDE_PERIOD},
-    "Other Income": {OTHER_INCOME, DUPLICATE, OUTSIDE_PERIOD},
-    "Other Expenses": {OTHER_EXPENSE, DUPLICATE, OUTSIDE_PERIOD},
+    "Income": {REVENUE, REDUCTION, OUTSIDE_PERIOD},
+    "Cost of Goods Sold": {JOB_COST, OVERHEAD, OUTSIDE_PERIOD},
+    "Expenses": {JOB_COST, OVERHEAD, OUTSIDE_PERIOD},
+    "Other Income": {OTHER_INCOME, OUTSIDE_PERIOD},
+    "Other Expenses": {OTHER_EXPENSE, OUTSIDE_PERIOD},
 }
 COST_SECTIONS = ("Cost of Goods Sold", "Expenses")
 
@@ -92,12 +95,12 @@ class LineAnswer:
     An answer only fills in what the line's Name doesn't prove: it never replaces a customer or a job
     the Name proves (the PR #138 manual review, blocker 2). An answer that can't be used changes no
     amount, but holds every figure the line could change."""
-    kind: str  # REVENUE, REDUCTION, JOB_COST, OVERHEAD, OTHER_INCOME, OTHER_EXPENSE, DUPLICATE or OUTSIDE_PERIOD
+    kind: str  # REVENUE, REDUCTION, JOB_COST, OVERHEAD, OTHER_INCOME, OTHER_EXPENSE or OUTSIDE_PERIOD
     customer: str | None = None  # for revenue, a reduction or a job cost: the customer, when the Name doesn't prove one
     job: str | None = None  # ... and the job (one of that customer's jobs in this report)
     no_job: bool = False  # revenue or a reduction that belongs to no job at all
     outside_job: str | None = None  # the name of a job that isn't in this report (revenue, reduction or job cost)
-    duplicate_of: int | None = None  # for DUPLICATE: the Excel row of the counted line it repeats
+    duplicate_of: int | None = None  # kept for DUPLICATE answers, which aren't supported yet (always refused)
     answered_at: str = ""
 
 
@@ -186,7 +189,6 @@ class Resolution:
     job: str | None
     reason: str
     answer: LineAnswer | AccountAnswer | None = None
-    duplicate_of: int | None = None
 
 
 @dataclass(frozen=True)
@@ -308,17 +310,20 @@ class _Builder:
     def usable(self, line: qp.LedgerLine, answer: LineAnswer) -> str:
         """Why an answer can't be used for this line; empty when it can."""
         section = line.section
+        if answer.kind == DUPLICATE:
+            return ("MargenX can't prove yet that two lines are the same money: Profit and Loss Detail has nothing "
+                    "that ties a deposit to the sale it may repeat, so the line stays held, with its amount shown")
         if section not in ALLOWED or answer.kind not in ALLOWED[section]:
             return (f"a line in {section or 'no section'} can't be '{answer.kind}'; it can be "
-                    + ", ".join(sorted(ALLOWED.get(section, {DUPLICATE, OUTSIDE_PERIOD}))))
+                    + ", ".join(sorted(ALLOWED.get(section, {OUTSIDE_PERIOD}))))
         if answer.kind not in EXCLUDED_KINDS and _type(line) in qr.PAYMENT_TYPES:
             return (f"'{line.transaction_type.strip()}' is money received or moved, so MargenX leaves it unresolved "
-                    "(AGENTS.md rule 4), interest posted as a deposit included; you can only mark it as a duplicate "
-                    "of a counted line or as dated outside the period")
+                    "(AGENTS.md rule 4), interest posted as a deposit included; you can only mark it as dated "
+                    "outside the period")
         if answer.kind not in (REVENUE, REDUCTION, JOB_COST) and (
                 answer.customer or answer.job or answer.no_job or answer.outside_job):
-            # Checked before anything is excluded: a duplicate or out-of-period answer that also names a customer or
-            # job contradicts itself, and is refused rather than half-applied (the automated review of adf24cb).
+            # Checked before anything is excluded: an out-of-period answer that also names a customer or job
+            # contradicts itself, and is refused rather than half-applied (the automated review of adf24cb).
             return f"'{answer.kind}' never belongs to a customer or a job"
         if answer.kind in EXCLUDED_KINDS:
             if answer.kind == OUTSIDE_PERIOD:
@@ -326,7 +331,7 @@ class _Builder:
                 layout = self.report.layout
                 if when is None or layout.period_start <= when <= layout.period_end:
                     return f"it's dated {line.date.strip() or '(no date)'}, which isn't outside {layout.period}"
-            return ""  # duplicates are checked once every other line is known
+            return ""
         if line.amount is None:
             return "its amount isn't known, so it can't be counted"
         when = qp._date(line.date)
@@ -396,8 +401,7 @@ class _Builder:
             if problem:
                 return self.refused(line, answer, problem)
         if answer is not None and answer.kind in EXCLUDED_KINDS:
-            return Resolution(line.row, line.amount, answer.kind, None, None, f"You said it's {answer.kind}.", answer,
-                              answer.duplicate_of)
+            return Resolution(line.row, line.amount, answer.kind, None, None, f"You said it's {answer.kind}.", answer)
         if answer is not None:
             customer, job = self.who(line, answer)
             return self.count(line, answer.kind, customer, job, f"You said it's {answer.kind}.", answer,
@@ -500,62 +504,9 @@ class _Builder:
         for figure in ("sales", "job_costs"):
             self.hold_customer_and_jobs(None, None, figure, hold)
 
-    def check_duplicates(self, resolutions: list[Resolution]) -> list[Resolution]:
-        """S9: a duplicate must point to a specific counted line with the same customer and amount, in the same
-        section. It must also be evidence of the same posting, never just the absence of a contradiction (the
-        PR #138 manual review and re-review, blocker 1). Only money received or moved (a Deposit, a Payment...),
-        which MargenX never counts by itself, can repeat a counted line of another type, on the same date, for
-        the same job (or both for none, by the Names even when job figures are off), and with the same number
-        when both have one. Anything else stays held."""
-        counted = {r.row: r for r in resolutions if r.kind in (REVENUE, REDUCTION, JOB_COST, OVERHEAD, OTHER_INCOME,
-                                                               OTHER_EXPENSE)}
-        final = []
-        for resolution in resolutions:
-            if resolution.kind != DUPLICATE:
-                final.append(resolution)
-                continue
-            line = self.lines[resolution.row]
-            target = counted.get(resolution.duplicate_of)
-            mine, _ = names_of(line)
-            problem = ""
-            if target is None:
-                problem = f"row {resolution.duplicate_of} isn't a counted line"
-            elif line.amount is None or target.amount != line.amount:
-                problem = "a duplicate must have the same amount as the line it repeats"
-            elif not mine or mine != target.customer:
-                problem = "a duplicate must have the same customer as the line it repeats"
-            elif self.lines[target.row].section != line.section:
-                problem = "a duplicate must be in the same section as the line it repeats (a cost never repeats a sale)"
-            elif line.outcome == qp.INCLUDED:
-                problem = ("MargenX counts this line by itself, so two such lines are two postings; only a line it "
-                           "holds can repeat a counted one")
-            elif _type(line) == _type(self.lines[target.row]):
-                problem = "two lines of the same type are two postings, even with the same amount"
-            elif _type(line) not in qr.PAYMENT_TYPES:
-                problem = ("only money received or moved (a Deposit or a Payment, for example) can repeat a counted "
-                           "line; two other postings are two amounts")
-            else:
-                other = self.lines[target.row]
-                mine_date, their_date = qp._date(line.date), qp._date(other.date)
-                # Against where the counted line ended up (its Name and any answer), not just its Name (the
-                # automated review of f63462b), and by the Names even when job figures are off (the re-review).
-                their_job = target.job if self.jobs_on else names_of(other)[1]
-                if mine_date is None or mine_date != their_date:
-                    problem = "they aren't on the same date"
-                elif names_of(line)[1] != their_job:
-                    problem = "they aren't for the same job"
-                elif line.num.strip() and other.num.strip() and line.num.strip() != other.num.strip():
-                    problem = "they have different numbers"
-            if problem:
-                answer = self.answers.lines.get(resolution.row)
-                final.append(self.refused(line, answer, problem))
-            else:
-                final.append(resolution)
-        return final
-
     # -- the whole report --
     def build(self) -> Figures:
-        resolutions = self.check_duplicates([self.place(line) for line in self.report.lines])
+        resolutions = [self.place(line) for line in self.report.lines]
         for problem in self.report.problems:
             # A total that doesn't match, or a row that can't be placed: every figure its section feeds needs
             # a check, whatever the answers (S6). It isn't tied to one line, so its amount isn't known.

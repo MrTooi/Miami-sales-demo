@@ -205,36 +205,50 @@ class S9DepositTests(unittest.TestCase):
                     self.assertIn("money received or moved", " ".join(result.warnings))
                     self.assertEqual(NOT_RESOLVED_KIND, next(r for r in result.resolutions if r.row == row).kind)
 
-    def test_a_700_deposit_cant_be_a_duplicate_of_a_4000_invoice(self):
-        result = figures(self.report, answers(JOB_COSTS, {self.deposit: qf.LineAnswer(qf.DUPLICATE,
-                                                                                         duplicate_of=self.invoice)}))
-        self.assertIn("same amount", " ".join(result.warnings))
-        self.assertEqual({self.deposit}, holds(result.jobs[A]["profit_after_job_costs"]))
-        self.assertEqual(qp.NEEDS_A_CHECK, result.customers[X]["sales"].status)
-
 
 NOT_RESOLVED_KIND = qf.NOT_RESOLVED
 
 
 class S9DuplicateTests(unittest.TestCase):
-    def test_a_deposit_pointing_to_the_same_sales_receipt_is_excluded(self):
+    """Duplicates aren't supported yet (the PR #138 manual reviews): Profit and Loss Detail has nothing that ties a
+    deposit to the sale it may repeat, so a "duplicate" answer is always refused and the line stays held."""
+
+    def test_the_plans_own_example_stays_held(self):
+        # Plan v7: a $700 Sales Receipt and a $700 Deposit for Job A. Same day, customer, job and amount, and still no
+        # proof they're one payment: $700 Needs a check, the Deposit shown as not resolved.
         report = read({"Income": [("Design income", [
             L(2, "Sales Receipt", "1001", f"{X}:Job A", 700.0, 700.0, "", "Checking"),
-            L(2, "Deposit", "", f"{X}:Job A", 700.0, 1400.0, "", "Checking")])]})  # the same day
+            L(2, "Deposit", "", f"{X}:Job A", 700.0, 1400.0, "", "Checking")])]})
         receipt, deposit = rows_of(report, transaction_type="Sales Receipt")[0], rows_of(report, transaction_type="Deposit")[0]
         result = figures(report, answers(lines={deposit: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt)}))
-        self.assertEqual((D("700"), qp.COMPLETE), (result.jobs[A]["sales"].amount, result.jobs[A]["sales"].status))
-        excluded = next(r for r in result.resolutions if r.row == deposit)
-        self.assertEqual((qf.DUPLICATE, receipt), (excluded.kind, excluded.duplicate_of))  # the ledger links both
+        self.assertIn("can't prove yet that two lines are the same money", " ".join(result.warnings))
+        for figure in (result.company["sales"], result.customers[X]["sales"], result.jobs[A]["sales"]):
+            self.assertEqual((D("700"), qp.NEEDS_A_CHECK, D("700.0")), (figure.amount, figure.status, figure.held_amount))
+        self.assertEqual(qf.NOT_RESOLVED, next(r for r in result.resolutions if r.row == deposit).kind)
 
-    def test_a_duplicate_of_another_customer_isnt_accepted(self):
+    def test_no_duplicate_answer_is_ever_used(self):
+        # The re-review cases too: two separate invoices, two deposits pointing to one receipt, a cost "repeating" a sale.
         report = read({"Income": [("Design income", [
-            L(2, "Sales Receipt", "1001", f"{Y}:Job C", 700.0, 700.0, "", "Checking"),
-            L(9, "Deposit", "", f"{X}:Job A", 700.0, 1400.0, "", "Checking")])]})
-        receipt, deposit = rows_of(report, transaction_type="Sales Receipt")[0], rows_of(report, transaction_type="Deposit")[0]
-        result = figures(report, answers(lines={deposit: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt)}))
-        self.assertIn("same customer", " ".join(result.warnings))
-        self.assertEqual(qp.NEEDS_A_CHECK, result.company["sales"].status)
+                           L(2, "Invoice", "1001", f"{X}:Job A", 700.0, 700.0),
+                           L(3, "Invoice", "1002", f"{X}:Job B", 700.0, 1400.0),
+                           L(4, "Sales Receipt", "1003", f"{X}:Job A", 700.0, 2100.0, "", "Checking"),
+                           L(4, "Deposit", "", f"{X}:Job A", 700.0, 2800.0, "", "Checking"),
+                           L(4, "Deposit", "", f"{X}:Job A", 700.0, 3500.0, "", "Checking")])],
+                       "Cost of Goods Sold": [("Cost of Goods Sold", [L(5, "Invoice", "1001", f"{X}:Job A", 700.0, 700.0)])]})
+        first, second, receipt = (rows_of(report, num=n)[0] for n in ("1001", "1002", "1003"))
+        deposits = rows_of(report, transaction_type="Deposit")
+        cost = rows_of(report, section="Cost of Goods Sold")[0]
+        cogs = {("Cost of Goods Sold", "Cost of Goods Sold"): qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT)}
+        result = figures(report, answers(cogs, {second: qf.LineAnswer(qf.DUPLICATE, duplicate_of=first),
+                                                deposits[0]: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt),
+                                                deposits[1]: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt),
+                                                cost: qf.LineAnswer(qf.DUPLICATE, duplicate_of=first)}))
+        self.assertEqual(4, sum("can't prove yet" in w for w in result.warnings))
+        self.assertEqual((D("2100"), qp.NEEDS_A_CHECK), (result.company["sales"].amount, result.company["sales"].status))
+        self.assertEqual((D("700"), qp.NEEDS_A_CHECK), (result.company["job_costs"].amount,
+                                                       result.company["job_costs"].status))
+        self.assertFalse(any(r.kind == qf.DUPLICATE for r in result.resolutions))
+        self.assertNotIn(qf.DUPLICATE, set().union(*qf.ALLOWED.values()))
 
 
 class S9CreditMemoTests(unittest.TestCase):
@@ -372,73 +386,9 @@ class AutomatedReviewOf52b5809Tests(unittest.TestCase):
         result = figures(report, answers(both, {credit: qf.LineAnswer(qf.OVERHEAD)}))
         self.assertEqual((D("460"), qp.COMPLETE), (result.company["overhead"].amount, result.company["overhead"].status))
 
-    def test_a_cost_is_never_a_duplicate_of_a_sale(self):
-        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", 700.0, 700.0)])],
-                       "Cost of Goods Sold": [("Cost of Goods Sold", [
-                           L(3, "Invoice", "1001", f"{X}:Job A", 700.0, 700.0, "Pavers")])]})
-        sale, cost = rows_of(report, section="Income")[0], rows_of(report, section="Cost of Goods Sold")[0]
-        result = figures(report, answers({("Cost of Goods Sold", "Cost of Goods Sold"):
-                                             qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT)},
-                                            {cost: qf.LineAnswer(qf.DUPLICATE, duplicate_of=sale)}))
-        self.assertIn("same section", " ".join(result.warnings))
-        self.assertEqual(qp.NEEDS_A_CHECK, result.company["job_costs"].status)
-
 
 class ManualReviewOf151a80aTests(unittest.TestCase):
     """The PR #138 manual review's blockers, each with the reviewer's own example."""
-
-    def test_two_separate_700_invoices_are_never_duplicates(self):
-        # Blocker 1: two $700 invoices for Customer X, one for Job A and one for Job B: $1,400, never $700 Complete.
-        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", 700.0, 700.0),
-                                                     L(3, "Invoice", "1002", f"{X}:Job B", 700.0, 1400.0)])]})
-        first, second = rows_of(report, num="1001")[0], rows_of(report, num="1002")[0]
-        result = figures(report, answers(lines={second: qf.LineAnswer(qf.DUPLICATE, duplicate_of=first)}))
-        self.assertIn("counts this line by itself", " ".join(result.warnings))
-        self.assertEqual((D("1400"), qp.NEEDS_A_CHECK), (result.company["sales"].amount, result.company["sales"].status))
-        self.assertEqual(D("700"), result.jobs[B]["sales"].amount)
-        self.assertEqual(qp.NEEDS_A_CHECK, result.customers[X]["sales"].status)
-
-    def test_a_duplicate_needs_evidence_of_the_same_posting(self):
-        def case(held_type, held_name, held_num, day=2, jobs_on=True):
-            report = read({"Income": [("Design income", [
-                L(2, "Sales Receipt", "1001", f"{X}:Job A", 700.0, 700.0, "", "Checking"),
-                L(day, held_type, held_num, held_name, 700.0, 1400.0, "", "Checking")])]})
-            receipt = rows_of(report, num="1001")[0]
-            held = [l.row for l in report.lines if l.row != receipt][0]
-            return figures(report, answers(lines={held: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt)},
-                                           sub_customers_are_jobs=jobs_on))
-        self.assertEqual((), case("Deposit", f"{X}:Job A", "").warnings)  # the plan's own example, same day
-        # The re-review's blocker 1: missing contradictions are never evidence. A Journal Entry, another day, or
-        # another job by the Names even with job figures off: all stay held.
-        for args, says in (((("Deposit", f"{X}:Job B", ""), {}), "aren't for the same job"),
-                           ((("Deposit", f"{X}:Job B", ""), {"jobs_on": False}), "aren't for the same job"),
-                           ((("Deposit", f"{X}:Job A", "77"), {}), "different numbers"),
-                           ((("Deposit", f"{X}:Job A", ""), {"day": 9}), "aren't on the same date"),
-                           ((("Journal Entry", f"{X}:Job A", ""), {"day": 9}), "only money received or moved"),
-                           ((("Journal Entry", f"{X}:Job A", "1001"), {}), "only money received or moved")):
-            with self.subTest(args=args):
-                result = case(*args[0], **args[1])
-                self.assertIn(says, " ".join(result.warnings))
-                self.assertEqual(D("700"), result.customers[X]["sales"].amount)
-                self.assertEqual(qp.NEEDS_A_CHECK, result.company["sales"].status)
-
-    def test_a_duplicate_is_checked_against_where_the_counted_line_ended_up(self):
-        # The automated review of f63462b: a $700 Sales Receipt named only "Customer X", assigned by the owner to
-        # Job B, and a $700 Deposit named "Customer X:Job A" pointing to it: not the same money.
-        report = read({"Income": [("Design income", [
-            L(2, "Invoice", "1001", f"{X}:Job A", 4000.0, 4000.0),
-            L(3, "Invoice", "1002", f"{X}:Job B", 2000.0, 6000.0),
-            L(4, "Sales Receipt", "1003", X, 700.0, 6700.0, "", "Checking"),
-            L(4, "Deposit", "", f"{X}:Job A", 700.0, 7400.0, "", "Checking")])]})
-        receipt, deposit = rows_of(report, num="1003")[0], rows_of(report, transaction_type="Deposit")[0]
-        result = figures(report, answers(lines={receipt: qf.LineAnswer(qf.REVENUE, job="Job B"),
-                                                deposit: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt)}))
-        self.assertIn("aren't for the same job", " ".join(result.warnings))
-        self.assertIn(deposit, holds(result.jobs[A]["sales"]))
-        same_job = figures(report, answers(lines={receipt: qf.LineAnswer(qf.REVENUE, job="Job A"),
-                                                  deposit: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt)}))
-        self.assertEqual((), same_job.warnings)
-        self.assertEqual(D("4700"), same_job.jobs[A]["sales"].amount)
 
     def test_the_fingerprint_covers_totals_too(self):
         rows = fx.report_rows({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", 900.0, 900.0)])]})
@@ -448,21 +398,6 @@ class ManualReviewOf151a80aTests(unittest.TestCase):
         second = qp.read_profit_and_loss_detail("t.xlsx", fx.xlsx(changed))
         self.assertEqual([l.amount_text for l in first.lines], [l.amount_text for l in second.lines])
         self.assertNotEqual(qf.report_fingerprint(first), qf.report_fingerprint(second))
-
-    def test_a_duplicate_answer_that_names_a_customer_or_job_is_refused(self):
-        # The automated review of adf24cb: a Deposit named "X:Job A" matching a Job A receipt, but answered as a
-        # duplicate "for Job B", contradicts itself: it stays held instead of being excluded.
-        report = read({"Income": [("Design income", [
-            L(2, "Sales Receipt", "1001", f"{X}:Job A", 700.0, 700.0, "", "Checking"),
-            L(2, "Deposit", "", f"{X}:Job A", 700.0, 1400.0, "", "Checking")])]})
-        receipt, deposit = rows_of(report, transaction_type="Sales Receipt")[0], rows_of(report, transaction_type="Deposit")[0]
-        for extra in ({"job": "Job B"}, {"customer": Y}, {"no_job": True}, {"outside_job": "Old patio (fictional)"}):
-            with self.subTest(extra):
-                result = figures(report, answers(lines={deposit: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt,
-                                                                                **extra)}))
-                self.assertIn("never belongs to a customer or a job", " ".join(result.warnings))
-                self.assertEqual(qp.NEEDS_A_CHECK, result.company["sales"].status)
-                self.assertNotEqual(qf.DUPLICATE, next(r for r in result.resolutions if r.row == deposit).kind)
 
     def test_a_refused_move_holds_the_proposed_customer_too(self):
         # The re-review's blocker 2: a -$200 credit memo exported under X that the owner says is Y's. It stays held,
