@@ -83,6 +83,7 @@ class ImageContentsTests(unittest.TestCase):
         for line in DOCKERFILE.splitlines():
             if line.split()[:1] in (["ENV"], ["ARG"]) or line.startswith("    "):
                 self.assertNotRegex(line.upper(), r"TOKEN|SECRET|PASSWORD|MARGINX_TRIAL|AUD|EMAIL")
+        self.assertNotRegex(DOCKERFILE, r"(?m)^\s*ARG\b")  # Render passes its settings as build arguments
         self.assertNotIn("EXPOSE", DOCKERFILE.split("\n# No EXPOSE")[0])
         self.assertNotRegex(DOCKERFILE, r"(?m)^\s*(EXPOSE|HEALTHCHECK)\b")
 
@@ -137,6 +138,14 @@ class FetchCloudflaredTests(unittest.TestCase):
         self.assertEqual(b"made-up program bytes", self.destination.read_bytes())
         self.assertTrue(os.access(self.destination, os.X_OK))
 
+    def test_the_build_refuses_any_machine_but_amd64(self):
+        fetch_cloudflared.check_machine("x86_64")
+        fetch_cloudflared.check_machine("AMD64")
+        for other in ("arm64", "aarch64", "i386"):
+            with self.assertRaises(SystemExit):
+                fetch_cloudflared.check_machine(other)
+        self.assertIn("--platform linux/amd64", DOCKERFILE)
+
     def test_a_wrong_checksum_fails_the_build_and_leaves_nothing(self):
         with self.assertRaises(SystemExit):
             fetch_cloudflared.fetch(self.source.as_uri(), "0" * 64, str(self.destination))
@@ -166,6 +175,7 @@ class CommandTests(unittest.TestCase):
         self.assertIn("--management-diagnostics=false", cmd)
         self.assertEqual("info", cmd[cmd.index("--loglevel") + 1])  # debug would log every header
         self.assertEqual("1s", cmd[cmd.index("--grace-period") + 1])
+        self.assertEqual("127.0.0.1:20241", cmd[cmd.index("--metrics") + 1])  # metrics on the container only
         self.assertFalse(any("token" in part.lower() for part in cmd))  # the token travels in the environment
 
     def test_each_program_gets_only_its_own_settings(self):
@@ -179,6 +189,21 @@ class CommandTests(unittest.TestCase):
             self.assertEqual("/usr/bin", env["PATH"])
             self.assertNotIn("RENDER_SERVICE_ID", env)
             self.assertNotIn("SOMETHING_ELSE", env)
+
+
+class ClosedModeTests(unittest.TestCase):
+    def test_closed_mode_gives_margenx_nobodys_address_instead_of_the_invite(self):
+        app = launch.streamlit_env({**SETTINGS, "MARGINX_TRIAL_CLOSED": "1"})
+        self.assertEqual(launch.CLOSED_INVITE, app["MARGINX_TRIAL_INVITED_EMAIL"])
+        config = launch.ta.TrialConfig.from_environ(app)
+        self.assertIsNotNone(config)  # MargenX still starts, and refuses the former invite itself
+        self.assertNotEqual(SETTINGS["MARGINX_TRIAL_INVITED_EMAIL"], config.invited_email)
+        self.assertNotIn("MARGINX_TRIAL_CLOSED", app)
+
+    def test_only_exactly_1_closes_the_copy(self):
+        for value in ("", "0", "yes", "true"):
+            app = launch.streamlit_env({**SETTINGS, "MARGINX_TRIAL_CLOSED": value})
+            self.assertEqual(SETTINGS["MARGINX_TRIAL_INVITED_EMAIL"], app["MARGINX_TRIAL_INVITED_EMAIL"], value)
 
 
 class SettingsTests(unittest.TestCase):
@@ -257,9 +282,9 @@ class LauncherProcessTests(unittest.TestCase):
         self.driver = Path(self.folder.name) / "driver.py"
         self.driver.write_text(DRIVER)
 
-    def start(self, app_life=60, tunnel_life=60, listen_delay=0):
+    def start(self, app_life=60, tunnel_life=60, listen_delay=0, extra=None):
         import json
-        environ = {**SETTINGS, "PATH": os.environ.get("PATH", "")}
+        environ = {**SETTINGS, "PATH": os.environ.get("PATH", ""), **(extra or {})}
         return subprocess.Popen([sys.executable, str(self.driver), str(ROOT / "deploy" / "trial"), str(self.log),
                                  str(free_port()), str(self.stand_in), str(app_life), str(tunnel_life),
                                  json.dumps(environ), str(listen_delay)],
@@ -308,6 +333,26 @@ class LauncherProcessTests(unittest.TestCase):
         events = self.events()
         self.assertIn(["tunnel", "stopped"], events)
         self.assertEqual(1, sum(1 for r, t in events if r == "app" and t.startswith("started")))
+
+    def test_a_stop_while_margenx_is_starting_never_starts_the_tunnel(self):
+        proc = self.start(listen_delay=30)  # MargenX would take 30 seconds to listen
+        self.wait_for("app", "started")
+        asked = time.monotonic()
+        proc.send_signal(signal.SIGTERM)
+        code, out = self.finish(proc)
+        self.assertLess(time.monotonic() - asked, 10)  # the stop doesn't wait for the readiness timeout
+        self.assertEqual(launch.EXIT_STOPPED_BY_HOST, code, out)
+        self.assertFalse([1 for r, t in self.events() if r == "tunnel"])  # never started
+        self.assertIn(["app", "stopped"], self.events())
+        self.assertNotIn("running", out)
+
+    def test_closed_mode_says_so_in_the_log_and_margenx_gets_nobodys_address(self):
+        proc = self.start(extra={"MARGINX_TRIAL_CLOSED": "1"})
+        self.wait_for("tunnel", "started")
+        proc.send_signal(signal.SIGTERM)
+        code, out = self.finish(proc)
+        self.assertIn("closed: this copy refuses every login", out)
+        self.assertNotIn("owner-marker", out)
 
     def test_the_tunnel_starts_only_after_margenx_is_listening(self):
         proc = self.start(listen_delay=1.0)

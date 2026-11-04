@@ -14,6 +14,11 @@ The rules this launcher keeps:
   which sends SIGTERM: MargenX is stopped first, so no request is handled any more, then the tunnel.
 - **Each program gets only its own settings.** The tunnel token goes to cloudflared only; the trial
   settings go to MargenX only.
+- **A stop always wins.** A stop that arrives while MargenX is still starting ends the wait at once,
+  and the tunnel is never started.
+- **Closed mode** (`MARGINX_TRIAL_CLOSED=1`, for the stop procedure's restart check): MargenX is given a
+  placeholder that is nobody's address instead of the invited email, so this copy itself refuses every
+  login, whatever Cloudflare forwards. The launcher says so in its log.
 - **Never prints a setting's value or the token,** only which setting is missing or invalid.
 """
 from __future__ import annotations
@@ -34,7 +39,12 @@ import trial_access as ta  # noqa: E402
 
 HOST = "127.0.0.1"
 PORT = 8501
+# cloudflared's local metrics page, on the container only (its default is "localhost", stated here exactly).
+METRICS = "127.0.0.1:20241"
 TOKEN_ENV = "TUNNEL_TOKEN"
+CLOSED_ENV = "MARGINX_TRIAL_CLOSED"
+# Nobody's address: ".invalid" can never be a real email domain (RFC 2606).
+CLOSED_INVITE = "closed@margenx.invalid"
 TRIAL_SETTINGS = ("MARGINX_TRIAL", "MARGINX_TRIAL_TEAM_DOMAIN", "MARGINX_TRIAL_AUDIENCE",
                   "MARGINX_TRIAL_INVITED_EMAIL", "MARGINX_TRIAL_HOST")
 # What both programs may see besides their own settings: enough to run, nothing else.
@@ -74,7 +84,8 @@ def tunnel_command(cloudflared: str = "cloudflared") -> list[str]:
     memory profiles of the traffic passing through), info-level logs (debug logs every header, tokens
     included), and a 1-second grace period, so a stop cuts requests in progress."""
     return [cloudflared, "tunnel", "--no-autoupdate", "--protocol", "http2",
-            "--management-diagnostics=false", "--loglevel", "info", "--grace-period", "1s", "run"]
+            "--management-diagnostics=false", "--metrics", METRICS, "--loglevel", "info",
+            "--grace-period", "1s", "run"]
 
 
 def problems(environ: Mapping[str, str]) -> list[str]:
@@ -93,19 +104,28 @@ def _base(environ: Mapping[str, str]) -> dict[str, str]:
     return {name: environ[name] for name in BASE_ENV if name in environ}
 
 
+def closed(environ: Mapping[str, str]) -> bool:
+    return environ.get(CLOSED_ENV, "").strip() == "1"
+
+
 def streamlit_env(environ: Mapping[str, str]) -> dict[str, str]:
-    return {**_base(environ), **{name: environ[name] for name in TRIAL_SETTINGS if name in environ}}
+    env = {**_base(environ), **{name: environ[name] for name in TRIAL_SETTINGS if name in environ}}
+    if closed(environ):
+        env["MARGINX_TRIAL_INVITED_EMAIL"] = CLOSED_INVITE
+    return env
 
 
 def tunnel_env(environ: Mapping[str, str]) -> dict[str, str]:
     return {**_base(environ), TOKEN_ENV: environ[TOKEN_ENV]}
 
 
-def wait_until_listening(proc, host: str = HOST, port: int = PORT, seconds: float = READY_SECONDS) -> bool:
-    """True once something accepts connections on host:port; False if the program stops or time runs out."""
+def wait_until_listening(proc, should_stop: Callable[[], bool] = lambda: False, host: str = HOST,
+                         port: int = PORT, seconds: float = READY_SECONDS) -> bool:
+    """True once something accepts connections on host:port; False if the program stops, a stop is asked
+    for, or time runs out."""
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        if proc.poll() is not None:
+        if proc.poll() is not None or should_stop():
             return False
         try:
             with socket.create_connection((host, port), timeout=1):
@@ -148,8 +168,14 @@ def run(environ: Mapping[str, str] = os.environ, spawn: Callable = subprocess.Po
     previous = {sig: signal.signal(sig, on_stop) for sig in (signal.SIGTERM, signal.SIGINT)}
     app = tunnel_proc = None
     try:
+        if closed(environ):
+            say("closed: this copy refuses every login (the invited email is replaced by nobody's address)")
         app = spawn(streamlit or streamlit_command(), cwd=str(APP_DIR), env=streamlit_env(environ))
-        if not ready(app):
+        is_listening = ready(app, lambda: asked_to_stop["yes"])
+        if asked_to_stop["yes"]:  # checked again right before the tunnel: a stop always wins
+            say("stopping: asked to stop by the host before the tunnel was started")
+            return EXIT_STOPPED_BY_HOST
+        if not is_listening:
             say("not starting: MargenX didn't start listening on this container")
             return EXIT_PROGRAM_STOPPED
         tunnel_proc = spawn(tunnel or tunnel_command(), cwd=str(APP_DIR), env=tunnel_env(environ))

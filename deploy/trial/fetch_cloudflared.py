@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import platform
 import sys
 import tempfile
 import urllib.request
@@ -39,6 +40,15 @@ def fetch(url: str = URL, sha256: str = SHA256, destination: str = DESTINATION, 
             os.remove(temporary)
 
 
+def check_machine(machine: str | None = None) -> None:
+    """The pinned file is cloudflared for linux/amd64. Building on any other machine type fails here, rather
+    than producing an image whose tunnel can't run (build with --platform linux/amd64)."""
+    machine = platform.machine() if machine is None else machine
+    if machine.lower() not in ("x86_64", "amd64"):
+        raise SystemExit(f"this image is for linux/amd64, not {machine}: build with --platform linux/amd64")
+
+
 if __name__ == "__main__":
+    check_machine()
     fetch()
     print(f"cloudflared {VERSION} installed, checksum verified", file=sys.stderr)

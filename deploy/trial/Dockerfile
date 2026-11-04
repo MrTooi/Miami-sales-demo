@@ -1,7 +1,10 @@
 # MargenX website trial: one copy (issue #131, lean v1.2; D-009). PR A2.
-# Build from the repository root:  docker build -f deploy/trial/Dockerfile .
+# Build from the repository root, for linux/amd64 (the pinned cloudflared is the amd64 one; the build fails
+# on any other machine type):  docker build --platform linux/amd64 -f deploy/trial/Dockerfile .
 # See docs/TRIAL_DEPLOYMENT.md. The image holds code and made-up sample files only: no settings,
-# no token and no secret. Those are given to the running copy by the host (Render's environment).
+# no token and no secret. Those are given to the running copy by the host (Render's environment). Render
+# also passes its environment variables to the build as build arguments; this file declares no ARG, so the
+# build neither uses nor stores them (tests/test_trial_deploy.py checks that there is no ARG).
 
 # Python 3.11.18 on Debian 12 (slim), pinned to this exact image by its digest.
 FROM python:3.11.18-slim-bookworm@sha256:94a8fee35252d06ab75856f15f12c7bae67b10e8a6da93c7fded82b2610926cd
