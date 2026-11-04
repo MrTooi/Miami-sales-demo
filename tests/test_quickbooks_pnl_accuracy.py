@@ -6,8 +6,8 @@ file and read by MargenX end to end. Line counts, each section's sum, what is co
 costs, what is held and each section's status must all match exactly; so must each customer's and each
 job's sales and job costs (step 4).
 
-What this proves, and what it doesn't (the PR #136 review): section and customer/job sums and row
-presence, for the layouts and transaction types the generator makes. It doesn't prove each row's own
+What this proves, and what it doesn't (the PR #136 review): section and customer/job sums, section and
+customer statuses (the PR #138 automated review), and row presence, for the layouts and transaction types the generator makes. It doesn't prove each row's own
 outcome, or layouts outside that family: tests/test_quickbooks_pnl.py and test_quickbooks_figures.py
 hold those targeted cases. One report in four has a total
 that is a cent off, or a fraction of a cent off, which must hold that section and nothing else.
@@ -41,6 +41,7 @@ def cents(amount: Decimal) -> int:
 
 class KnownAnswerTests(unittest.TestCase):
     jobs_seen = 0
+    statuses_seen = {(True, True): 0, (True, False): 0, (False, True): 0, (False, False): 0}
 
     def assert_figures(self, report, result):
         """Step 4: with sub-customers as jobs and every cost account answered "job costs"."""
@@ -57,6 +58,11 @@ class KnownAnswerTests(unittest.TestCase):
             figures = got.jobs[job]
             self.assertEqual((sales, costs), (cents(figures["sales"].amount), cents(figures["job_costs"].amount)), job)
             self.assertEqual(qp.NEEDS_A_CHECK, figures["profit_after_job_costs"].status)  # one report never suffices
+        for name, (sales_complete, costs_complete) in gen.expected_customer_status(report).items():
+            figures = got.customers[name]
+            self.assertEqual((sales_complete, costs_complete),
+                             (figures["sales"].status == qp.COMPLETE, figures["job_costs"].status == qp.COMPLETE), name)
+            self.__class__.statuses_seen[(sales_complete, costs_complete)] += 1
         self.__class__.jobs_seen += len(jobs)
         income = report.expected["Income"]
         cost_sections = [report.expected[s] for s in ("Cost of Goods Sold", "Expenses") if s in report.expected]
@@ -94,6 +100,7 @@ class KnownAnswerTests(unittest.TestCase):
                 self.assert_figures(report, result)
         # The generator really exercised what it should.
         self.assertGreater(self.jobs_seen, REPORTS)
+        self.assertTrue(all(self.statuses_seen.values()), self.statuses_seen)  # every status mix came up
         self.assertGreater(broken, REPORTS // 8)
         self.assertGreater(noisy, REPORTS // 4)
 

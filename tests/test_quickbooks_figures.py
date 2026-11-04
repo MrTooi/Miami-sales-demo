@@ -172,11 +172,32 @@ class S9DepositTests(unittest.TestCase):
         self.assertEqual((D("4000"), qp.NEEDS_A_CHECK, D("700.0")), (sales.amount, sales.status, sales.held_amount))
         self.assertEqual(qp.NEEDS_A_CHECK, result.company["sales"].status)
 
-    def test_confirmed_as_revenue(self):
+    def test_a_deposit_is_never_counted_even_on_the_owners_word(self):
+        # Plan v7 lets the owner confirm this Deposit as revenue ($4,700 / $3,700). AGENTS.md rule 4 (binding,
+        # it wins on a conflict) says deposits are cash movement, never new revenue, so the answer is refused
+        # and the line stays held: $3,000 still never shows as Complete. Raised for Alex on PR #138.
         result = qf.figures(self.report, answers(JOB_COSTS, {self.deposit: qf.LineAnswer(qf.REVENUE)}))
-        self.assertEqual((D("4700"), qp.COMPLETE), (result.customers[X]["sales"].amount, result.customers[X]["sales"].status))
-        self.assertEqual(D("3700"), result.jobs[A]["profit_after_job_costs"].amount)
-        self.assertTrue(ready(result.jobs[A]["profit_after_job_costs"]))
+        self.assertIn("money received or moved, never new revenue", " ".join(result.warnings))
+        self.assertEqual((D("4000"), qp.NEEDS_A_CHECK), (result.customers[X]["sales"].amount,
+                                                        result.customers[X]["sales"].status))
+        self.assertEqual({self.deposit}, holds(result.jobs[A]["profit_after_job_costs"]))
+
+    def test_no_money_movement_type_can_be_counted_by_an_answer(self):
+        for kind in ("Payment", "Receive Payment", "Bank Deposit", "Transfer", "Bill Payment (Check)"):
+            for section, answer in (("Income", qf.LineAnswer(qf.REVENUE)), ("Expenses", qf.LineAnswer(qf.JOB_COST)),
+                                    ("Expenses", qf.LineAnswer(qf.OVERHEAD))):
+                with self.subTest(kind=kind, section=section, answer=answer.kind):
+                    sections = {"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", 4000.0, 4000.0)])]}
+                    moved = L(9, kind, "", f"{X}:Job A", 700.0, 700.0)
+                    if section == "Income":
+                        sections["Income"][0][1].append(moved)
+                    else:
+                        sections["Expenses"] = [("Job Materials", [moved])]
+                    report = read(sections)
+                    row = rows_of(report, transaction_type=kind)[0]
+                    result = qf.figures(report, answers(JOB_COSTS, {row: answer}))
+                    self.assertIn("money received or moved", " ".join(result.warnings))
+                    self.assertEqual(NOT_RESOLVED_KIND, next(r for r in result.resolutions if r.row == row).kind)
 
     def test_a_700_deposit_cant_be_a_duplicate_of_a_4000_invoice(self):
         result = qf.figures(self.report, answers(JOB_COSTS, {self.deposit: qf.LineAnswer(qf.DUPLICATE,
@@ -184,6 +205,9 @@ class S9DepositTests(unittest.TestCase):
         self.assertIn("same amount", " ".join(result.warnings))
         self.assertEqual({self.deposit}, holds(result.jobs[A]["profit_after_job_costs"]))
         self.assertEqual(qp.NEEDS_A_CHECK, result.customers[X]["sales"].status)
+
+
+NOT_RESOLVED_KIND = qf.NOT_RESOLVED
 
 
 class S9DuplicateTests(unittest.TestCase):
@@ -254,7 +278,9 @@ class S9OverheadAndOtherSectionTests(unittest.TestCase):
             "Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", 4000.0, 4000.0)])],
             "Expenses": [("Job Materials", [L(5, "Bill", "B-1", f"{X}:Job A", 1000.0, 1000.0)]),
                          ("Office Supplies", [office])],
-            "Other Income": [("Interest Earned", [L(20, "Deposit", "", "Bank (fictional)", 50.0, 50.0)])],
+            # The plan doesn't name the interest line's type: a Journal Entry here. As a Deposit it would stay held
+            # (AGENTS.md rule 4; see test_interest_posted_as_a_deposit_stays_held).
+            "Other Income": [("Interest Earned", [L(20, "Journal Entry", "JE-4", "Bank (fictional)", 50.0, 50.0)])],
             "Other Expense": [("Penalties", [L(21, "Check", "310", "County (fictional)", 80.0, 80.0)])]})
         self.office = rows_of(self.report, amount=D("500.0"))[0]
         self.interest = rows_of(self.report, amount=D("50.0"))[0]
@@ -285,6 +311,15 @@ class S9OverheadAndOtherSectionTests(unittest.TestCase):
                          (result.company["after_overhead"].amount, holds(result.company["after_overhead"])))
         self.assertEqual(D("3000"), result.jobs[A]["profit_after_job_costs"].amount)
         self.assertTrue(ready(result.jobs[A]["profit_after_job_costs"]))  # other income and expenses never touch a job
+
+    def test_interest_posted_as_a_deposit_stays_held(self):
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", 4000.0, 4000.0)])],
+                       "Other Income": [("Interest Earned", [L(20, "Deposit", "", "Bank (fictional)", 50.0, 50.0)])]})
+        row = rows_of(report, transaction_type="Deposit")[0]
+        result = qf.figures(report, answers(lines={row: qf.LineAnswer(qf.OTHER_INCOME)}))
+        self.assertIn("money received or moved", " ".join(result.warnings))
+        self.assertEqual({row}, holds(result.company["after_overhead"]))
+        self.assertEqual(qp.COMPLETE, result.company["sales"].status)
 
     def test_other_income_never_becomes_job_revenue(self):
         # W3: a line is never moved into another section.
@@ -328,6 +363,25 @@ class MixedAccountTests(unittest.TestCase):
         # Never forced to pick a job: an entry left unanswered holds, it isn't guessed.
         result = qf.figures(report, answers(mixed, {**answered, first: qf.LineAnswer(qf.JOB_COST, X, "Job B")}))
         self.assertEqual({second}, holds(result.jobs[A]["profit_after_job_costs"]))
+
+    def test_the_final_customer_and_job_are_checked(self):
+        # The automated review of 7da2180: moving a line named "Customer X:Job A" to another customer never keeps
+        # Job A; a job/no-job contradiction is refused.
+        report = two_jobs(L(4, "Invoice", "1003", f"{Y}:Job C", 300.0, 6300.0))
+        row = rows_of(report, amount=D("4000.0"))[0]
+        moved = qf.figures(report, answers(JOB_COSTS, {row: qf.LineAnswer(qf.REVENUE, customer=Y)}))
+        self.assertEqual(D("4300"), moved.customers[Y]["sales"].amount)
+        self.assertEqual(D("300"), moved.jobs[(Y, "Job C")]["sales"].amount)  # no job given: not put in Job C ...
+        self.assertIn(row, holds(moved.jobs[(Y, "Job C")]["sales"]))  # ... and Y's jobs are held until it's known
+        self.assertEqual(D("0"), moved.jobs[A]["sales"].amount)
+        self.assertNotIn((Y, "Job A"), moved.jobs)
+        for bad in (qf.LineAnswer(qf.REVENUE, customer=Y, job="Job A"),
+                    qf.LineAnswer(qf.REVENUE, job="Job B", outside_jobs=True),
+                    qf.LineAnswer(qf.REVENUE, customer="Nobody (fictional)")):
+            with self.subTest(bad):
+                result = qf.figures(report, answers(JOB_COSTS, {row: bad}))
+                self.assertTrue(result.warnings)
+                self.assertEqual(D("4000"), result.jobs[A]["sales"].amount)  # unchanged: the answer wasn't used
 
     def test_a_job_that_isnt_in_the_report_isnt_accepted(self):
         report = two_jobs(extra_expenses=[L(7, "Bill", "B-3", "Garden Supply (fictional)", 900.0, 2400.0)])

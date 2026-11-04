@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from decimal import Decimal
 
 from openpyxl import Workbook
 
@@ -130,10 +131,14 @@ def report_rows(sections: dict[str, list[tuple[str, list[list]]]]) -> list[list]
     summary row worked out here (in whole cents) in the layout seen. sections maps "Income", "Cost of
     Goods Sold", "Expenses", "Other Income" or "Other Expense" to [(account, [lines])]."""
     def cents(value) -> int:
-        return round(float(value) * 100)
+        """Exact: a value with fractions of a cent is refused, never rounded (the automated review of 7da2180)."""
+        exact = Decimal(str(value))
+        if exact != exact.quantize(Decimal("0.01")):
+            raise ValueError(f"{value} isn't a whole number of cents")
+        return int(exact * 100)
 
-    def money(c: int) -> float:
-        return c / 100
+    def money(c: int) -> Decimal:
+        return Decimal(c) / 100  # written to the workbook exactly
 
     body: list[list] = [["Ordinary Income/Expenses"]]
     sums: dict[str, int] = {}

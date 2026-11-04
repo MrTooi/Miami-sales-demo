@@ -29,6 +29,11 @@ The rules, from plan v7:
     | any                 | a duplicate of a counted line, or dated outside the period |
 
   Only the last row leaves the figures ("excluded").
+  Money received or moved (a Payment, Deposit, Transfer...: quickbooks_rules.PAYMENT_TYPES) is never
+  counted, even on the owner's word: AGENTS.md rule 4 says it is cash movement, never new revenue. It
+  can only be shown to be a duplicate or outside the period; otherwise it stays held. (Plan v7's
+  deposit example lets the owner confirm a Deposit as revenue; AGENTS.md wins, and the mismatch is
+  raised for the owner on PR #138.)
 - S3. One report never makes a job's profit Complete by itself: every job's profit keeps that hold
   until a second report cross-checks it (step 5). Complete always means complete within this
   report: its company, dates and accrual basis. A filter that QuickBooks doesn't print in the file
@@ -253,6 +258,11 @@ class _Builder:
         if section not in ALLOWED or answer.kind not in ALLOWED[section]:
             return (f"a line in {section or 'no section'} can't be '{answer.kind}'; it can be "
                     + ", ".join(sorted(ALLOWED.get(section, {DUPLICATE, OUTSIDE_PERIOD}))))
+        if answer.outside_jobs and answer.job is not None:
+            return "it can't both belong to a job and to no job in this report"
+        if answer.kind not in EXCLUDED_KINDS and _type(line) in qr.PAYMENT_TYPES:
+            return (f"'{line.transaction_type.strip()}' is money received or moved, never new revenue or a cost "
+                    "(AGENTS.md rule 4); it can only be a duplicate or outside the period")
         if answer.kind in EXCLUDED_KINDS:
             if answer.kind == OUTSIDE_PERIOD:
                 when = qp._date(line.date)
@@ -267,20 +277,25 @@ class _Builder:
         if answer.kind == REDUCTION and line.amount > 0:
             return "a revenue reduction lowers sales, so it can't be positive"
         if answer.kind in (REVENUE, REDUCTION, JOB_COST):
+            if answer.job is not None and not self.jobs_on:
+                return "you haven't said that sub-customers are jobs, so profit is by customer"
             customer, job = self.who(line, answer)
-            if answer.customer is not None and answer.customer not in self.customers:
-                return f"'{answer.customer}' isn't a customer in this report"
-            if answer.job is not None:
-                if not self.jobs_on:
-                    return "you haven't said that sub-customers are jobs, so profit is by customer"
-                if (customer, answer.job) not in self.jobs:
-                    return f"'{answer.job}' isn't a job of '{customer}' in this report"
+            # The final customer and job are checked, not just what the answer named (the automated review
+            # of 7da2180): a job must be one of that customer's jobs in this report.
+            if customer is not None and customer not in self.customers:
+                return f"'{customer}' isn't a customer in this report"
+            if job is not None and (customer, job) not in self.jobs:
+                return f"'{job}' isn't a job of '{customer}' in this report"
+            if job is not None and customer is None:
+                return "a job needs its customer"
         return ""
 
     def who(self, line: qp.LedgerLine, answer: LineAnswer | None) -> tuple[str | None, str | None]:
         customer, job = names_of(line)
         if answer is not None:
-            customer = answer.customer or customer
+            if answer.customer is not None and answer.customer != customer:
+                # Another customer: the Name's job was the old customer's, so it never carries over.
+                customer, job = answer.customer, None
             job = answer.job or job
             if answer.outside_jobs:
                 job = None

@@ -44,6 +44,7 @@ ACCOUNTS = {
     "Other Income": ["Interest Earned", "Other Ordinary Income"],
     "Other Expense": ["Miscellaneous", "Penalties"],
 }
+TIDY_NAMES = ["Coral Cafe (fictional):Patio", "Coral Cafe (fictional):Kitchen", "Palm Gym (fictional):Lobby"]
 SUB_ACCOUNTS = ["Job Materials", "Plants and Soil", "Fuel", "Labor", "Gas and Electric", "Telephone", "Decks"]
 NAMES = ["Coral Cafe (fictional):Patio", "Coral Cafe (fictional):Kitchen", "Palm Gym (fictional):Lobby",
          "Bay Clinic (fictional)", "Garden Supply (fictional)", "Bayside Fuel (fictional)", "Landlord (fictional)",
@@ -88,6 +89,9 @@ def _excel_total(cents_list: list[int]) -> str:
 
 def make_report(seed: int) -> Report:
     rng = random.Random(seed)
+    # About one report in three is "tidy": only plain sales and costs with clear names, so figures that can be
+    # Complete come up too, and a missing hold would show.
+    tidy = rng.random() < 0.35
     body: list[list] = []
     stored: dict[str, str] = {}
     expected: dict[str, Expected] = {}
@@ -105,9 +109,11 @@ def make_report(seed: int) -> Report:
         month = rng.randint(1, 10)
         pool = (INCOME_TYPES if section == "Income" else COSTS_TYPES
                 if section in ("Cost of Goods Sold", "Expenses") else OTHER_TYPES)
+        if tidy and section in ("Income", "Cost of Goods Sold", "Expenses"):
+            pool = sorted(SALE_TYPES) if section == "Income" else sorted(COST_TYPES)
         kind = rng.choice(pool)
-        cents = rng.randint(1, 500_000) if rng.random() > 0.08 else -rng.randint(1, 50_000)
-        if rng.random() < 0.03:
+        cents = rng.randint(1, 500_000) if tidy or rng.random() > 0.08 else -rng.randint(1, 50_000)
+        if not tidy and rng.random() < 0.03:
             cents = 0
         unapplied = any(a.startswith("Unapplied Cash") for a in account_path)
         if section == "Income" and kind in SALE_TYPES and cents >= 0 and not unapplied:
@@ -132,7 +138,7 @@ def make_report(seed: int) -> Report:
         # Stored exactly, as the real export stores line amounts ("750.0"); openpyxl alone would write some
         # as 16-digit approximations ("68.76000000000001"), which MargenX rightly refuses as not exact cents.
         stored[f"J{excel_row(len(body))}"] = f"{'-' if cents < 0 else ''}{abs(cents) // 100}.{abs(cents) % 100:02d}"
-        name = rng.choice(NAMES)
+        name = rng.choice(TIDY_NAMES if tidy and section in ("Income", "Cost of Goods Sold", "Expenses") else NAMES)
         lines.append([section, kind, name, cents, counts])
         body.append([None, f"{month:02d}/{day:02d}/2026", kind, str(rng.randint(1000, 9999)), name, "", "",
                      "Made-up line", "Checking", cents / 100, None])
@@ -184,6 +190,8 @@ def make_report(seed: int) -> Report:
             add_total("Total Cost of Goods Sold", mine, section)
             cents += mine
         names = [a for a in ACCOUNTS[section] if a != "Cost of Goods Sold"]
+        if tidy:
+            names = [a for a in names if not a.startswith("Unapplied Cash")]
         for name in rng.sample(names, rng.randint(1, min(3, len(names)))):
             cents += add_account(section, name, 0, [])
         add_total(f"Total {section}", cents, section)
@@ -261,3 +269,26 @@ def expected_figures(report: Report) -> tuple[dict, dict]:
             if theirs is not None:
                 theirs[index] += cents
     return customers, jobs
+
+
+def expected_customer_status(report: Report) -> dict[str, tuple[bool, bool]]:
+    """Whether each customer's sales and job costs can be Complete, from the written rule S8, with every cost
+    account answered "job costs" and no line answered: a figure is held by its section's broken totals, by
+    any line in it that isn't counted and is this customer's or nobody's, and by any counted line that is
+    nobody's (its customer isn't known)."""
+    customers, _ = expected_figures(report)
+    sections = {"sales": ("Income",), "costs": ("Cost of Goods Sold", "Expenses")}
+    status = {}
+    for customer in customers:
+        complete = []
+        for which in ("sales", "costs"):
+            held = any(report.expected[s].broken for s in sections[which] if s in report.expected)
+            for section, kind, name, cents, counts in report.lines:
+                if section not in sections[which]:
+                    continue
+                owner, _ = who(section, kind, name)
+                if (not counts and owner in (None, customer)) or (counts and owner is None):
+                    held = True
+            complete.append(not held)
+        status[customer] = tuple(complete)
+    return status
