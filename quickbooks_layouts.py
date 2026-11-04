@@ -208,9 +208,9 @@ def recognise_profit_and_loss_detail(table: list[tuple[int, list[str]]], *, is_x
             if problem:
                 problems.append(problem)
         for number, cells in after_header[:-1]:
-            first = next((_clean(c) for c in cells if c.strip()), "")
-            if qr.BASIS_FOOTER.match(first):
-                problems.append(f"row {number} looks like a second basis line ('{qr._shown(first)}')")
+            basis_line = next((_clean(c) for c in cells if qr.BASIS_FOOTER.match(_clean(c))), "")
+            if basis_line:  # in any column, not only the first filled cell
+                problems.append(f"row {number} looks like a second basis line ('{qr._shown(basis_line)}')")
         if len(after_header) < 2:
             problems.append("it has no rows between the column names and the basis line")
 

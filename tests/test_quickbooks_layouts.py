@@ -152,6 +152,9 @@ class VariantTests(unittest.TestCase):
             "the column in F has no name": fx.pnl_rows(columns=[c if c != "Location" else None for c in fx.COLUMNS]),
             "row 9 has a value in column L, which has no name": fx.pnl_rows(body=body_with_value_past_balance),
             "row 20 looks like a second basis line": fx.pnl_rows(body=[*fx.BODY[:14], [fx.FOOTER], *fx.BODY[15:]]),
+            # Automated review of 3d5f042: a basis line in another column of a row counts too.
+            "row 21 looks like a second basis line ('Cash Basis": fx.pnl_rows(
+                body=[*fx.BODY[:15], ["Note", "Cash Basis Monday, October 26, 2026 07:04 PM GMTZ"], *fx.BODY[16:]]),
             "no rows between the column names and the basis line": fx.pnl_rows(body=[]),
         }
         for says, rows in cases.items():
@@ -234,8 +237,9 @@ class RefusalWordingTests(unittest.TestCase):
         self.assertNotIn("rename", reason)
 
     def test_plain_files_still_read(self):
-        samples = Path(__file__).resolve().parents[1] / "sample_data" / "marginx"
-        for path in sorted(samples.glob("*.csv")):
+        samples = sorted((Path(__file__).resolve().parents[1] / "sample_data" / "marginx").glob("*.csv"))
+        self.assertGreaterEqual(len(samples), 2)  # never passes with no files to read
+        for path in samples:
             with self.subTest(path.name):
                 ji.read_file(path.name, path.read_bytes())
 
