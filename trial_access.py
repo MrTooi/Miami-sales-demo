@@ -30,10 +30,13 @@ Limits, stated honestly:
   session Streamlit could still resume escapes a logout. A restart forgets all that, but a
   restart also ends every session.
 - Checking a token can mean fetching Cloudflare's keys over the network. That runs off Streamlit's
-  event loop, in a worker thread, so a slow fetch never holds up other requests, live connections
-  or a logout; the login is checked again on the loop afterwards. Each network wait in a fetch gives
-  up after KEY_FETCH_TIMEOUT_SECONDS. That is not a total deadline: a server trickling data slowly
-  could take longer, but only the request waiting for it is delayed, and it's then refused.
+  event loop, in a worker thread, so a slow fetch never freezes the app: page files already allowed,
+  open live connections and their once-a-second checks keep running. It does hold up other token
+  checks, a logout included: PyJWT lets one key lookup run at a time (a shared lock), and the worker
+  threads are a shared, limited pool. The login is checked again on the loop afterwards. Each network
+  wait in a fetch gives up after KEY_FETCH_TIMEOUT_SECONDS, which is not a total deadline (a server
+  trickling data slowly could take longer). Cloudflare's key address is normally fast; a total
+  deadline and a cap on parallel checks are a follow-up for PR B.
 - A live connection is checked about once a second and on every message: it is closed once the
   login has expired or been logged out, and nothing more is sent on it. Figures already on screen
   stay visible (behind Streamlit's "Connection error" box) until the tab is closed.
