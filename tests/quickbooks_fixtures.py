@@ -72,8 +72,9 @@ FOOTER_ROW = 40
 # Totals as QuickBooks writes them: a formula over the lines, with its saved result.
 FORMULAS = {"J11": "J9+J10", "J12": "J11", "J16": "J15", "J17": "J16", "J18": "J12-J17", "J24": "J22+J23",
             "J25": "J24", "J26": "J25", "J33": "J32", "J34": "J33"}
-# Saved results written exactly as Excel stores them (17 significant digits). Python writes this
-# number as 349.41, since it is the same binary number, so the text is put in the file directly.
+# Saved results written exactly as Excel stores them (17 significant digits). 349.40999999999997 is a
+# different number from 349.41, but openpyxl writes numbers with at most 16 significant digits, which
+# would store it as 349.41, so the text is put in the file directly.
 STORED = {"J24": "349.40999999999997", "J25": "349.40999999999997", "J26": "349.40999999999997"}
 
 
