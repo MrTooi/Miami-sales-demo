@@ -407,7 +407,7 @@ class ManualReviewOf151a80aTests(unittest.TestCase):
             held = [l.row for l in report.lines if l.row != receipt][0]
             return figures(report, answers(lines={held: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt)}))
         self.assertEqual((), case("Deposit", f"{X}:Job A", "").warnings)  # the plan's own example
-        for held_type, held_name, held_num, says in (("Deposit", f"{X}:Job B", "", "different jobs"),
+        for held_type, held_name, held_num, says in (("Deposit", f"{X}:Job B", "", "aren't for the same job"),
                                                      ("Deposit", f"{X}:Job A", "77", "different numbers"),
                                                      ("Journal Entry", f"{X}:Job A", "1001", "")):
             with self.subTest(held_type=held_type, held_name=held_name, held_num=held_num):
@@ -415,6 +415,33 @@ class ManualReviewOf151a80aTests(unittest.TestCase):
                 if says:
                     self.assertIn(says, " ".join(result.warnings))
                     self.assertEqual(qp.NEEDS_A_CHECK, result.company["sales"].status)
+
+    def test_a_duplicate_is_checked_against_where_the_counted_line_ended_up(self):
+        # The automated review of f63462b: a $700 Sales Receipt named only "Customer X", assigned by the owner to
+        # Job B, and a $700 Deposit named "Customer X:Job A" pointing to it: not the same money.
+        report = read({"Income": [("Design income", [
+            L(2, "Invoice", "1001", f"{X}:Job A", 4000.0, 4000.0),
+            L(3, "Invoice", "1002", f"{X}:Job B", 2000.0, 6000.0),
+            L(4, "Sales Receipt", "1003", X, 700.0, 6700.0, "", "Checking"),
+            L(9, "Deposit", "", f"{X}:Job A", 700.0, 7400.0, "", "Checking")])]})
+        receipt, deposit = rows_of(report, num="1003")[0], rows_of(report, transaction_type="Deposit")[0]
+        result = figures(report, answers(lines={receipt: qf.LineAnswer(qf.REVENUE, job="Job B"),
+                                                deposit: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt)}))
+        self.assertIn("aren't for the same job", " ".join(result.warnings))
+        self.assertIn(deposit, holds(result.jobs[A]["sales"]))
+        same_job = figures(report, answers(lines={receipt: qf.LineAnswer(qf.REVENUE, job="Job A"),
+                                                  deposit: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt)}))
+        self.assertEqual((), same_job.warnings)
+        self.assertEqual(D("4700"), same_job.jobs[A]["sales"].amount)
+
+    def test_the_fingerprint_covers_totals_too(self):
+        rows = fx.report_rows({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", 900.0, 900.0)])]})
+        changed = [r if r[:1] != ["Total for Design income"] else fx.total("Total for Design income", 950.0)
+                   for r in rows]
+        first = qp.read_profit_and_loss_detail("t.xlsx", fx.xlsx(rows))
+        second = qp.read_profit_and_loss_detail("t.xlsx", fx.xlsx(changed))
+        self.assertEqual([l.amount_text for l in first.lines], [l.amount_text for l in second.lines])
+        self.assertNotEqual(qf.report_fingerprint(first), qf.report_fingerprint(second))
 
     def test_overhead_never_carries_over_to_a_swapped_entry(self):
         # Blocker 3: a $500 office expense confirmed as overhead; a corrected export puts a $500 project bill in its

@@ -126,15 +126,17 @@ class OwnerAnswers:
 
 
 def report_fingerprint(report: qp.ProfitAndLossDetail) -> str:
-    """What the owner's answers are bound to: the report's company, dates, basis, footer, sheet, and every
-    line exactly as read (row, date, type, number, Name, amount, section and account path)."""
+    """What the owner's answers are bound to: the whole report as read. The company, dates, basis, footer,
+    sheet and column names, and every row below the column names, cell by cell (lines, headings, totals
+    and summary rows alike). Any change to any of them gives a new fingerprint (the automated review of
+    f63462b)."""
     import hashlib
     import json
 
     layout = report.layout
-    parts = [layout.company, layout.period, layout.basis, layout.footer,
-             [[l.sheet, l.row, l.date, l.transaction_type, l.num, l.name, l.amount_text, l.section or "",
-               list(l.account_path)] for l in report.lines]]
+    sheet = report.lines[0].sheet if report.lines else ""
+    parts = [layout.company, layout.period, layout.basis, layout.footer, sheet, sorted(layout.columns.items()),
+             [[row, list(cells)] for row, cells in layout.body]]
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -509,9 +511,11 @@ class _Builder:
                 problem = "two lines of the same type are two postings, even with the same amount"
             else:
                 other = self.lines[target.row]
-                mine_job, their_job = names_of(line)[1], names_of(other)[1]
-                if mine_job and their_job and mine_job != their_job:
-                    problem = "they're for different jobs"
+                # Against where the counted line ended up (its Name and any answer), not just its Name (the
+                # automated review of f63462b): both must be for the same job, or both for none.
+                mine_job = names_of(line)[1] if self.jobs_on else None
+                if mine_job != target.job:
+                    problem = "they aren't for the same job"
                 elif line.num.strip() and other.num.strip() and line.num.strip() != other.num.strip():
                     problem = "they have different numbers"
             if problem:
