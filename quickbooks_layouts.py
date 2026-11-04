@@ -128,8 +128,7 @@ def _footer(text: str) -> tuple[str, str | None]:
     if run_on is None or WEEKDAYS[run_on.weekday()] != weekday or not (1 <= int(hour) <= 12 and int(minute) < 60):
         return "", f"the last line, '{qr._shown(text)}', doesn't hold a real date and time"
     if basis == "Cash":
-        return "", ("it's a cash-basis report. MargenX reads accrual-basis reports only for now: in QuickBooks, "
-                    "set the accounting method to Accrual and export it again")
+        return "", "it's a cash-basis report, and MargenX knows only the accrual-basis layout"
     return basis, None
 
 
@@ -141,8 +140,7 @@ def recognise_profit_and_loss_detail(table: list[tuple[int, list[str]]], *, is_x
     """
     problems: list[str] = []
     if not is_xlsx:
-        problems.append("it's a CSV file. MargenX knows only the Excel version of this report: in QuickBooks, "
-                        "open the report and choose Export to Excel")
+        problems.append("it's a CSV file, and MargenX knows only the Excel version of this report")
     rows = dict(table)
 
     company = _alone_in_column_a(rows.get(1, ()))
@@ -233,6 +231,9 @@ def _letter(index: int) -> str:
     return letters
 
 
+# Every QuickBooks report is refused for now (its lines aren't counted yet, steps 3 and 4), so no
+# refusal sends the owner to export a QuickBooks report again (the PR #134 review).
+NOT_YET = "MargenX can't use QuickBooks reports yet, so nothing from this file was used."
 PLAIN_LIST = ("For now, upload a plain list with one row per sale or cost, with columns such as Date, Customer, "
               "Job and Amount.")
 
@@ -255,13 +256,12 @@ def quickbooks_refusal(table: list[tuple[int, list[str]]], title_lines: int, *, 
         if found.layout:
             layout = found.layout
             return (f"This is QuickBooks' Profit and Loss Detail report for {layout.company} ({layout.period}, "
-                    f"{layout.basis.lower()} basis). MargenX recognises this report, but reading its lines is still "
-                    f"being built, so nothing from this file was used. {PLAIN_LIST}")
+                    f"{layout.basis.lower()} basis). MargenX recognises this report, but {NOT_YET} {PLAIN_LIST}")
         shown = found.problems[:3]
         more = len(found.problems) - len(shown)
         return (f"This looks like a QuickBooks report (it has the title '{PROFIT_AND_LOSS_DETAIL}'), but it isn't "
                 "exactly in the layout MargenX knows: " + "; ".join(shown) + (f" (and {more} more)" if more else "")
-                + ". Nothing from this file was used. " + PLAIN_LIST)
+                + f". Exporting it again won't help yet: {NOT_YET} {PLAIN_LIST}")
     if any(qr.TRANSACTION_LIST.match(sign.removeprefix("the title '")) for sign in signs if sign.startswith("the title")):
         return ("This looks like QuickBooks' \"Transaction List by Customer\" report. It mixes invoices with "
                 "customer payments, and its totals add both together, so it can't be used as a sales file "
@@ -270,7 +270,9 @@ def quickbooks_refusal(table: list[tuple[int, list[str]]], title_lines: int, *, 
     reason = (f"This looks like a QuickBooks report (it has {sign}), and MargenX can't read this QuickBooks report "
               f"yet, so nothing from this file was used. {PLAIN_LIST}")
     if not sign.startswith("the title"):
-        what = {"the columns": "those columns", "the column": "that column"}.get(sign.split(" '")[0], "that row")
-        reason += (f" If this file didn't come from QuickBooks, rename or remove {what} and upload it again: "
-                   "QuickBooks uses the same words.")
+        # Says what to change without asking the owner to delete anything (the PR #134 review).
+        advice = {"the columns": "rename those columns", "the column": "rename that column"}.get(
+            sign.split(" '")[0], "reword the first cell of that row")
+        reason += (f" If this file didn't come from QuickBooks, {advice} and upload it again: QuickBooks uses "
+                   "the same words.")
     return reason

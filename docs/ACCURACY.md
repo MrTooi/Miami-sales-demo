@@ -97,6 +97,50 @@ in memory, to see whether the checks notice. Each one was caught across many of 
 | Percentages rounded the wrong way at exact halves | 204 |
 | Customer names never matched to sales with no job number (so those sales can't stop "Complete") | 43 |
 
+## 5. QuickBooks' Profit and Loss Detail (issue #128, step 3)
+
+MargenX doesn't use QuickBooks reports yet: uploads still refuse them. What is checked now is the
+reading underneath, before anything is shown to a shop.
+
+**One report worked by hand** (`tests/quickbooks_fixtures.py`, made up, in the layout QuickBooks
+Online exported on 2026-10-26):
+
+| Section | Lines | Its total | Counted | Held ("not resolved") | Status |
+|---|---|---|---|---|---|
+| Income | $900 Invoice, $300 Sales Receipt | $1,200 | $1,200 as sales | $0 | Complete |
+| Cost of Goods Sold | $150 "Invoice" (QuickBooks posts an item's cost this way) | $150 | $0 | $150: never a sale | Needs a check |
+| Expenses › Automobile › Fuel | $200.11 and $149.30 Expenses | $349.41 (stored as 349.40999999999997) | $349.41 as costs | $0 | Complete |
+| Other Expense | $80 Check | $80 | $0 | $80: you say what it is | Needs a check |
+
+Every total in the file is checked against its own lines to the cent: Gross Profit $1,200 − $150 =
+$1,050; Net Ordinary Income $1,050 − $349.41 = $700.59; Net Income $700.59 − $80 = $620.59.
+`tests/test_quickbooks_pnl.py` checks all of these.
+
+**Random reports with known answers.** `tests/qbo_pnl_reports.py` makes reports from a seed:
+- nested accounts, with and without their own lines;
+- the "Cost of Goods Sold" account inside its own section;
+- the empty "Other Income" heading;
+- money in and out of every type, and negative or $0 lines;
+- "Unapplied Cash" accounts;
+- totals stored with Excel's float noise.
+
+It works out the right answers in whole cents **without any MargenX code**:
+- line counts;
+- each section's sum, its sales, its costs and its held amount;
+- each section's status.
+
+One report in four has a total a cent off, or a fraction of a cent off; that section, and only that
+section, must be held.
+
+- Every change: 300 reports (`tests/test_quickbooks_pnl_accuracy.py`).
+- On demand: `QBO_PNL_REPORTS=3000 python -m unittest tests.test_quickbooks_pnl_accuracy`.
+  - Result on 2026-11-04: **3,000 reports, all matching.**
+- Planted mistakes, each caught: a looser float rule (0.02 instead of 0.000001), totals ignored when
+  counting, a Deposit counted as a sale, and a sum a cent off on long accounts.
+
+**Not proven yet:** customers, jobs and account sorting (step 4); combining two reports (step 5);
+whether other real exports store numbers and dates the way the one seen does.
+
 ## What this doesn't prove
 
 - **Real exports.** The made-up shops use one simple CSV layout. Real QuickBooks or Square files,

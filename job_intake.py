@@ -1252,9 +1252,10 @@ def intake(headers: list[str], records: list[Record], mapping: dict[str, str | N
         if account == "(blank)":
             reasons.append("This line's account is blank, so whether it is a sale can't be told; not imported.")
         elif account:
-            reasons.append(f"Account '{account}' isn't an income account, so this line isn't counted as a sale "
-                           "(an invoice posted to Cost of Goods Sold or to an expense is a cost entry, not a sale). "
-                           "Check its account where the data comes from.")
+            # Wording from the #129 review: Other Income is an income account, and an invoice posted to Cost
+            # of Goods Sold isn't proven to be a cost either.
+            reasons.append(f"Account '{account}' doesn't prove this line is a sale, so MargenX hasn't counted it. "
+                           "Check how the transaction was posted where the data comes from.")
         memo = _credit_memo(rec.cells, types)
         if memo and amount is not None and amount > 0:
             # A credit lowers what was billed; a positive one would raise it. Which sign is

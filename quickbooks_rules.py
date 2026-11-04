@@ -89,6 +89,11 @@ def _amount(amount: Decimal) -> Decimal:
     return amount
 
 
+def _not_cents(amount: Decimal) -> bool:
+    """A line amount must be exact cents; it is never rounded to fit (the #129 review)."""
+    return amount != amount.quantize(Decimal("0.01")) if amount.adjusted() < 28 else True
+
+
 def _not_resolved(reason: str) -> Outcome:
     return Outcome(NOT_RESOLVED, reason + " It stays not resolved and is shown with its amount; it is never "
                                           "left out.")
@@ -134,6 +139,8 @@ def classify_profit_and_loss_line(account_path: tuple[str, ...] | list[str], tra
       amount, an unknown section and any type nobody has tested.
     """
     amount = _amount(amount)
+    if _not_cents(amount):
+        return _not_resolved(f"Its amount {amount} isn't an exact number of cents.")
     path = tuple(account_path)
     kind, shown = _text(transaction_type), (transaction_type or "").strip()
     unapplied = _unapplied_cash(path)
@@ -168,6 +175,8 @@ def classify_sales_by_customer_line(transaction_type: str | None, amount: Decima
     Receipt, its amount isn't negative, and its customer group adds up to the group's own total
     (group_verified, decided by steps 2 and 3). It never holds a cost."""
     amount = _amount(amount)
+    if _not_cents(amount):
+        return _not_resolved(f"Its amount {amount} isn't an exact number of cents.")
     kind, shown = _text(transaction_type), (transaction_type or "").strip()
     if not group_verified:
         return _not_resolved("Its customer group hasn't been checked against the group's own total yet.")
