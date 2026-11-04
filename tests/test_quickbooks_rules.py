@@ -15,6 +15,7 @@ from openpyxl import Workbook
 
 import job_intake as ji
 import job_profit as jp
+import quickbooks_layouts as qlayouts
 import quickbooks_rules as qr
 
 D = Decimal
@@ -119,17 +120,21 @@ class CogsInvoiceRegressionTests(unittest.TestCase):
         self.assertEqual(D("1800.0"), sum(D(str(row[9])) for row in sales))
 
     def test_the_report_itself_is_refused_before_the_old_reader_sees_it(self):
-        for name, data in (("pnl.xlsx", xlsx(PNL_REPORT)), ("pnl.csv", csv_bytes(PNL_REPORT))):
+        # Step 2 recognises the Excel layout but still refuses it: its lines aren't read until steps 3-4.
+        for name, data, says in (
+                ("pnl.xlsx", xlsx(PNL_REPORT), "This is QuickBooks' Profit and Loss Detail report for Biscayne "
+                                               "Landscaping (fictional) (January 1-October 26, 2026, accrual basis)"),
+                ("pnl.csv", csv_bytes(PNL_REPORT), "This looks like a QuickBooks report (it has the title 'Profit "
+                                                   "and Loss Detail'), but it isn't exactly in the layout")):
             with self.subTest(name), self.assertRaises(ji.IntakeError) as caught:
                 ji.read_file(name, data)
-            self.assertIn("This looks like a QuickBooks report (it has the title 'Profit and Loss Detail')",
-                          str(caught.exception))
-            self.assertIn("nothing from this file was used", str(caught.exception))
+            self.assertIn(says, str(caught.exception))
+            self.assertIn("nothing from this file was used", str(caught.exception).replace("Nothing", "nothing"))
 
     def test_without_the_refusal_the_old_reader_would_count_the_405_as_sales(self):
         # Shows what the refusal prevents (the mistake seen on main eab330d): the reader for plain lists
         # can't see account sections, so it takes every "Invoice" line for a sale.
-        with mock.patch.object(qr, "quickbooks_refusal", return_value=None):
+        with mock.patch.object(qlayouts, "quickbooks_refusal", return_value=None):
             headers, records, _ = ji.read_file("pnl.xlsx", xlsx(PNL_REPORT))
         mapping = ji.suggest_mapping(headers, "invoices")
         result = ji.intake(headers, records, mapping, "invoices", "YYYY-MM-DD", "line")
@@ -153,7 +158,7 @@ class CogsInvoiceRegressionTests(unittest.TestCase):
             at.run()
         self.assertFalse(at.exception, at.exception)
         errors = " ".join(e.value for e in at.error)
-        self.assertIn("This file can't be read: This looks like a QuickBooks report", errors)
+        self.assertIn("This file can't be read: This is QuickBooks' Profit and Loss Detail report", errors)
         markdown = " ".join(m.value for m in at.markdown)
         self.assertNotIn("Here's where your money was made", markdown)
         for amount in ("$405", "$2,205", "$1,800"):
@@ -338,8 +343,11 @@ class QuickBooksLookAlikeTests(unittest.TestCase):
             for name in ("report.xlsx", "report.csv"):
                 with self.subTest(title=rows[1][0], name=name):
                     reason = self.refusal(rows, name)
-                    self.assertIn(f"it has the title '{rows[1][0]}'", reason)
-                    self.assertIn("MargenX can't read QuickBooks reports yet", reason)
+                    if rows is PNL_REPORT and name.endswith(".xlsx"):  # recognised (step 2), not read yet
+                        self.assertIn("MargenX recognises this report, but reading its lines is still being built", reason)
+                    else:
+                        self.assertIn(f"it has the title '{rows[1][0]}'", reason)
+                    self.assertIn("othing from this file was used", reason)
 
     def test_transaction_list_by_customer_is_refused_as_a_sales_file(self):
         for name in ("list.xlsx", "list.csv"):
