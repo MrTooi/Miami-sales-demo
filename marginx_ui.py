@@ -133,6 +133,8 @@ _APP_CSS = """
 @media(min-width:701px){[data-testid="stLayoutWrapper"]:has(>.st-key-mx-bar){position:sticky;top:0;z-index:999}}
 .st-key-mx-bar div.stButton>button{background:transparent!important;color:#E8EFEC!important;border:1px solid #3A5247!important}
 .st-key-mx-bar div.stButton>button:hover{border-color:#1DBA85!important;color:#7FE0B9!important}
+.st-key-mx-bar a.mx-logout{display:block;text-align:center;text-decoration:none;color:#E8EFEC;border:1px solid #3A5247;border-radius:.5rem;padding:.4rem .75rem;font-size:.85rem;line-height:1.2}
+.st-key-mx-bar a.mx-logout:hover{border-color:#1DBA85;color:#7FE0B9}
 /* The End session label is never cut off: it wraps onto two lines on a narrow screen. */
 .st-key-mx-bar div.stButton>button p{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.2;font-size:.85rem}
 @media(max-width:1250px){.mx-bar .ws,.mx-bar .sep{display:none}}
@@ -290,20 +292,22 @@ def card_title(title: str, note: str) -> None:
     _html(f'<div class="mx-cardt">{escape(title)}</div><div class="mx-cards">{escape(note)}</div>')
 
 
-def privacy_points(pilot: bool, trial: bool = False) -> None:
+def logout_link(href: str) -> None:
+    """The website trial's Log out, styled like the bar's buttons. A plain link in the same tab: the gate
+    in front of the app answers it (trial_access.LOGOUT_PATH), so it works without the page running."""
+    _html(f'<a class="mx-logout" href="{escape(href)}" target="_self">Log out</a>')
+
+
+def privacy_points(pilot: bool) -> None:
     """What happens to the files, in three short lines (the consent box says it in full).
 
     "Stays on this laptop" is said only in a pilot session, which pilot_safety has verified runs on
     this laptop for a local browser. End session is an instruction, not a promise: when it can't
     confirm the files were cleared, the page says so.
     """
-    if trial:  # the website trial (trial_access): only the invited person can log in
-        points = (("lock", "Private: only you can log in"), ("file", "Read in memory, not saved by MargenX"),
-                  ("trash", "End session clears the app's data"))
-    else:
-        first = (("laptop", "Stays on this laptop, never sent online") if pilot else ("file", "Made-up files only"))
-        points = (first, ("lock", "Read in memory, never saved" if pilot else "Checked in memory, never saved"),
-                  ("trash", "End session clears the app's data"))
+    first = (("laptop", "Stays on this laptop, never sent online") if pilot else ("file", "Made-up files only"))
+    points = (first, ("lock", "Read in memory, never saved" if pilot else "Checked in memory, never saved"),
+              ("trash", "End session clears the app's data"))
     _html('<div class="mx-trust">' + "".join(f'<div><span class="mx-ico2">{_icon(i)}</span>{escape(t)}</div>'
                                             for i, t in points) + "</div>")
 

@@ -4,7 +4,7 @@ Run with:  streamlit run trial_app.py --server.address 127.0.0.1
 The server listens on this machine only; the Cloudflare tunnel (PR A2) is the only way in.
 
 It serves the same single MargenX page as marginx_pilot.py, with trial_access.TrialGate in front of
-every request: the page, the live connection, uploads and media. Without every trial setting
+every request: the page, the live connection and media (uploads are off). Without every trial setting
 (TrialConfig.from_environ), the gate refuses every request. The laptop pilot (marginx_pilot.py and
 the Desktop launcher) doesn't use this file and is unchanged.
 """

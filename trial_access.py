@@ -1,12 +1,16 @@
 """The website trial's safety checks (issue #131, lean v1.2; decisions D-008 and D-009). PR A1.
 
-The trial runs MargenX online for one invited person at a time, behind Cloudflare Access (an
-emailed one-time code). Cloudflare puts a signed token on every request it lets through. This
-module checks that token, and keeps a small in-memory register of which person each MargenX
-session belongs to and whether that person has ticked consent in it. `TrialGate` sits in front of
-every request Streamlit receives (page, live connection, uploads, media) and refuses anything
-that isn't from the invited person. For an upload it also refuses before a single byte of the
-file is read, unless that person ticked consent in that exact session.
+The trial runs MargenX online for one invited person at a time, behind Cloudflare Access.
+Cloudflare puts a signed token on every request it lets through. This module checks that token,
+and keeps a small in-memory register of which person each MargenX session belongs to. `TrialGate`
+sits in front of every request Streamlit receives (page, live connection, media) and refuses
+anything that isn't from the invited person.
+
+Uploads are switched off in this PR. Until the QuickBooks Profit and Loss Detail reading (#128) is
+finished, the trial shows the made-up sample files only: the gate refuses every request to the
+upload address, and every request that sends data (any method other than GET, HEAD or OPTIONS),
+before any of its body is read. No setting turns uploads on; the PR that enables them must add
+consent, and a consent withdrawal that is safe against an upload already in flight.
 
 Nothing here stores anything: the register lives in memory and is gone when the process stops.
 The trial is switched on only by its settings (`TrialConfig.from_environ`); without every
@@ -16,14 +20,19 @@ separate and unchanged.
 Limits, stated honestly:
 - The gate trusts Cloudflare's signing keys, fetched from the team's own address. Release check 1
   shows the server is reachable only through the tunnel.
-- An open live connection is cut when its next message arrives after the login has expired or
-  been ended, not at the exact second. Figures already on screen stay visible until then, and
-  files the person saved themselves stay with them.
-- Logout ends every MargenX session of that person in this process, and refuses their logins
-  issued before the logout. A restart forgets that, but a restart also ends every session.
+- Log out is handled here, not by the page: the Log out link opens LOGOUT_PATH, and the gate
+  refuses that person's logins issued up to then, retires and closes every MargenX session of
+  theirs in this process (state and any uploaded files), and sends the browser on to Cloudflare's
+  own logout. A plain redirect, so it works even though the page can no longer load anything.
+  A retired session can never be resumed. A restart forgets all that, but a restart also ends
+  every session.
+- A live connection is checked about once a second and on every message: it is closed once the
+  login has expired or been logged out, and nothing more is sent on it. Figures already on screen
+  stay visible (behind Streamlit's "Connection error" box) until the tab is closed.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 import threading
 import time
@@ -32,26 +41,25 @@ from dataclasses import dataclass, field
 
 TRIAL_ENV = "MARGINX_TRIAL"
 TOKEN_HEADER = "cf-access-jwt-assertion"
-# Streamlit session and file IDs are letters, digits and dashes. Any other shape is refused.
-UPLOAD_PATH = re.compile(r"^/_stcore/upload_file/(?P<session_id>[A-Za-z0-9-]+)/(?P<file_id>[A-Za-z0-9-]+)$")
+UPLOAD_PREFIX = "/_stcore/upload_file"
 READ_METHODS = ("GET", "HEAD", "OPTIONS")
-# Streamlit's upload cap is 5 MiB (.streamlit/config.toml); the form around the file adds a little.
-MAX_UPLOAD_REQUEST_BYTES = 5 * 1024 * 1024 + 64 * 1024
-SECURITY_HEADERS = (
-    (b"cache-control", b"no-store"),
-    (b"content-security-policy", b"frame-ancestors 'none'"),
-    (b"x-frame-options", b"DENY"),
-)
-CONSENT_TEXT = (
-    "I am the person invited to this MargenX trial, and I'm allowed to share these files for my business. "
-    "They go only to this private MargenX copy, are read in memory for this session and are not saved by "
-    "MargenX. I've left out bank and card details, tax IDs and individual payroll records. I can end the "
-    "session at any time."
-)
-NOT_YET_SUPPORTED = (
-    "This trial reads one kind of file only: QuickBooks Online's Profit and Loss Detail report. Reading it "
-    "isn't finished yet, so MargenX didn't use this file, and it was removed from this session. You can try "
-    "MargenX with the made-up sample files in the meantime."
+# Headers that must appear at most once: with two copies, the gate and Streamlit could read different ones.
+SINGLE_HEADERS = (b"host", b"origin", TOKEN_HEADER.encode(), b"sec-websocket-protocol", b"sec-fetch-site")
+# The Log out link's address, answered by the gate itself; then on to Cloudflare's own logout.
+LOGOUT_PATH = "/_trial/logout"
+CLOUDFLARE_LOGOUT = "/cdn-cgi/access/logout"
+# Replaced on every response: nothing from the trial is stored by the browser or any cache, and no other
+# site can show the trial inside a frame.
+FORCED_HEADERS = ((b"cache-control", b"no-store"), (b"x-frame-options", b"DENY"))
+# Added next to any policy Streamlit sets (a browser applies every policy it gets, so ours always holds).
+ADDED_HEADERS = ((b"content-security-policy", b"frame-ancestors 'none'"),)
+SECURITY_HEADERS = FORCED_HEADERS + ADDED_HEADERS
+# Cloudflare's key set is fetched again after this many seconds; a key it has removed stops working then.
+KEY_SET_SECONDS = 300
+CHECK_EVERY_SECONDS = 1.0
+SAMPLES_ONLY_NOTE = (
+    "This trial shows MargenX with made-up sample files for now. Reading your own QuickBooks report isn't "
+    "finished yet, so there's no upload box: you'll be told when it's ready."
 )
 
 
@@ -104,8 +112,11 @@ class TokenChecker:
         if key_source is None:
             import jwt
 
-            # PyJWKClient caches the keys and fetches them again for an unknown key ID (keys rotate).
-            key_source = jwt.PyJWKClient(config.certs_url, cache_keys=True, lifespan=300)
+            # Only the whole key set is cached, for KEY_SET_SECONDS; no single key is kept beyond it
+            # (cache_keys=False). So a key Cloudflare has removed stops working within that time. An
+            # unknown key ID fetches the set again at once (keys rotate).
+            key_source = jwt.PyJWKClient(config.certs_url, cache_keys=False, cache_jwk_set=True,
+                                         lifespan=KEY_SET_SECONDS)
         self._keys = key_source
 
     def claims(self, token: str | None) -> dict | None:
@@ -128,56 +139,42 @@ class TokenChecker:
 
 
 @dataclass
-class _Session:
-    email: str
-    consent: bool = False
-
-
-@dataclass
 class SessionRegister:
-    """Which person each MargenX session belongs to, whether they ticked consent in it, and when each
-    person last logged out. In memory only; thread-safe (Streamlit runs scripts in other threads)."""
+    """Which person each MargenX session belongs to, which sessions were ended by a logout, and when
+    each person last logged out. In memory only; thread-safe (Streamlit runs scripts in other threads).
+    `loop` is Streamlit's event loop, noted by the gate, so a logout can close sessions on it."""
 
-    _sessions: dict[str, _Session] = field(default_factory=dict)
+    _sessions: dict[str, str] = field(default_factory=dict)  # session ID -> email
+    _retired: set[str] = field(default_factory=set)  # ended by a logout: never usable again
     _logged_out_at: dict[str, float] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    loop: asyncio.AbstractEventLoop | None = None
 
     def bind(self, session_id: str, email: str) -> bool:
-        """Tie a session to a person. A session can never move to another person: False if it belongs
-        to someone else (the caller then clears it)."""
+        """Tie a session to a person. A session can never move to another person, and a session ended
+        by a logout can't be used again: False then (the caller clears it)."""
         with self._lock:
-            current = self._sessions.get(session_id)
-            if current is None:
-                self._sessions[session_id] = _Session(email)
-                return True
-            return current.email == email
+            if session_id in self._retired:
+                return False
+            current = self._sessions.setdefault(session_id, email)
+            return current == email
 
-    def set_consent(self, session_id: str, email: str, consent: bool) -> None:
+    def may_resume(self, session_id: str, email: str) -> bool:
+        """Whether a live connection may resume this earlier session: not if a logout ended it, nor if it
+        belongs to someone else."""
         with self._lock:
-            current = self._sessions.get(session_id)
-            if current is not None and current.email == email:
-                current.consent = consent
+            return session_id not in self._retired and self._sessions.get(session_id, email) == email
 
-    def may_upload(self, session_id: str, email: str) -> bool:
-        with self._lock:
-            current = self._sessions.get(session_id)
-            return current is not None and current.email == email and current.consent
-
-    def belongs_to(self, session_id: str, email: str) -> bool:
-        with self._lock:
-            current = self._sessions.get(session_id)
-            return current is not None and current.email == email
-
-    def forget(self, session_id: str) -> None:
-        with self._lock:
-            self._sessions.pop(session_id, None)
-
-    def log_out(self, email: str, now: float | None = None) -> None:
-        """End every session of this person and refuse their logins issued before now."""
+    def log_out(self, email: str, now: float | None = None) -> list[str]:
+        """Refuse this person's logins issued up to now, and retire every session of theirs. Returns
+        those sessions' IDs, so the caller can close them."""
         with self._lock:
             self._logged_out_at[email] = time.time() if now is None else now
-            for sid in [sid for sid, s in self._sessions.items() if s.email == email]:
+            ended = [sid for sid, owner in self._sessions.items() if owner == email]
+            for sid in ended:
                 del self._sessions[sid]
+                self._retired.add(sid)
+            return ended
 
     def login_allowed(self, email: str, issued_at: float) -> bool:
         with self._lock:
@@ -196,7 +193,7 @@ _CHECKERS: dict[TrialConfig, TokenChecker] = {}
 
 
 def checker_for(config: TrialConfig | None) -> TokenChecker | None:
-    """One token checker per trial setting, so Cloudflare's keys are fetched once and cached."""
+    """One token checker per trial setting, so Cloudflare's key set is fetched once per few minutes."""
     if config is None:
         return None
     if config not in _CHECKERS:
@@ -204,66 +201,138 @@ def checker_for(config: TrialConfig | None) -> TokenChecker | None:
     return _CHECKERS[config]
 
 
-def _header(scope: Mapping, name: bytes) -> str | None:
+def _streamlit_runtime():
+    from streamlit.runtime import Runtime
+
+    return Runtime.instance() if Runtime.exists() else None
+
+
+def end_sessions(session_ids: list[str], register: SessionRegister = REGISTER, delay: float = 0.0,
+                 runtime=_streamlit_runtime) -> bool:
+    """Close these Streamlit sessions completely (their state and any uploaded files), after `delay`
+    seconds, on Streamlit's event loop, where Streamlit requires it. Safe to call from any thread.
+    False if it couldn't be scheduled (no event loop noted yet)."""
+    if not session_ids:
+        return True
+    loop = register.loop
+    if loop is None:
+        return False
+    ids = list(session_ids)
+
+    def close_all():
+        rt = runtime()
+        if rt is None:
+            return
+        for sid in ids:
+            try:
+                rt.uploaded_file_mgr.remove_session_files(sid)  # close_session does this too
+            except Exception:
+                pass
+            try:
+                rt.close_session(sid)
+            except Exception:
+                pass
+
+    try:
+        loop.call_soon_threadsafe(loop.call_later, delay, close_all)
+    except RuntimeError:  # the event loop has stopped: the process is ending, and every session with it
+        return False
+    return True
+
+
+def _single_headers(scope: Mapping) -> dict[bytes, str] | None:
+    """The headers the gate reads, each at most once; None if any of them appears twice."""
+    found: dict[bytes, str] = {}
     for key, value in scope.get("headers", ()):
-        if key.lower() == name:
-            return value.decode("latin-1")
-    return None
+        name = key.lower()
+        if name in SINGLE_HEADERS:
+            if name in found:
+                return None
+            found[name] = value.decode("latin-1")
+    return found
+
+
+def _resumed_session_id(protocols: str | None) -> str | None:
+    """The earlier session a live connection asks to resume: the third entry of Sec-WebSocket-Protocol,
+    read exactly as Streamlit reads it (streamlit/web/server/starlette/starlette_websocket.py)."""
+    if not protocols:
+        return None
+    entries = [value.strip() for value in protocols.split(",")]
+    return entries[2] if len(entries) >= 3 and entries[2] else None
 
 
 class TrialGate:
     """ASGI middleware in front of all of Streamlit. Every request needs a valid token for the invited
-    person, the trial's own Host, and for live connections and uploads, the trial's own Origin.
-    Uploads also need consent in that exact session, and are refused before their body is read."""
+    person and exactly the trial's own Host; live connections also need the trial's own Origin. Uploads
+    and anything else that sends data are refused before any body is read (uploads are off). The gate
+    also answers the Log out link itself (LOGOUT_PATH)."""
 
     def __init__(self, app, config: TrialConfig | None = None, checker: TokenChecker | None = None,
-                 register: SessionRegister = REGISTER, clock=time.time):
+                 register: SessionRegister = REGISTER, clock=time.time,
+                 check_every: float = CHECK_EVERY_SECONDS, runtime=_streamlit_runtime):
         self.app = app
         self.config = config
         self.checker = checker if checker is not None else checker_for(config)
         self.register = register
         self.clock = clock
+        self.check_every = check_every
+        self.runtime = runtime
 
     async def __call__(self, scope, receive, send):
         kind = scope.get("type")
         if kind not in ("http", "websocket"):
             await self.app(scope, receive, send)  # lifespan events carry no request
             return
+        self.register.loop = asyncio.get_running_loop()
         claims = self._allowed(scope)
         if claims is None:
             await self._refuse(scope, send)
             return
         if kind == "websocket":
-            await self.app(scope, self._watch_connection(receive, send, claims), send)
+            await self._serve_live(scope, receive, send, claims)
+            return
+        if scope.get("path") == LOGOUT_PATH:
+            await self._log_out(scope, send, claims)
             return
         await self.app(scope, receive, self._with_security_headers(send))
+
+    async def _log_out(self, scope, send, claims):
+        """Log out: refuse this person's logins issued up to now, retire and close all their sessions,
+        then send the browser to Cloudflare's own logout. Only a plain GET from the trial's own page (or
+        typed in), so another site can't log the person out."""
+        site = _single_headers(scope).get(b"sec-fetch-site")
+        if scope.get("method") != "GET" or site not in (None, "same-origin", "none"):
+            await self._refuse(scope, send)
+            return
+        ended = self.register.log_out(claims["email"], now=self.clock())
+        end_sessions(ended, self.register, runtime=self.runtime)
+        await send({"type": "http.response.start", "status": 303,
+                    "headers": [(b"location", CLOUDFLARE_LOGOUT.encode()), *SECURITY_HEADERS]})
+        await send({"type": "http.response.body", "body": b""})
 
     def _allowed(self, scope) -> dict | None:
         """The token's claims if this request may go on; None to refuse it (without reading any body)."""
         if self.config is None or self.checker is None:
             return None  # not configured: fail closed
-        host = (_header(scope, b"host") or "").split(":")[0].lower()
-        if host != self.config.host:
-            return None
-        claims = self.checker.claims(_header(scope, TOKEN_HEADER.encode()))
+        headers = _single_headers(scope)
+        if headers is None:
+            return None  # a header the gate relies on appears twice
+        if headers.get(b"host", "").lower() != self.config.host:
+            return None  # exactly the trial's address: no port, no other name
+        if scope["type"] == "http":
+            if scope.get("method", "GET") not in READ_METHODS:
+                return None  # uploads are off, and nothing else in the trial sends data
+            if scope.get("path", "").startswith(UPLOAD_PREFIX):
+                return None
+        claims = self.checker.claims(headers.get(TOKEN_HEADER.encode()))
         if claims is None or not self.register.login_allowed(claims["email"], float(claims["iat"])):
             return None
-        method = scope.get("method", "GET")
-        if scope["type"] == "websocket" or method not in READ_METHODS:
-            if _header(scope, b"origin") != self.config.origin:
-                return None  # a live connection or upload started from another site
-        if scope["type"] == "http" and method not in READ_METHODS:
-            # Anything that sends or changes something is refused, except an upload (or its removal) at the
-            # exact upload address of this person's own session, with consent ticked there.
-            match = UPLOAD_PATH.match(scope.get("path", ""))
-            if not match or method not in ("PUT", "DELETE"):
-                return None
-            if not self.register.may_upload(match["session_id"], claims["email"]):
-                return None  # no consent in that session, or another person's session
-            if method == "PUT":
-                length = _header(scope, b"content-length")
-                if not length or not length.isdigit() or int(length) > MAX_UPLOAD_REQUEST_BYTES:
-                    return None
+        if scope["type"] == "websocket":
+            if headers.get(b"origin") != self.config.origin:
+                return None  # a live connection started from another site
+            resumed = _resumed_session_id(headers.get(b"sec-websocket-protocol"))
+            if resumed is not None and not self.register.may_resume(resumed, claims["email"]):
+                return None  # a session a logout ended, or someone else's
         return claims
 
     async def _refuse(self, scope, send):
@@ -275,26 +344,67 @@ class TrialGate:
         await send({"type": "http.response.body", "body": b"Not allowed."})
 
     def _with_security_headers(self, send):
+        forced = {name for name, _ in FORCED_HEADERS}
+
         async def wrapped(message):
             if message["type"] == "http.response.start":
-                names = {k.lower() for k, _ in message.get("headers", [])}
-                extra = [(k, v) for k, v in SECURITY_HEADERS if k not in names]
-                message = {**message, "headers": [*message.get("headers", []), *extra]}
+                kept = [(k, v) for k, v in message.get("headers", []) if k.lower() not in forced]
+                message = {**message, "headers": [*kept, *SECURITY_HEADERS]}
             await send(message)
         return wrapped
 
-    def _watch_connection(self, receive, send, claims):
-        """Close a live connection at its next message once the login has expired or been logged out."""
-        email, issued, expires = claims["email"], float(claims["iat"]), float(claims["exp"])
+    def _ended(self, claims) -> bool:
+        return self.clock() >= float(claims["exp"]) or not self.register.login_allowed(claims["email"],
+                                                                                        float(claims["iat"]))
 
-        async def wrapped():
-            message = await receive()
-            if message["type"] == "websocket.receive":
-                if self.clock() >= expires or not self.register.login_allowed(email, issued):
+    async def _serve_live(self, scope, receive, send, claims):
+        """Run a live connection, closing it from the server side once its login has expired or been
+        logged out: checked about once a second even when nothing is sent, and on every message either
+        way. After that, nothing more reaches the browser and nothing more from it reaches Streamlit."""
+        lock = asyncio.Lock()
+        state = {"ended": False, "watch": None}
+
+        async def end():
+            async with lock:
+                if state["ended"]:
+                    return
+                state["ended"] = True
+                try:
                     await send({"type": "websocket.close", "code": 1008})
-                    return {"type": "websocket.disconnect", "code": 1008}
+                except Exception:  # the browser already went away
+                    pass
+
+        async def watch():
+            while not state["ended"]:
+                await asyncio.sleep(self.check_every)
+                if self._ended(claims):
+                    await end()
+
+        async def guarded_send(message):
+            if message["type"] == "websocket.send" and self._ended(claims):
+                await end()
+            async with lock:
+                if state["ended"]:
+                    return  # dropped: the login has ended
+                await send(message)
+            if message["type"] == "websocket.accept" and state["watch"] is None:
+                state["watch"] = asyncio.create_task(watch())
+
+        async def guarded_receive():
+            if state["ended"]:
+                return {"type": "websocket.disconnect", "code": 1008}
+            message = await receive()
+            if message["type"] == "websocket.receive" and self._ended(claims):
+                await end()
+            if state["ended"] and message["type"] != "websocket.disconnect":
+                return {"type": "websocket.disconnect", "code": 1008}
             return message
-        return wrapped
+
+        try:
+            await self.app(scope, guarded_receive, guarded_send)
+        finally:
+            if state["watch"] is not None:
+                state["watch"].cancel()
 
 
 def identity_from_headers(headers: Mapping[str, str] | None, checker: TokenChecker | None) -> str | None:
