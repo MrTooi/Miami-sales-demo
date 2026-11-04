@@ -578,8 +578,10 @@ class _Builder:
             resolution = by_row.get(row)
             if resolution is None or resolution.kind not in (REVENUE, REDUCTION):
                 continue
+            # Any difference counts, including a job on one side and none on the other (the automated review of
+            # 114acb6: an owner-assigned Job A against a line listed directly under the customer).
             mismatch = (resolution.customer is not None and customer is not None and resolution.customer != customer) or (
-                self.jobs_on and resolution.job is not None and job is not None and resolution.job != job)
+                self.jobs_on and resolution.job != job)
             if mismatch:
                 hold = Hold(row, resolution.amount, f"Row {row} is counted for {resolution.customer}"
                             + (f" › {resolution.job}" if resolution.job else "") + ", but Sales by Customer Detail "

@@ -178,6 +178,24 @@ class MatchingTests(unittest.TestCase):
         agreeing = figures(report, check, lines={row: qf.LineAnswer(qf.REVENUE, job="Job B")})
         self.assertEqual((D("2700"), qp.COMPLETE), (agreeing.jobs[B]["sales"].amount, agreeing.jobs[B]["sales"].status))
 
+    def test_a_job_on_one_side_and_none_on_the_other_is_a_disagreement(self):
+        # The automated review of 114acb6: a customer-only invoice, listed directly under Customer X in the second
+        # report (no sub-customer), answered by the owner as Job A. Job A must stay held, never Complete.
+        report = pnl(both_jobs_income(L(4, "Invoice", "1003", X, D("700.0"), D("6700.0"))), COSTS)
+        check = qc.cross_check(report, sbcd([(X, [S(4, "Invoice", "1003", "Design", 1, 700)],
+                                              [("Job A", [S(2, "Invoice", "1001", "Design", 1, 4000)]),
+                                               ("Job B", [S(3, "Invoice", "1002", "Design", 1, 2000)])])]))
+        self.assertEqual(((), ()), (check.pnl_unmatched, check.sbcd_unmatched))
+        row = next(l.row for l in report.lines if l.num == "1003")
+        result = figures(report, check, lines={row: qf.LineAnswer(qf.REVENUE, job="Job A")})
+        for figure in (result.jobs[A]["sales"], result.jobs[A]["profit_after_job_costs"]):
+            self.assertIn(("Profit and Loss Detail", row), holds(figure))
+            self.assertEqual(qp.NEEDS_A_CHECK, figure.status)
+        # Saying it belongs to no job agrees with the second report: the jobs can be Complete.
+        agreeing = figures(report, check, lines={row: qf.LineAnswer(qf.REVENUE, no_job=True)})
+        self.assertEqual(qp.COMPLETE, agreeing.jobs[A]["profit_after_job_costs"].status)
+        self.assertEqual(D("6700"), agreeing.customers[X]["sales"].amount)
+
     def test_lines_that_arent_sales_forms_arent_expected_in_the_second_report(self):
         report = pnl(both_jobs_income(L(4, "Deposit", "", f"{X}:Job A", D("50.0"), D("6050.0"), "", "Checking")), COSTS)
         check = qc.cross_check(report, sbcd(both_jobs_sales()))
