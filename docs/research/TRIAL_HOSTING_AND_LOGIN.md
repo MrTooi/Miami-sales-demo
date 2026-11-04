@@ -60,7 +60,7 @@
   - **after a restart** the door has lost those records, so it refuses **every token issued before the restart** (the plan's quarantine rule), which includes every token from before any cancellation;
   - **what remains Unresolved:** a token issued after the cancellation or after a restart, from a gate login the cancellation hasn't reached yet. Such a token passes both rules above. The API's propagation time isn't documented, and **a sampled test, even on two devices, can't show that this gap never happens.** So the strong promise needs one of:
     - (a) Cloudflare's documented, or written, maximum time for a cancellation to reach every session, which the door then waits out fail-closed;
-    - (b) a mechanism that forces a fresh emailed code whatever the timing. Candidates for P2 to check: a token field showing when the person last entered a code; or briefly taking the email off the allow rule during the cancellation, so no renewal can pass (this is the unverified "remove, then cancel" order, which P4 must test).
+    - (b) a mechanism that forces a fresh emailed code whatever the timing. Candidates for P2 to check: a token field showing when the person last entered a code; or briefly taking the email off the allow rule during the cancellation. That second one is **only an experiment candidate, not proof**: how fast the rule change reaches every session, and what renewal does after the email is restored, would need documented guarantees before it could support the strong promise.
     If neither is shown, **Alex must explicitly approve the weaker promise before release** (Log out closes MargenX on this browser; the login itself ends when its set time runs out), and the guide and terms change to match. P2 and P4 still test two devices and restarts, but as checks, not as proof.
   - the 2-minute quarantine stays as a **minimum** backup, not as proof.
 - **A cancellation isn't a ban.** The page says a person whose identity is still active can start a new session. With emailed codes, being active likely means the email is still on the allow rule, but the page doesn't say so. Whether logging back in needs a new emailed code is **Unclear; to test** in P4 (test requirement 21), with two devices.
@@ -187,7 +187,8 @@ Measured on 2026-10-27 on the Mac, with Python 3.11 and the pinned packages. The
 | Made-up Excel sales file read and checked | 1.9 MB | 49,000 | about 248 MB (two runs) |
 
 - **How:** the two scripts and their output are in the appendix at the end, so anyone can re-run them.
-- **Found on the way** (for the real-export follow-ups, not a money error): the Excel library used to make the test file writes some amounts with 17 digits (for example `934.6900000000001`). Excel itself stores the short form (`934.69`). MargenX refused those lines safely (923 of 49,000 in a first try), as it should for an amount with more than two decimals. The final test file stores Excel's short form. If a real program's export stores amounts like that library does, those lines would be refused, never misread. That is worth checking in the layout checks.
+- **Found on the way** (for the real-export follow-ups, not a money error): the Excel library used to make the test file writes some amounts with 17 digits (for example `934.6900000000001`). MargenX refused those lines safely (923 of 49,000 in a second try), as it should for an amount with more than two decimals. The very first run rejected 926 lines without recording why; their cause remains unconfirmed. **The final synthetic fixture writes exact two-decimal numeric values directly into the worksheet XML.** How Excel or real exporters store amounts is **unverified**. If a real program's export stores amounts like that library does, those lines would be refused, never misread. That is worth checking in the layout checks.
+- **What the script loads:** the measurement loads MargenX's reading and checking code (`job_intake`) with the app's libraries. It doesn't load `job_profit` (the profit sums), which the first version of the script imported, so its base figure isn't directly comparable with that version's. P4's container measurement covers the whole running app.
 - **What it suggests (Provisional):** one large file added roughly 90–115 MB on top of the base in these runs. Several shops at once with several large files, plus the Streamlit server, the door and `cloudflared`, **could** pass 512 MB, and 2 GB **likely** has room. **Neither is established.**
 - **Limits:** this is one process on a Mac, reading one file. It isn't the running container, it doesn't include several sessions or four files per session, and it didn't measure the door, the tunnel or the server overhead.
 - **The assumed worst-case workload for P3 and P4** (the plan's own proposed limits): up to 10 sessions in total and 3 per person, each with up to 4 files of up to 5 MB (20 MB per session), each file within the 50,000-line limit, plus the door and `cloudflared`.
@@ -282,8 +283,9 @@ for r in rows:
     ws.append(r)                                      # column F holds integer cents for now
 path = f"{out_dir}/made_up.xlsx"
 wb.save(path)
-# openpyxl writes floats with 17 digits (934.6900000000001); Excel itself stores the short form
-# (934.69). So rewrite each column-F number to its exact two-decimal text, as Excel would save it.
+# openpyxl writes floats with 17 digits (934.6900000000001). This synthetic fixture instead writes
+# exact two-decimal numeric values directly into the worksheet XML. (How Excel itself stores them
+# is unverified.)
 with zipfile.ZipFile(path) as z:
     parts = {name: z.read(name) for name in z.namelist()}
 sheet = parts["xl/worksheets/sheet1.xml"].decode()
