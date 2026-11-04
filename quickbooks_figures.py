@@ -319,6 +319,12 @@ class _Builder:
             return ""  # duplicates are checked once every other line is known
         if line.amount is None:
             return "its amount isn't known, so it can't be counted"
+        when = qp._date(line.date)
+        layout = self.report.layout
+        if when is None:
+            return f"its date '{line.date.strip()}' can't be read, so whether it's in {layout.period} can't be told"
+        if not layout.period_start <= when <= layout.period_end:
+            return f"it's dated {line.date.strip()}, outside {layout.period}; it can only be marked as outside the period"
         if answer.kind == REVENUE and line.amount < 0:
             return "revenue can't be negative; a negative line is a revenue reduction"
         if answer.kind == REDUCTION and line.amount > 0:
@@ -545,6 +551,13 @@ class _Builder:
                 self.hold("company", None, "other", hold)
             else:
                 self.hold_everything(hold)
+        # Answers that point at nothing in this report are never silently dropped (the automated review of 2b6cb7c).
+        for row in sorted(set(self.answers.lines) - set(self.lines)):
+            self.warn(f"Row {row}: there's no money line on that row of this report, so that answer wasn't used.")
+        paths = {line.account_path for line in self.report.lines}
+        for path in self.answers.accounts:
+            if tuple(path) not in paths:
+                self.warn(f"There's no account '{' › '.join(path)}' in this report, so that answer wasn't used.")
         return Figures(self.scope(), self.jobs_on, *self.assemble(), tuple(resolutions), tuple(self.warnings))
 
     def scope(self) -> str:

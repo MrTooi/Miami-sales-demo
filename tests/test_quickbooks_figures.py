@@ -443,6 +443,28 @@ class ManualReviewOf151a80aTests(unittest.TestCase):
         self.assertEqual([l.amount_text for l in first.lines], [l.amount_text for l in second.lines])
         self.assertNotEqual(qf.report_fingerprint(first), qf.report_fingerprint(second))
 
+    def test_a_counting_answer_needs_a_readable_date_inside_the_period(self):
+        # The automated review of 2b6cb7c: an answer never counts a line the report's period can't vouch for.
+        for written, says in (("11/02/2026", "outside January 1-October 26, 2026"), ("2026-10-02", "can't be read")):
+            with self.subTest(written):
+                deposit_like = L(9, "Journal Entry", "JE-1", f"{X}:Job A", 700.0, 4700.0)
+                deposit_like[1] = written
+                report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", 4000.0, 4000.0),
+                                                             deposit_like])]})
+                row = rows_of(report, transaction_type="Journal Entry")[0]
+                result = figures(report, answers(lines={row: qf.LineAnswer(qf.REVENUE)}))
+                self.assertIn(says, " ".join(result.warnings))
+                self.assertEqual((D("4000"), qp.NEEDS_A_CHECK), (result.company["sales"].amount,
+                                                                result.company["sales"].status))
+
+    def test_answers_for_rows_or_accounts_not_in_the_report_are_reported(self):
+        report = two_jobs()
+        result = figures(report, answers({("Expenses", "Nowhere (fictional)"): qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT)},
+                                         {999: qf.LineAnswer(qf.REVENUE)}))
+        warnings = " ".join(result.warnings)
+        self.assertIn("Row 999: there's no money line on that row", warnings)
+        self.assertIn("There's no account 'Expenses › Nowhere (fictional)' in this report", warnings)
+
     def test_overhead_never_carries_over_to_a_swapped_entry(self):
         # Blocker 3: a $500 office expense confirmed as overhead; a corrected export puts a $500 project bill in its
         # place, same account, same count and total. The confirmation never applies to it.
