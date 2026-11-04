@@ -10,7 +10,8 @@ Detail:
 2. Checks every closing total against the exact sum of the lines it closes: the Amount to the cent
    (with the float rule for stored totals, never for lines) and the Quantity too, when the total shows
    one. A line's Amount must be exact cents, and must equal its Quantity × Sales price, rounded to the
-   cent, when it shows both (seen on every line of the export). The grand TOTAL must equal every line.
+   cent, when it shows both (seen on every line of the export), and a readable date inside the period;
+   a line that fails these holds its whole customer. The grand TOTAL must equal every line.
 3. Writes the ledger: every line with its row, the customer and sub-customer headings above it
    exactly as written, its amount as stored, and its outcome. A line is "included" only when its
    customer's whole group passed every check, the grand TOTAL matched, nothing in the report is
@@ -351,26 +352,37 @@ class _Reader:
                 top.full_total = stored  # until sub-customers follow, its own total is its whole total
 
 
+def _times(quantity: Decimal, price: Decimal) -> Decimal | None:
+    """Quantity × Sales price rounded half up to the cent, or None when it's too large to be money (never a crash:
+    the automated review of 5f45bbd)."""
+    try:
+        product = quantity * price
+        if product.copy_abs() > qp.MAX_MONEY:
+            return None
+        return product.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        return None
+
+
 def reconcile(layout: qlayouts.ReportLayout, source: str, sheet: str = "") -> SalesByCustomerDetail:
     """Read, check and account for every line of a recognised Sales by Customer Detail (step 5a)."""
     reader = _Reader(layout)
     reader.read()
-    report_wide = any(p.section is None for p in reader.problems)
-    troubled = {p.section for p in reader.problems}
-    verified = {name: not report_wide and name not in troubled for name in reader.customers}
 
     def raw(cells, column):
         position = layout.columns.get(column)
         return cells[position] if position is not None and position < len(cells) else ""
 
-    lines = []
+    # First, every line's own checks. A line whose date or Quantity × Sales price can't be trusted holds its whole
+    # customer, not just itself: nothing but the group's headings and totals says whose its neighbours are (the
+    # automated review of 5f45bbd).
+    own_problem: dict[int, str] = {}
     for row, cells, path, note in reader.placed:
         amount_text = raw(cells, "Amount")
         amount = qp.line_amount(amount_text)
         when = qp._date(raw(cells, "Transaction date"))
         customer = _clean(path[0]) if path else None
-        counts_as, reason = None, ""
-        quantity, price = _decimal(raw(cells, "Quantity")), _decimal(raw(cells, "Sales price"))
+        quantity_text, price_text = raw(cells, "Quantity").strip(), raw(cells, "Sales price").strip()
         if note:
             reason = note
         elif amount is None:
@@ -383,12 +395,30 @@ def reconcile(layout: qlayouts.ReportLayout, source: str, sheet: str = "") -> Sa
             reason = f"It's dated {when:%m/%d/%Y}, outside the report's period ({layout.period})."
         elif customer is None:
             reason = "It isn't under any customer, so whose it is can't be told."
-        elif (raw(cells, "Quantity").strip() and raw(cells, "Sales price").strip()
-              and (quantity is None or price is None
-                   or (quantity * price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) != amount)):
-            reason = (f"Its Quantity × Sales price ({raw(cells, 'Quantity').strip()} × {raw(cells, 'Sales price').strip()}) "
-                      f"doesn't give its Amount ({amount_text.strip()}).")
+        elif quantity_text and price_text:
+            quantity, price = _decimal(quantity_text), _decimal(price_text)
+            product = _times(quantity, price) if quantity is not None and price is not None else None
+            reason = "" if product == amount else (
+                f"Its Quantity × Sales price ({quantity_text} × {price_text}) doesn't give its Amount ({amount_text.strip()}).")
         else:
+            reason = ""
+        if reason:
+            own_problem[row] = reason
+            if customer is not None and not note:
+                reader.problems.append(qp.Problem(row, customer, f"row {row}: {reason}"))
+
+    report_wide = any(p.section is None for p in reader.problems)
+    troubled = {p.section for p in reader.problems}
+    verified = {name: not report_wide and name not in troubled for name in reader.customers}
+
+    lines = []
+    for row, cells, path, note in reader.placed:
+        amount_text = raw(cells, "Amount")
+        amount = qp.line_amount(amount_text)
+        customer = _clean(path[0]) if path else None
+        counts_as = None
+        reason = own_problem.get(row, "")
+        if not reason:
             outcome = qr.classify_sales_by_customer_line(raw(cells, "Transaction type"), amount,
                                                          group_verified=verified.get(customer, False))
             reason = outcome.reason

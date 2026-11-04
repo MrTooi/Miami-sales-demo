@@ -161,7 +161,32 @@ class HeldTests(unittest.TestCase):
         line = next(l for l in report.lines if l.num == "1006")
         self.assertEqual(qp.NOT_RESOLVED, line.outcome)
         self.assertIn("Quantity × Sales price (1 × 120) doesn't give its Amount (125)", line.reason)
-        self.assertEqual(qp.NEEDS_A_CHECK, report.customers[BAY].status)
+        # The automated review of 5f45bbd: it holds its whole customer, not just itself.
+        self.assert_held(report, BAY, "doesn't give its Amount")
+        self.assertTrue(report.customers[CORAL].verified)
+
+    def test_a_good_line_beside_a_bad_one_is_held_too(self):
+        good = S(7, "Invoice", "1006", "Planters", 1, 120)
+        for bad, says in ((S(8, "Invoice", "1008", "Pots", 2, 30, amount="65"), "doesn't give its Amount"),
+                          (S(8, "Invoice", "1008", "Pots", 2, 30), "outside the report's period"),
+                          (S(8, "Invoice", "1008", "Pots", 2, 30), "isn't written the way QuickBooks writes dates")):
+            with self.subTest(says):
+                if "outside" in says:
+                    bad[1] = "11/02/2026"
+                elif "isn't written" in says:
+                    bad[1] = "2026-10-08"
+                report = read(fx.sbcd_rows(customers(bay_lines=[good, bad])))
+                self.assert_held(report, BAY, says)
+                self.assertEqual(qp.NOT_RESOLVED, next(l for l in report.lines if l.num == "1006").outcome)
+
+    def test_huge_quantities_and_prices_are_held_never_a_crash(self):
+        # The automated review of 5f45bbd: 100,000,000,000,000 × 100,000,000,000,000 can't be quantized to cents.
+        huge = S(7, "Invoice", "1006", "Planters", 1, 120)
+        huge[6], huge[7] = Decimal("100000000000000"), Decimal("100000000000000")
+        report = read(fx.sbcd_rows(customers(bay_lines=[huge])))
+        line = next(l for l in report.lines if l.num == "1006")
+        self.assertEqual(qp.NOT_RESOLVED, line.outcome)
+        self.assert_held(report, BAY, "doesn't give its Amount")
 
     def test_lines_with_uneven_cents_or_dates_outside_the_period_are_held(self):
         uneven = S(7, "Invoice", "1006", "Planters", 1, "120.005", amount="120.005")
@@ -171,7 +196,7 @@ class HeldTests(unittest.TestCase):
         reasons = {l.num: l.reason for l in report.lines}
         self.assertIn("isn't an exact number of cents", reasons["1006"])
         self.assertIn("outside the report's period", reasons["1008"])
-        self.assertEqual(qp.NEEDS_A_CHECK, report.customers[BAY].status)
+        self.assert_held(report, BAY, "outside the report's period")
 
     def test_structure_problems_hold(self):
         rows = fx.sbcd_rows(customers())
