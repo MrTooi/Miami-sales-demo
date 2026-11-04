@@ -190,6 +190,37 @@ or every customer, must be held.
 - The practice-company export (checked locally, not kept): 26 of 26 totals and the grand TOTAL match;
   70 lines; every line's Quantity × Sales price gives its Amount.
 
+## 7. The two QuickBooks reports cross-checked (issue #128, step 5b)
+
+Sales come only from Profit and Loss Detail. Sales by Customer Detail only confirms or questions them,
+line by line. When it confirms every sales line of a job, that job can be Complete; one report alone
+never makes a job Complete.
+
+**Worked by hand** (`tests/test_quickbooks_crosscheck.py`):
+- **The plan's $900 example, with both reports matching:** both jobs are held until the $900 vendor
+  cost is assigned. Then Job A shows $4,000 − $1,000 − $900 = $2,100, and Job B $1,500 Complete.
+- **The plan's $300 example:** the sales report has a $300 invoice that Profit and Loss Detail
+  doesn't. Company sales stay $6,000 (never $6,300), with $300 held beside them; every customer and
+  job needs a check.
+- **Two identical $100 lines need two matches.** One match leaves one held.
+
+**Random pairs with known answers.** `tests/qbo_crosscheck_reports.py` writes one list of made-up sales
+into both reports. Then, in about half the pairs, it changes a few in one report only: a line left
+out, a cent off, another number, or another job. It works out each job's sales and whether they can
+be Complete without any MargenX code.
+
+- Every change: 300 pairs (`tests/test_quickbooks_crosscheck_accuracy.py`). On 2026-11-04: **3,000
+  pairs, all matching.**
+- Planted mistakes, each caught:
+  - extra lines in the second report ignored;
+  - missing lines in the second report ignored;
+  - the same-dates check skipped;
+  - lines matched without counting, or with a contradicting customer or job.
+- **The practice-company exports** (checked locally) can't be combined: one says "All Dates", and
+  MargenX says to export both for the same date range. Ignoring dates, all 70 sales lines match one to
+  one, with the same customer and job. Their dates differ by two days only because Intuit's practice
+  company moves them in every session.
+
 ## What this doesn't prove
 
 - **Real exports.** The made-up shops use one simple CSV layout. Real QuickBooks or Square files,
