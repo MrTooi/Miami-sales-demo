@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 
-import quickbooks_rules as qr
+import quickbooks_layouts as qlayouts
 from finance_engine import MAX_MONEY, money
 
 KINDS = ("invoices", "costs")
@@ -278,7 +278,7 @@ def _is_blank_line(cells: list[str]) -> bool:
 def read_csv(data: bytes) -> tuple[list[str], list[Record]]:
     """Parse CSV bytes into headers and records, refusing anything ambiguous."""
     table = _csv_rows(data)
-    _refuse_quickbooks(table)
+    _refuse_quickbooks(table, is_xlsx=False)
     headers = list(table[0][1])  # kept exactly as written, so exports round-trip
     _check_headers(headers)
     return headers, [Record(number, tuple(cells)) for number, cells in table[1:]]
@@ -329,7 +329,7 @@ def read_file(name: str, data: bytes) -> tuple[list[str], list[Record], list[str
         raise IntakeError("The file's name and contents don't match (an Excel file must end in .xlsx, a CSV file "
                           "in .csv). Export it again as CSV or Excel (.xlsx).")
     table = _xlsx_rows(data) if is_xlsx else _csv_rows(data)
-    _refuse_quickbooks(table)
+    _refuse_quickbooks(table, is_xlsx=is_xlsx)
     start = _header_row(table)
     notes = []
     if start:
@@ -361,11 +361,11 @@ def read_file(name: str, data: bytes) -> tuple[list[str], list[Record], list[str
     return headers, records, notes
 
 
-def _refuse_quickbooks(table: list[tuple[int, list[str]]]) -> None:
-    """A file that looks like a QuickBooks report is refused before anything is read from it: no
-    QuickBooks layout is verified yet, and this reader can't tell an invoice under Cost of Goods
-    Sold from a sale (issue #128, S2)."""
-    refusal = qr.quickbooks_refusal(table, MAX_TITLE_LINES)
+def _refuse_quickbooks(table: list[tuple[int, list[str]]], *, is_xlsx: bool) -> None:
+    """A file that looks like a QuickBooks report is refused before anything is read from it: this
+    reader can't tell an invoice under Cost of Goods Sold from a sale (issue #128, S2). A recognised
+    Profit and Loss Detail report is refused too, until its own reader is built (steps 3 and 4)."""
+    refusal = qlayouts.quickbooks_refusal(table, MAX_TITLE_LINES, is_xlsx=is_xlsx)
     if refusal:
         raise IntakeError(refusal)
 
