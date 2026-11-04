@@ -157,6 +157,10 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
 ### D-008 — Real shop data in the lean website trial, one approved shop at a time
 - Date: 2026-11-04
 - Status: Accepted (in force once the PR adding this entry is merged with the owner's approval). **It allows no real data by itself:** for each shop, real data starts only when every condition in item 2 holds.
+- Authority: D-003 item 3 says real customer data needs **a separate owner decision**. This entry is that decision, for the website trial of #131 only.
+  - **How the owner's approval can be checked:** this entry takes effect only when the owner (GitHub `MrTooi`) merges the PR that adds it, and GitHub records that merge and who made it.
+  - The owner's own words are quoted below and recorded on issue #131.
+  - **Until that merge, it authorises nothing.**
 - Decided by: Human owner (MrTooi), in a Claude Code session on 2026-11-04. Asked whether a shop may upload its own report to its private copy after the checks, its signed terms and his yes for that shop, he answered: "yes of course they would need to use their real files". Recorded on issue #131.
 - Context:
   - D-003 requires an owner decision before any real customer data is used. Earlier records reserved "D-008 or later" for that.
@@ -194,6 +198,11 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
 ### D-009 — A private, invite-only MargenX website for the trial: first an operator-only test copy, then one shop's copy at a time
 - Date: 2026-11-04 (building it was decided on 2026-11-02)
 - Status: Accepted (in force once the PR adding this entry is merged with the owner's approval). Part 1 applies from then on, once item 1's prerequisites hold. Part 2 applies to each shop only in the order of item 2, under D-008.
+- Authority: D-003 item 3 and `CLAUDE.md` say production deployment needs **a separate owner decision**. This entry is that decision, for this trial website only.
+  - **How the owner's approval can be checked:** it takes effect only when the owner (GitHub `MrTooi`) merges the PR that adds it, and GitHub records that merge and who made it.
+  - The owner's own words are quoted below and recorded on issue #131.
+  - **Until that merge, it authorises nothing.**
+  - D-003's other limits (live integrations with real credentials, pricing and launch claims, unattended agents) are unchanged.
 - Decided by: Human owner (MrTooi), in Claude Code sessions, all recorded on issue #131:
   - 2026-10-26: a private website with a login, rather than an installed app;
   - 2026-11-02: start building now; Cloudflare Access on the free plan; the existing domain margenx.org;
