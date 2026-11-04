@@ -76,9 +76,10 @@ class GoodReportTests(unittest.TestCase):
         self.assertEqual(LINE_ROWS, sorted(lines))
         self.assertEqual((qp.INCLUDED, qr.SALE, D("900.0")), (lines[9].outcome, lines[9].counts_as, lines[9].amount))
         self.assertEqual((qp.INCLUDED, qr.SALE), (lines[10].outcome, lines[10].counts_as))
-        # The $405 kind of line: an Invoice under Cost of Goods Sold is never a sale.
-        self.assertEqual((qp.NOT_RESOLVED, None), (lines[15].outcome, lines[15].counts_as))
-        self.assertIn("'Invoice' under Cost of Goods Sold is never a sale", lines[15].reason)
+        # The $405 kind of line: an Invoice under Cost of Goods Sold is the cost of the items sold (on the cost
+        # allow-list since step 4). Never a sale.
+        self.assertEqual((qp.INCLUDED, qr.COST), (lines[15].outcome, lines[15].counts_as))
+        self.assertIn("A cost, never a sale", lines[15].reason)
         self.assertEqual(("Cost of Goods Sold", "Cost of Goods Sold"), lines[15].account_path)
         self.assertEqual([qp.INCLUDED, qp.INCLUDED], [lines[22].outcome, lines[23].outcome])
         self.assertEqual(("Expenses", "Automobile", "Fuel"), lines[22].account_path)
@@ -87,13 +88,14 @@ class GoodReportTests(unittest.TestCase):
         self.assertIn("counted only once you say what each one is", lines[32].reason)
         # S5: the Name is kept whole; customer and job are step 4.
         self.assertEqual(("Coral Cafe (fictional):Patio", None, None), (lines[9].name, lines[9].customer, lines[9].job))
-        self.assertEqual(("report.xlsx", "10/02/2026", "1001"), (lines[9].source, lines[9].date, lines[9].num))
+        self.assertEqual(("report.xlsx", "Sheet", "10/02/2026", "1001"),
+                         (lines[9].source, lines[9].sheet, lines[9].date, lines[9].num))
 
     def test_each_section_adds_up_and_has_its_status(self):
         sections = self.report.sections
         expected = {  # section: (lines, included, not resolved, status)
             "Income": (2, D("1200"), D("0"), qp.COMPLETE),
-            "Cost of Goods Sold": (1, D("0"), D("150"), qp.NEEDS_A_CHECK),
+            "Cost of Goods Sold": (1, D("150"), D("0"), qp.COMPLETE),
             "Expenses": (2, D("349.41"), D("0"), qp.COMPLETE),
             "Other Income": (0, D("0"), D("0"), qp.COMPLETE),  # the empty heading in column B
             "Other Expenses": (1, D("0"), D("80"), qp.NEEDS_A_CHECK),
@@ -277,6 +279,14 @@ class LineProblemTests(unittest.TestCase):
         self.assertEqual((), report.problems)
         self.assertEqual(("Expenses", "Automobile", "Fuel  (truck)"),
                          next(l for l in report.lines if l.row == 22).account_path)
+
+    def test_a_row_with_only_column_b_filled_is_kept_in_the_ledger(self):
+        # The PR #136 reviews: a row holding only a date in column B may be a line with its other cells missing.
+        report = read(with_body({}, inserts={22: [[None, "10/02/2026"]]}), stored={})
+        kept = next(line for line in report.lines if line.row == 22)
+        self.assertEqual((qp.NOT_RESOLVED, None, "10/02/2026"), (kept.outcome, kept.amount, kept.date))
+        self.assertIn("Row 22 has only '10/02/2026', in column B", kept.reason)
+        self.assertFalse(any(s.verified for s in report.sections.values()))
 
     def test_names_and_amounts_are_kept_exactly_as_written(self):
         line = fx.line(2, "Invoice", "1001", "  Coral Cafe (fictional):Patio ", 900.0, 900.0)
@@ -506,9 +516,11 @@ class EndToEndRealShapeTests(unittest.TestCase):
         sales = [line for line in report.lines if line.counts_as == qr.SALE]
         self.assertEqual(D("1200"), sum(line.amount for line in sales))  # never $1,605
         cogs_section = report.sections["Cost of Goods Sold"]
-        self.assertEqual((6, D("405.0"), 0, qp.NEEDS_A_CHECK),
-                         (cogs_section.not_resolved_lines, cogs_section.not_resolved, cogs_section.included_lines,
+        # Since step 4 they count as costs (the cost of the items sold), never as sales.
+        self.assertEqual((0, D("405.0"), 6, qp.COMPLETE),
+                         (cogs_section.not_resolved_lines, cogs_section.included, cogs_section.included_lines,
                           cogs_section.status))
+        self.assertFalse(any(line.counts_as == qr.SALE for line in report.lines if line.section == "Cost of Goods Sold"))
 
 
 if __name__ == "__main__":

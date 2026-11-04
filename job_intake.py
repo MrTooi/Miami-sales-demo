@@ -415,7 +415,13 @@ def _looks_like_data(text: str) -> bool:
 
 
 def _xlsx_rows(data: bytes) -> list[tuple[int, list[str]]]:
-    """Every non-empty row of an Excel file's only sheet, as text, with its Excel row number.
+    """Every non-empty row of an Excel file's only sheet (see _xlsx_sheet)."""
+    return _xlsx_sheet(data)[1]
+
+
+def _xlsx_sheet(data: bytes) -> tuple[str, list[tuple[int, list[str]]]]:
+    """The name of an Excel file's only sheet, and every non-empty row of it, as text, with its Excel
+    row number.
 
     Every number MargenX uses is rebuilt from the exact text stored in the file (openpyxl's own
     intermediate float is discarded), then checked by the same strict money and date rules as a CSV. A
@@ -473,7 +479,7 @@ def _xlsx_rows(data: bytes) -> list[tuple[int, list[str]]]:
                     if cells:
                         rows.append((number, cells))
             if rows:
-                filled.append(rows)
+                filled.append((sheet.title, rows))
     except IntakeError:
         raise
     except Exception as exc:
@@ -485,8 +491,9 @@ def _xlsx_rows(data: bytes) -> list[tuple[int, list[str]]]:
     if len(filled) > 1:
         raise IntakeError("This Excel file has data on more than one sheet. Export one report per file, or save "
                           "the sheet you need as CSV.")
-    width = max(len(cells) for _, cells in filled[0])
-    return [(number, cells + [""] * (width - len(cells))) for number, cells in filled[0]]
+    title, rows = filled[0]
+    width = max(len(cells) for _, cells in rows)
+    return title, [(number, cells + [""] * (width - len(cells))) for number, cells in rows]
 
 
 # The time part of an ISO date that is exactly midnight: 00:00, 00:00:00, 00:00:00.000, Z or +00:00.

@@ -97,7 +97,7 @@ in memory, to see whether the checks notice. Each one was caught across many of 
 | Percentages rounded the wrong way at exact halves | 204 |
 | Customer names never matched to sales with no job number (so those sales can't stop "Complete") | 43 |
 
-## 5. QuickBooks' Profit and Loss Detail (issue #128, step 3)
+## 5. QuickBooks' Profit and Loss Detail (issue #128, steps 3 and 4)
 
 MargenX doesn't use QuickBooks reports yet: uploads still refuse them. What is checked now is the
 reading underneath, before anything is shown to a shop.
@@ -108,7 +108,7 @@ Online exported on 2026-10-26):
 | Section | Lines | Its total | Counted | Held ("not resolved") | Status |
 |---|---|---|---|---|---|
 | Income | $900 Invoice, $300 Sales Receipt | $1,200 | $1,200 as sales | $0 | Complete |
-| Cost of Goods Sold | $150 "Invoice" (QuickBooks posts an item's cost this way) | $150 | $0 | $150: never a sale | Needs a check |
+| Cost of Goods Sold | $150 "Invoice" (QuickBooks posts the cost of the items sold this way) | $150 | $150 as costs (since step 4), never a sale | $0 | Complete |
 | Expenses › Automobile › Fuel | $200.11 and $149.30 Expenses | $349.41 (stored as 349.40999999999997) | $349.41 as costs | $0 | Complete |
 | Other Expense | $80 Check | $80 | $0 | $80: you say what it is | Needs a check |
 
@@ -132,14 +132,25 @@ It works out the right answers in whole cents **without any MargenX code**:
 One report in four has a total a cent off, or a fraction of a cent off; that section, and only that
 section, must be held.
 
+Since step 4 the generator also works out, from the written rule for names (S5), each customer's and
+each job's sales and job costs, with every cost account answered "job costs". Names include
+"Customer:Job", a customer alone, vendors, two ":" and an empty job, which must prove nothing.
+
+What this proves: line counts, section sums, customer and job sums, and statuses, for the layouts and
+transaction types the generator makes. It doesn't prove each row's own outcome or other layouts:
+`tests/test_quickbooks_pnl.py` and `tests/test_quickbooks_figures.py` hold those targeted cases,
+including the plan's own S8 and S9 examples worked by hand.
+
 - Every change: 300 reports (`tests/test_quickbooks_pnl_accuracy.py`).
 - On demand: `QBO_PNL_REPORTS=3000 python -m unittest tests.test_quickbooks_pnl_accuracy`.
-  - Result on 2026-11-04: **3,000 reports, all matching.**
+  - Result on 2026-11-04 (step 4): **3,000 reports, all matching**, sections, customers and jobs.
 - Planted mistakes, each caught: a looser float rule (0.02 instead of 0.000001), totals ignored when
-  counting, a Deposit counted as a sale, and a sum a cent off on long accounts.
+  counting, a Deposit counted as a sale, and a sum a cent off on long accounts. Step 4 adds: a vendor
+  taken for a customer, the one-report hold on jobs dropped, held lines that never hold customers,
+  duplicates accepted without their checks, and customer profit leaving out costs with no job.
 
-**Not proven yet:** customers, jobs and account sorting (step 4); combining two reports (step 5);
-whether other real exports store numbers and dates the way the one seen does.
+**Not proven yet:** combining two reports (step 5), so no job is Complete from one report; whether other
+real exports store numbers and dates the way the one seen does.
 
 ## What this doesn't prove
 

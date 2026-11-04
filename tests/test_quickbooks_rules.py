@@ -106,12 +106,16 @@ class CogsInvoiceRegressionTests(unittest.TestCase):
     """The observed mistake: $405 of Cost of Goods Sold lines typed "Invoice" counted as SALES."""
 
     def test_the_405_dollars_under_cost_of_goods_sold_are_never_a_sale(self):
+        # Step 4 put "Invoice" on the Cost of Goods Sold allow-list: these lines are the cost of the items
+        # sold, so they count as a COST. They are still never a sale.
         for line in COGS_LINES:
             outcome = qr.classify_profit_and_loss_line(("Cost of Goods Sold",), line[2], D(str(line[9])),
                                                        section_verified=True)
-            self.assertEqual(qr.NOT_RESOLVED, outcome.counts_as)
-            self.assertIn("'Invoice' under Cost of Goods Sold is never a sale", outcome.reason)
-            self.assertIn("never left out", outcome.reason)
+            self.assertEqual(qr.COST, outcome.counts_as)
+            self.assertIn("A cost, never a sale", outcome.reason)
+            unverified = qr.classify_profit_and_loss_line(("Cost of Goods Sold",), line[2], D(str(line[9])),
+                                                          section_verified=False)
+            self.assertEqual(qr.NOT_RESOLVED, unverified.counts_as)
         self.assertEqual(D("405.0"), sum(D(str(line[9])) for line in COGS_LINES))
         # The real invoices in Income are sales: $1,800 of sales, never $2,205.
         sales = [row for row in PNL_REPORT[7:10]
@@ -190,16 +194,27 @@ class ProfitAndLossRuleTests(unittest.TestCase):
         for kind, path, amount in lines:
             with self.subTest(kind=kind, path=path):
                 self.assertEqual(qr.COST, self.classify(path, kind, amount).counts_as)
-        self.assertEqual({(PNL, qr.COST_OF_GOODS_SOLD): {"bill", "expense", "check"},
-                          (PNL, qr.EXPENSES): {"bill", "expense", "check"}}, qr.COST_TYPES)
+        self.assertEqual({(PNL, qr.COST_OF_GOODS_SOLD): {"bill", "expense", "check", "cash expense",
+                                                         "credit card expense", "invoice", "sales receipt"},
+                          (PNL, qr.EXPENSES): {"bill", "expense", "check", "cash expense", "credit card expense"}},
+                         qr.COST_TYPES)
+        # Step 4: the two card and cash types seen in the 2026-10-26 export, positive under Expenses.
+        for kind in ("Cash Expense", "Credit Card Expense"):
+            for path in (("Expenses", "Automobile", "Fuel"), ("Cost of Goods Sold",)):
+                with self.subTest(kind=kind, path=path):
+                    self.assertEqual(qr.COST, self.classify(path, kind, "64.10").counts_as)
+                    self.assertEqual(qr.NOT_RESOLVED, self.classify(path, kind, "-64.10").counts_as)
 
     def test_a_sale_type_in_a_cost_section_is_checked_against_the_allow_list_never_a_sale(self):
-        for section in (("Cost of Goods Sold",), ("Expenses", "Job Expenses", "Job Materials")):
-            for kind in ("Invoice", "Sales Receipt"):
-                with self.subTest(section=section, kind=kind):
-                    outcome = self.classify(section, kind)
-                    self.assertEqual(qr.NOT_RESOLVED, outcome.counts_as)
-                    self.assertIn("is never a sale, and it isn't on the tested list of cost types", outcome.reason)
+        for kind in ("Invoice", "Sales Receipt"):
+            with self.subTest(kind=kind, section="Cost of Goods Sold"):
+                # On the list since step 4: the cost of the items sold. Never a sale; never when negative.
+                self.assertEqual(qr.COST, self.classify(("Cost of Goods Sold",), kind).counts_as)
+                self.assertEqual(qr.NOT_RESOLVED, self.classify(("Cost of Goods Sold",), kind, "-5.00").counts_as)
+            with self.subTest(kind=kind, section="Expenses"):
+                outcome = self.classify(("Expenses", "Job Expenses", "Job Materials"), kind)
+                self.assertEqual(qr.NOT_RESOLVED, outcome.counts_as)
+                self.assertIn("is never a sale, and it isn't on the tested list of cost types", outcome.reason)
 
     def test_payments_and_deposits_are_never_counted_automatically_in_any_section(self):
         for kind in ("Deposit", "Payment", "Receive Payment", "Bank Deposit", "Transfer", "Bill Payment (Check)",
@@ -282,8 +297,13 @@ class ProfitAndLossRuleTests(unittest.TestCase):
                         text = " ".join((kind or "").split()).casefold()
                         sale = (verified and path[:1] == ("Income",) and "Unapplied" not in " ".join(path)
                                 and text in ("invoice", "sales receipt") and D(amount) >= 0)
+                        # Step 4's list: card and cash expenses in both cost sections; in Cost of Goods Sold
+                        # only, the cost of items sold posted as an Invoice or Sales Receipt.
+                        cost_types = {"bill", "expense", "check", "cash expense", "credit card expense"}
+                        if path[:1] == ("Cost of Goods Sold",):
+                            cost_types |= {"invoice", "sales receipt"}
                         cost = (verified and path[:1] in (("Cost of Goods Sold",), ("Expenses",))
-                                and text in ("bill", "expense", "check") and D(amount) >= 0)
+                                and text in cost_types and D(amount) >= 0)
                         self.assertEqual(sale, outcome.counts_as == qr.SALE, (kind, path, amount, verified))
                         self.assertEqual(cost, outcome.counts_as == qr.COST, (kind, path, amount, verified))
         self.assertFalse(hasattr(qr, "EXCLUDED"))
@@ -295,9 +315,10 @@ class ProfitAndLossRuleTests(unittest.TestCase):
                 self.assertEqual(qr.NOT_RESOLVED, self.classify(("Income", "Design income"), kind).counts_as)
 
     def test_allow_lists_never_hold_payments_or_sales(self):
-        for types in qr.COST_TYPES.values():
+        for (_, section), types in qr.COST_TYPES.items():
             self.assertFalse(types & qr.PAYMENT_TYPES)
-            self.assertFalse(types & qr.SALE_TYPES)
+            if section != qr.COST_OF_GOODS_SOLD:
+                self.assertFalse(types & qr.SALE_TYPES)
         self.assertEqual({"invoice", "sales receipt"}, qr.SALE_TYPES)
 
     def test_amounts_must_be_exact_decimals(self):
