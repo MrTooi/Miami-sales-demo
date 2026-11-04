@@ -220,7 +220,7 @@ class S9DuplicateTests(unittest.TestCase):
     def test_a_deposit_pointing_to_the_same_sales_receipt_is_excluded(self):
         report = read({"Income": [("Design income", [
             L(2, "Sales Receipt", "1001", f"{X}:Job A", 700.0, 700.0, "", "Checking"),
-            L(9, "Deposit", "", f"{X}:Job A", 700.0, 1400.0, "", "Checking")])]})
+            L(2, "Deposit", "", f"{X}:Job A", 700.0, 1400.0, "", "Checking")])]})  # the same day
         receipt, deposit = rows_of(report, transaction_type="Sales Receipt")[0], rows_of(report, transaction_type="Deposit")[0]
         result = figures(report, answers(lines={deposit: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt)}))
         self.assertEqual((D("700"), qp.COMPLETE), (result.jobs[A]["sales"].amount, result.jobs[A]["sales"].status))
@@ -399,22 +399,28 @@ class ManualReviewOf151a80aTests(unittest.TestCase):
         self.assertEqual(qp.NEEDS_A_CHECK, result.customers[X]["sales"].status)
 
     def test_a_duplicate_needs_evidence_of_the_same_posting(self):
-        def case(held_type, held_name, held_num):
+        def case(held_type, held_name, held_num, day=2, jobs_on=True):
             report = read({"Income": [("Design income", [
                 L(2, "Sales Receipt", "1001", f"{X}:Job A", 700.0, 700.0, "", "Checking"),
-                L(9, held_type, held_num, held_name, 700.0, 1400.0, "", "Checking")])]})
+                L(day, held_type, held_num, held_name, 700.0, 1400.0, "", "Checking")])]})
             receipt = rows_of(report, num="1001")[0]
             held = [l.row for l in report.lines if l.row != receipt][0]
-            return figures(report, answers(lines={held: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt)}))
-        self.assertEqual((), case("Deposit", f"{X}:Job A", "").warnings)  # the plan's own example
-        for held_type, held_name, held_num, says in (("Deposit", f"{X}:Job B", "", "aren't for the same job"),
-                                                     ("Deposit", f"{X}:Job A", "77", "different numbers"),
-                                                     ("Journal Entry", f"{X}:Job A", "1001", "")):
-            with self.subTest(held_type=held_type, held_name=held_name, held_num=held_num):
-                result = case(held_type, held_name, held_num)
-                if says:
-                    self.assertIn(says, " ".join(result.warnings))
-                    self.assertEqual(qp.NEEDS_A_CHECK, result.company["sales"].status)
+            return figures(report, answers(lines={held: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt)},
+                                           sub_customers_are_jobs=jobs_on))
+        self.assertEqual((), case("Deposit", f"{X}:Job A", "").warnings)  # the plan's own example, same day
+        # The re-review's blocker 1: missing contradictions are never evidence. A Journal Entry, another day, or
+        # another job by the Names even with job figures off: all stay held.
+        for args, says in (((("Deposit", f"{X}:Job B", ""), {}), "aren't for the same job"),
+                           ((("Deposit", f"{X}:Job B", ""), {"jobs_on": False}), "aren't for the same job"),
+                           ((("Deposit", f"{X}:Job A", "77"), {}), "different numbers"),
+                           ((("Deposit", f"{X}:Job A", ""), {"day": 9}), "aren't on the same date"),
+                           ((("Journal Entry", f"{X}:Job A", ""), {"day": 9}), "only money received or moved"),
+                           ((("Journal Entry", f"{X}:Job A", "1001"), {}), "only money received or moved")):
+            with self.subTest(args=args):
+                result = case(*args[0], **args[1])
+                self.assertIn(says, " ".join(result.warnings))
+                self.assertEqual(D("700"), result.customers[X]["sales"].amount)
+                self.assertEqual(qp.NEEDS_A_CHECK, result.company["sales"].status)
 
     def test_a_duplicate_is_checked_against_where_the_counted_line_ended_up(self):
         # The automated review of f63462b: a $700 Sales Receipt named only "Customer X", assigned by the owner to
@@ -423,7 +429,7 @@ class ManualReviewOf151a80aTests(unittest.TestCase):
             L(2, "Invoice", "1001", f"{X}:Job A", 4000.0, 4000.0),
             L(3, "Invoice", "1002", f"{X}:Job B", 2000.0, 6000.0),
             L(4, "Sales Receipt", "1003", X, 700.0, 6700.0, "", "Checking"),
-            L(9, "Deposit", "", f"{X}:Job A", 700.0, 7400.0, "", "Checking")])]})
+            L(4, "Deposit", "", f"{X}:Job A", 700.0, 7400.0, "", "Checking")])]})
         receipt, deposit = rows_of(report, num="1003")[0], rows_of(report, transaction_type="Deposit")[0]
         result = figures(report, answers(lines={receipt: qf.LineAnswer(qf.REVENUE, job="Job B"),
                                                 deposit: qf.LineAnswer(qf.DUPLICATE, duplicate_of=receipt)}))
@@ -442,6 +448,22 @@ class ManualReviewOf151a80aTests(unittest.TestCase):
         second = qp.read_profit_and_loss_detail("t.xlsx", fx.xlsx(changed))
         self.assertEqual([l.amount_text for l in first.lines], [l.amount_text for l in second.lines])
         self.assertNotEqual(qf.report_fingerprint(first), qf.report_fingerprint(second))
+
+    def test_a_refused_move_holds_the_proposed_customer_too(self):
+        # The re-review's blocker 2: a -$200 credit memo exported under X that the owner says is Y's. It stays held,
+        # and Y (with its job) needs a check too: Y's sales could be $100, not $300.
+        report = read({"Income": [("Design income", [
+            L(2, "Invoice", "1001", f"{X}:Job A", 4000.0, 4000.0),
+            L(3, "Invoice", "1002", f"{Y}:Job C", 300.0, 4300.0),
+            L(9, "Credit Memo", "1009", f"{X}:Job A", -200.0, 4100.0)])]})
+        memo = rows_of(report, transaction_type="Credit Memo")[0]
+        result = figures(report, answers(lines={memo: qf.LineAnswer(qf.REDUCTION, customer=Y)}))
+        self.assertIn("an answer can't change a customer the Name proves", " ".join(result.warnings))
+        for figure in (result.customers[X]["sales"], result.customers[Y]["sales"], result.jobs[(Y, "Job C")]["sales"],
+                       result.company["sales"]):
+            self.assertIn(memo, holds(figure))
+            self.assertEqual(qp.NEEDS_A_CHECK, figure.status)
+        self.assertEqual(D("300"), result.customers[Y]["sales"].amount)  # no amount moved
 
     def test_a_counting_answer_needs_a_readable_date_inside_the_period(self):
         # The automated review of 2b6cb7c: an answer never counts a line the report's period can't vouch for.
@@ -524,8 +546,13 @@ class ManualReviewOf151a80aTests(unittest.TestCase):
         self.assertEqual(D("2400"), result.customers[X]["job_costs"].amount)  # still in the customer's costs
         for job in (A, B):
             self.assertEqual(qp.COMPLETE, result.jobs[job]["job_costs"].status)
-        result = figures(report, answers(JOB_COSTS, {row: qf.LineAnswer(qf.JOB_COST, customer=X, outside_job="Job A")}))
-        self.assertIn("is a job in this report", " ".join(result.warnings))
+        # The re-review's blocker 3: a spelling variant of a job in the report is that job, never one outside it.
+        for spelled in ("Job A", "job a", "JOB-A", " Job  A ", "jobA"):
+            with self.subTest(spelled):
+                result = figures(report, answers(JOB_COSTS, {row: qf.LineAnswer(qf.JOB_COST, customer=X,
+                                                                                outside_job=spelled)}))
+                self.assertIn("looks like the job 'Job A' in this report", " ".join(result.warnings))
+                self.assertIn(row, holds(result.jobs[A]["job_costs"]))
 
 
 class MixedAccountTests(unittest.TestCase):

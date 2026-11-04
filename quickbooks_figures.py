@@ -219,6 +219,11 @@ def names_of(line: qp.LedgerLine) -> tuple[str | None, str | None]:
     return None, None  # a payee: never a customer
 
 
+def _loose(text: str | None) -> str:
+    """A name compared without letter case, spaces or punctuation, to catch spelling variants."""
+    return "".join(ch for ch in (text or "").casefold() if ch.isalnum())
+
+
 # --- the figures ----------------------------------------------------------------------------------
 
 ALL = object()  # every customer, or every job
@@ -362,10 +367,14 @@ class _Builder:
         if (job is not None or answer.outside_job) and customer is None:
             return "a job needs its customer"
         if answer.outside_job is not None:
-            if not answer.outside_job.strip():
+            wanted = _loose(answer.outside_job)
+            if not wanted:
                 return "name the job that isn't in this report"
-            if (customer, answer.outside_job.strip()) in self.jobs:
-                return f"'{answer.outside_job}' is a job in this report"
+            # Matched loosely against every job in the report: "job a", "JOB-A" or " Job  A " is Job A, never a job
+            # outside it (the PR #138 manual re-review, blocker 3).
+            alike = sorted(j for c, j in self.jobs if _loose(j) == wanted)
+            if alike:
+                return f"'{answer.outside_job}' looks like the job '{alike[0]}' in this report"
         return ""
 
     def who(self, line: qp.LedgerLine, answer: LineAnswer | None) -> tuple[str | None, str | None]:
@@ -397,10 +406,12 @@ class _Builder:
         figure it could change needs a check, because the owner said something MargenX couldn't apply."""
         self.warn(f"Row {line.row}: your answer '{answer.kind}' can't be used: {problem}.")
         resolution = self.automatic(line)
-        if resolution.kind != NOT_RESOLVED:  # a not-resolved line already holds all of them
-            shown = f"{line.amount:,.2f}" if line.amount is not None else "amount unknown"
-            self.hold_scope(line, Hold(line.row, line.amount, f"Row {line.row} ({shown}): your answer couldn't be "
-                                                              f"used ({problem})."), customer=None, job=None)
+        # Always, even for a line already held: the owner's answer may name another customer or job, so every
+        # customer's and every job's figures this section feeds need a check, not just the exported ones (the
+        # PR #138 manual re-review, blocker 2).
+        shown = f"{line.amount:,.2f}" if line.amount is not None else "amount unknown"
+        self.hold_scope(line, Hold(line.row, line.amount, f"Row {line.row} ({shown}): your answer couldn't be "
+                                                          f"used ({problem})."), customer=None, job=None)
         return resolution
 
     def automatic(self, line: qp.LedgerLine) -> Resolution:
@@ -488,9 +499,11 @@ class _Builder:
 
     def check_duplicates(self, resolutions: list[Resolution]) -> list[Resolution]:
         """S9: a duplicate must point to a specific counted line with the same customer and amount, in the same
-        section. It must also be evidence of the same posting (the PR #138 manual review, blocker 1): only a line
-        MargenX didn't count by itself can repeat a counted line, of another type (a Deposit repeating a Sales
-        Receipt, never one Invoice repeating another), with no job or number that contradicts it."""
+        section. It must also be evidence of the same posting, never just the absence of a contradiction (the
+        PR #138 manual review and re-review, blocker 1). Only money received or moved (a Deposit, a Payment...),
+        which MargenX never counts by itself, can repeat a counted line of another type, on the same date, for
+        the same job (or both for none, by the Names even when job figures are off), and with the same number
+        when both have one. Anything else stays held."""
         counted = {r.row: r for r in resolutions if r.kind in (REVENUE, REDUCTION, JOB_COST, OVERHEAD, OTHER_INCOME,
                                                                OTHER_EXPENSE)}
         final = []
@@ -515,12 +528,18 @@ class _Builder:
                            "holds can repeat a counted one")
             elif _type(line) == _type(self.lines[target.row]):
                 problem = "two lines of the same type are two postings, even with the same amount"
+            elif _type(line) not in qr.PAYMENT_TYPES:
+                problem = ("only money received or moved (a Deposit or a Payment, for example) can repeat a counted "
+                           "line; two other postings are two amounts")
             else:
                 other = self.lines[target.row]
+                mine_date, their_date = qp._date(line.date), qp._date(other.date)
                 # Against where the counted line ended up (its Name and any answer), not just its Name (the
-                # automated review of f63462b): both must be for the same job, or both for none.
-                mine_job = names_of(line)[1] if self.jobs_on else None
-                if mine_job != target.job:
+                # automated review of f63462b), and by the Names even when job figures are off (the re-review).
+                their_job = target.job if self.jobs_on else names_of(other)[1]
+                if mine_date is None or mine_date != their_date:
+                    problem = "they aren't on the same date"
+                elif names_of(line)[1] != their_job:
                     problem = "they aren't for the same job"
                 elif line.num.strip() and other.num.strip() and line.num.strip() != other.num.strip():
                     problem = "they have different numbers"
