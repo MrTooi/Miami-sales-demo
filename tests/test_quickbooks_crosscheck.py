@@ -39,8 +39,8 @@ def sbcd(customers, **kw):
 
 
 def both_jobs_income(*extra):
-    return [L(2, "Invoice", "1001", f"{X}:Job A", 4000.0, 4000.0), L(3, "Invoice", "1002", f"{X}:Job B", 2000.0, 6000.0),
-            *extra]
+    return [L(2, "Invoice", "1001", f"{X}:Job A", D("4000.0"), D("4000.0")),
+            L(3, "Invoice", "1002", f"{X}:Job B", D("2000.0"), D("6000.0")), *extra]
 
 
 def both_jobs_sales(*extra_x, extra_customers=()):
@@ -48,7 +48,8 @@ def both_jobs_sales(*extra_x, extra_customers=()):
                      ("Job B", [S(3, "Invoice", "1002", "Design", 1, 2000), *extra_x])]), *extra_customers]
 
 
-COSTS = [L(5, "Bill", "B-1", f"{X}:Job A", 1000.0, 1000.0), L(6, "Bill", "B-2", f"{X}:Job B", 500.0, 1500.0)]
+COSTS = [L(5, "Bill", "B-1", f"{X}:Job A", D("1000.0"), D("1000.0")),
+         L(6, "Bill", "B-2", f"{X}:Job B", D("500.0"), D("1500.0"))]
 
 
 def figures(report, check, lines=None, accounts=None):
@@ -80,7 +81,7 @@ class MatchingTests(unittest.TestCase):
         # Job A ($4,000 sales, $1,000 costs), Job B ($2,000, $500), sales matching across both reports, and a $900
         # Job Materials cost with only a vendor name: both margins held until it's assigned; then Job A $2,100 and
         # Job B Complete.
-        report = pnl(both_jobs_income(), [*COSTS, L(7, "Bill", "B-3", "Garden Supply (fictional)", 900.0, 2400.0)])
+        report = pnl(both_jobs_income(), [*COSTS, L(7, "Bill", "B-3", "Garden Supply (fictional)", D("900.0"), D("2400.0"))])
         check = qc.cross_check(report, sbcd(both_jobs_sales()))
         vendor = next(l.row for l in report.lines if l.amount == D("900.0"))
         before = figures(report, check)
@@ -107,7 +108,7 @@ class MatchingTests(unittest.TestCase):
         self.assertNotIn(Y, result.customers)  # never a customer from the second report alone
 
     def test_a_profit_and_loss_line_missing_from_the_second_report_holds_its_job(self):
-        report = pnl(both_jobs_income(L(4, "Invoice", "1004", f"{X}:Job B", 250.0, 6250.0)), COSTS)
+        report = pnl(both_jobs_income(L(4, "Invoice", "1004", f"{X}:Job B", D("250.0"), D("6250.0"))), COSTS)
         check = qc.cross_check(report, sbcd(both_jobs_sales()))
         missing = next(l.row for l in report.lines if l.num == "1004")
         self.assertEqual((missing,), check.pnl_unmatched)
@@ -118,7 +119,7 @@ class MatchingTests(unittest.TestCase):
 
     def test_identical_lines_are_matched_by_count(self):
         # Two identical $100 lines need two matches, never one.
-        twice = [L(4, "Invoice", "1005", f"{X}:Job B", 100.0, 6100.0), L(4, "Invoice", "1005", f"{X}:Job B", 100.0, 6200.0)]
+        twice = [L(4, "Invoice", "1005", f"{X}:Job B", D("100.0"), D("6100.0")), L(4, "Invoice", "1005", f"{X}:Job B", D("100.0"), D("6200.0"))]
         report = pnl(both_jobs_income(*twice), COSTS)
         once = qc.cross_check(report, sbcd(both_jobs_sales(S(4, "Invoice", "1005", "Pots", 1, 100))))
         self.assertEqual(1, len(once.pnl_unmatched))
@@ -150,9 +151,24 @@ class MatchingTests(unittest.TestCase):
                 self.assertEqual(1, len(check.pnl_unmatched))
                 self.assertEqual(qp.NEEDS_A_CHECK, figures(report, check).jobs[B]["sales"].status)
 
+    def test_the_line_whose_name_proves_most_is_matched_first(self):
+        # The automated review of 3762995: two Profit and Loss lines share type, number, date and amount; one names only
+        # the customer, the other the customer and Job A. The second report lists one under Job A and one under Job B.
+        # Matched vaguest-first, the customer-only line could take the Job A partner and leave the Job A line unmatched.
+        vague = L(4, "Invoice", "1007", X, D("300.0"), D("6300.0"))
+        specific = L(4, "Invoice", "1007", f"{X}:Job A", D("300.0"), D("6600.0"))
+        report = pnl(both_jobs_income(vague, specific), COSTS)  # the vague line comes first in the file
+        check = qc.cross_check(report, sbcd([(X, [], [
+            ("Job A", [S(2, "Invoice", "1001", "Design", 1, 4000), S(4, "Invoice", "1007", "Pots", 1, 300)]),
+            ("Job B", [S(3, "Invoice", "1002", "Design", 1, 2000), S(4, "Invoice", "1007", "Pots", 1, 300)])])]))
+        self.assertEqual(((), ()), (check.pnl_unmatched, check.sbcd_unmatched))
+        rows = {l.name: l.row for l in report.lines if l.num == "1007"}
+        self.assertEqual((X, "Job A"), check.sbcd_jobs[rows[f"{X}:Job A"]])
+        self.assertEqual((X, "Job B"), check.sbcd_jobs[rows[X]])
+
     def test_an_answer_that_contradicts_the_second_report_holds(self):
         # A $700 invoice named only "Customer X", answered as Job A, but listed under Job B in Sales by Customer Detail.
-        report = pnl(both_jobs_income(L(4, "Invoice", "1003", X, 700.0, 6700.0)), COSTS)
+        report = pnl(both_jobs_income(L(4, "Invoice", "1003", X, D("700.0"), D("6700.0"))), COSTS)
         check = qc.cross_check(report, sbcd(both_jobs_sales(S(4, "Invoice", "1003", "Design", 1, 700))))
         self.assertEqual((), check.pnl_unmatched)
         row = next(l.row for l in report.lines if l.num == "1003")
@@ -163,7 +179,7 @@ class MatchingTests(unittest.TestCase):
         self.assertEqual((D("2700"), qp.COMPLETE), (agreeing.jobs[B]["sales"].amount, agreeing.jobs[B]["sales"].status))
 
     def test_lines_that_arent_sales_forms_arent_expected_in_the_second_report(self):
-        report = pnl(both_jobs_income(L(4, "Deposit", "", f"{X}:Job A", 50.0, 6050.0, "", "Checking")), COSTS)
+        report = pnl(both_jobs_income(L(4, "Deposit", "", f"{X}:Job A", D("50.0"), D("6050.0"), "", "Checking")), COSTS)
         check = qc.cross_check(report, sbcd(both_jobs_sales()))
         self.assertEqual((), check.pnl_unmatched)
         result = figures(report, check)
@@ -202,9 +218,21 @@ class ScopeTests(unittest.TestCase):
         self.assert_unusable(check, "own totals don't all match")
         self.assertEqual(qp.NEEDS_A_CHECK, figures(report, check).jobs[A]["profit_after_job_costs"].status)
 
+    def test_a_second_report_with_a_line_whose_quantity_times_price_is_off_proves_nothing(self):
+        # The automated review of 3762995: totals that match aren't enough. A line whose Quantity × Sales price doesn't
+        # give its Amount makes that report unreconciled (step 5a), so it can't lift the one-report rule.
+        report = pnl(both_jobs_income(), COSTS)
+        sales = [(X, [], [("Job A", [S(2, "Invoice", "1001", "Design", 2, 2000, amount="4000")]),
+                          ("Job B", [S(3, "Invoice", "1002", "Design", 3, 700, amount="2000")])])]  # 3 × 700 is 2,100
+        other = sbcd(sales)
+        self.assertFalse(other.reconciled)
+        check = qc.cross_check(report, other)
+        self.assert_unusable(check, "own totals don't all match")
+        self.assertEqual([qf.ONE_REPORT], [h.reason for h in figures(report, check).jobs[A]["profit_after_job_costs"].holds])
+
     def test_a_cross_check_made_for_another_report_isnt_used(self):
         report = pnl(both_jobs_income(), COSTS)
-        other = pnl(both_jobs_income(L(4, "Invoice", "1004", f"{X}:Job B", 250.0, 6250.0)), COSTS)
+        other = pnl(both_jobs_income(L(4, "Invoice", "1004", f"{X}:Job B", D("250.0"), D("6250.0"))), COSTS)
         check = qc.cross_check(other, sbcd(both_jobs_sales()))
         result = figures(report, check)
         self.assertIn("made for another Profit and Loss Detail", " ".join(result.warnings))

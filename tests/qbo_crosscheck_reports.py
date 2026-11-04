@@ -69,10 +69,9 @@ def make_pair(seed: int) -> Pair:
                 sbcd_side[index]["job"] = rng.choice(others)
                 pnl_bad.add(index), sbcd_bad.add(index)
 
-    pnl_lines = [fx.line(t["day"], t["kind"], t["num"], f"{t['customer']}:{t['job']}", t["cents"] / 100, 0.0)
+    # Amounts are built exactly, in whole cents, never through a float.
+    pnl_lines = [fx.line(t["day"], t["kind"], t["num"], f"{t['customer']}:{t['job']}", Decimal(t["cents"]) / 100, None)
                  for t in pnl_side if t]
-    for line, t in zip(pnl_lines, [t for t in pnl_side if t]):
-        line[9] = Decimal(t["cents"]) / 100
     groups: dict[str, dict[str, list]] = {}
     for t in sbcd_side:
         if t:
