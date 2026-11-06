@@ -22,7 +22,8 @@ The rules this launcher keeps:
   without the usual grace period.
 - **Closed mode** (`MARGINX_TRIAL_CLOSED=1`, for the stop procedure's restart check): MargenX is given a
   placeholder that is nobody's address instead of the invited email, so this copy itself refuses every
-  login, whatever Cloudflare forwards. The launcher says so in its log.
+  login, whatever Cloudflare forwards. The launcher says so in its log. Any other value of that setting,
+  empty included, starts nothing: a mistyped closed mode never opens the copy.
 - **Never prints a setting's value or the token,** only which setting is missing or invalid.
 """
 from __future__ import annotations
@@ -102,6 +103,9 @@ def problems(environ: Mapping[str, str]) -> list[str]:
                      else "trial settings invalid (MARGINX_TRIAL must be 1, and each value in its documented form)")
     if not environ.get(TOKEN_ENV, "").strip():
         found.append(f"tunnel token missing: {TOKEN_ENV}")
+    if CLOSED_ENV in environ and environ[CLOSED_ENV].strip() != "1":
+        # A mistyped closed mode must never quietly start the copy for the invited person.
+        found.append(f"{CLOSED_ENV} invalid: it must be 1, or not set at all")
     return found
 
 

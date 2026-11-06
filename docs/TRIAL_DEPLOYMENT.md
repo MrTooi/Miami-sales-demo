@@ -194,11 +194,33 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
        --build-arg MARGINX_TRIAL_HOST=margenx-marker-5 --build-arg TUNNEL_TOKEN=margenx-marker-6 \
        --build-arg MARGINX_TRIAL_CLOSED=margenx-marker-7 \
        --attest type=provenance,mode=min \
-       --output type=oci,dest=margenx-check.tar,compression=uncompressed .
-     grep -a -c "slsa.dev/provenance" margenx-check.tar   # at least 1: the attestation is in the file
-     grep -a -c "margenx-marker" margenx-check.tar        # must be 0
+       --output type=oci,dest=margenx-check.tar,compression=uncompressed,force-compression=true .
+     python3 - margenx-check.tar <<'EOF'
+     import gzip, sys, tarfile
+     compressed = unreadable = markers = provenance = 0
+     with tarfile.open(sys.argv[1]) as tar:
+         for member in tar:
+             if not member.isfile():
+                 continue
+             data = tar.extractfile(member).read()
+             if data[:2] == b"\x1f\x8b":  # gzip: read it decompressed
+                 compressed += 1
+                 data = gzip.decompress(data)
+             elif data[:4] == b"\x28\xb5\x2f\xfd":  # zstd: this check can't read it
+                 unreadable += 1
+                 print("can't read (zstd):", member.name)
+                 continue
+             markers += data.count(b"margenx-marker")
+             provenance += data.count(b"slsa.dev/provenance")
+     print("compressed blobs, read decompressed:", compressed)
+     print("unreadable blobs (must be 0):", unreadable)
+     print("provenance mentions (at least 1):", provenance)
+     print("markers (must be 0):", markers)
+     EOF
      ```
-     The second count must be **0**. Provenance in `mode=max` records build-argument values by design (Docker's documentation), so this image is never built with it.
+     It must print **0 unreadable blobs, at least 1 provenance mention and 0 markers**.
+     - The search reads every blob in the file, and **decompresses any compressed one first**. `compression=uncompressed` alone can leave reused layers compressed, so `force-compression=true` is set too, and a plain `grep` of the file isn't enough: it can't see inside a compressed layer.
+     - Provenance in `mode=max` records build-argument values by design (Docker's documentation), so this image is never built with it.
    - **Render's own builder.** Render's image, and any attestation its builder makes, can't be inspected from outside. So:
      - the retention evidence (plan section 3.4) includes **Render's written answer**: does its build keep build arguments, or make provenance attestations, and in which mode?
      - **until that answer is in,** the tunnel token is treated as possibly kept by Render. After the operator-only run, that copy's tunnel is deleted in Cloudflare, so its token works nowhere, and no shop's copy starts;
@@ -277,9 +299,10 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
       - **disconnect the public route:** in the tunnel's settings, delete its public hostname (the app's address → `127.0.0.1:8501`). With no public hostname, the tunnel carries nothing to the copy, even while the copy runs. Confirm the tunnel's list of public hostnames is empty.
    4. **Wait at least one minute after step 3.** Cloudflare blocks a revoked person's re-login for up to a minute, and a refusal during that minute proves nothing.
    5. **Resume the copy, and with the route still disconnected, confirm the setting took effect and the copy is healthy:**
-      - the log shows `margenx-trial: closed: this copy refuses every login`, then `margenx-trial: running`;
+      - the log shows `margenx-trial: closed: this copy refuses every login`, then `margenx-trial: running`, **from this start**: both lines come after this Resume's time in Render's events, and from the instance now running. An older line from an earlier start proves nothing;
       - the running deploy's commit is the approved one;
-      - the tunnel's connector is **Healthy** in Cloudflare.
+      - the tunnel's connector is **Healthy** in Cloudflare;
+      - **public requests can't reach MargenX:** opening the app's address shows only a Cloudflare page (its login or an error), never MargenX's page.
 
       **If the `closed` line doesn't appear,** the setting didn't reach the copy: Suspend at once and leave the route disconnected. Then **Manual Deploy → the approved commit**, which starts it with the current settings, and confirm again. The route is never reconnected to a copy whose log doesn't show the `closed` line.
    6. **Only then reconnect the public route:** add back exactly the one public hostname, as in step 4.5 (HTTP → `127.0.0.1:8501`, the host header setting empty, **Protect with Access** on with the same team name and AUD tag).

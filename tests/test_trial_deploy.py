@@ -205,6 +205,23 @@ class ClosedModeTests(unittest.TestCase):
             app = launch.streamlit_env({**SETTINGS, "MARGINX_TRIAL_CLOSED": value})
             self.assertEqual(SETTINGS["MARGINX_TRIAL_INVITED_EMAIL"], app["MARGINX_TRIAL_INVITED_EMAIL"], value)
 
+    def test_any_other_closed_value_starts_nothing(self):
+        for value in ("", " ", "0", "yes", "true", "TRUE", "11", "1x", "closed-marker"):
+            started = []
+            found = launch.problems({**SETTINGS, "MARGINX_TRIAL_CLOSED": value})
+            self.assertTrue(found, repr(value))
+            self.assertIn("MARGINX_TRIAL_CLOSED", " ".join(found))
+            self.assertNotIn("closed-marker", " ".join(found))  # the value itself is never printed
+            code = launch.run(environ={**SETTINGS, "MARGINX_TRIAL_CLOSED": value},
+                              spawn=lambda *a, **k: started.append(a))
+            self.assertEqual(launch.EXIT_SETTINGS, code, repr(value))
+            self.assertEqual([], started, repr(value))  # neither MargenX nor the tunnel
+
+    def test_closed_mode_1_and_not_set_both_start(self):
+        self.assertEqual([], launch.problems(SETTINGS))
+        self.assertEqual([], launch.problems({**SETTINGS, "MARGINX_TRIAL_CLOSED": "1"}))
+        self.assertEqual([], launch.problems({**SETTINGS, "MARGINX_TRIAL_CLOSED": " 1 "}))
+
 
 class SettingsTests(unittest.TestCase):
     def test_every_setting_is_required(self):
