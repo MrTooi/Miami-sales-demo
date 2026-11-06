@@ -12,6 +12,18 @@ Sources: the plan (#131, lean v1.2), the hosting research (`docs/research/TRIAL_
 3. **Alex has chosen the host,** recorded on #131 (D-009: "chosen by Alex before the deployment"). The steps below are for **Render**, the research's first choice. A different host needs its own steps, reviewed first.
 4. **The domain:** Alex has approved moving margenx.org's DNS to Cloudflare, and Abrey has agreed at the time; or Alex has chosen a separate small domain instead (D-009).
 5. **The Cloudflare account** is one just for MargenX: logout and cancellations act on the whole account (research, section 1.8).
+6. **Docker Desktop on Alex's Mac,** for the required image check (section 6, check 1). It's free for a business our size.
+
+**The approved commit** (what "approved" means everywhere below):
+- **For the operator-only test copy:** the exact head commit of PR #141, **unmerged**. It may run only after:
+  - the PR's manual review has passed on that exact commit;
+  - Alex has said, in a comment on #141 giving its full commit hash, that this commit may run as the operator-only copy.
+
+  The Render service's branch is then the PR's branch, `margenx/trial-a2-deploy`, because Render deploys commits from the service's branch. The results go on #141, against that commit, **before** the merge.
+- **If the PR's head changes after the run** (a fix, or bringing the branch up to date with `main` for the merge):
+  - a change to any file the image is built from (the Dockerfile, `.dockerignore`, the lock, `fetch_cloudflared.py`, `launch.py`, or any file in the Dockerfile's `COPY` list) means the run is repeated on the new head, approved the same way, before the merge;
+  - a change to none of them (docs or tests only) is recorded on #141 with its file list, and the results stand.
+- **For a shop's copy:** a commit on `main`, approved by Alex for that copy and recorded on #131, after PR B's release checks.
 
 ## 1. What runs
 
@@ -43,7 +55,9 @@ It holds no setting, token or secret, and the Dockerfile declares **no build arg
 **The launcher** (`deploy/trial/launch.py`):
 - starts nothing unless every setting below is valid;
 - starts MargenX, waits until it listens on the container, then starts the tunnel;
-- **a stop always wins:** a stop that arrives while MargenX is still starting ends the wait at once, and the tunnel is never started;
+- **a stop always wins:**
+  - a stop that arrives while MargenX is still starting ends the wait at once, and the tunnel is never started;
+  - **no stop can slip in between the last check and the tunnel's start:** from that check until the tunnel exists, the host's stop signals are held back and then looked at. A stop that arrived before the start means the tunnel is never started. One that arrives during the start itself, the few milliseconds of creating the process, means the new tunnel is killed at once, without its grace period;
 - gives the token to the tunnel only, and the trial settings to MargenX only;
 - **never restarts anything:** if either program stops, it stops the other and exits, so the whole copy stops;
 - on the host's stop, stops MargenX first (no request is handled any more), then the tunnel, which has a 1-second grace period;
@@ -60,7 +74,7 @@ It holds no setting, token or secret, and the Dockerfile declares **no build arg
 ## 2. The settings
 They go in the host's environment settings. **None goes in the repository, an issue, a log or a screenshot.**
 
-**How Render uses them:** Render gives them to the running copy, and **also passes them to the Docker build as build arguments**. The Dockerfile declares none, so the build neither uses nor stores them. The build log and the image are still checked for them (section 6).
+**How Render uses them:** Render gives them to the running copy, and **also passes them to the Docker build as build arguments**. The Dockerfile declares none, so the build neither uses nor stores them. The build log and a local build of the same image, attestations included, are still checked for them, and Render is asked in writing what its builder keeps (section 6, check 1).
 
 | Setting | What | Secret? |
 |---|---|---|
@@ -136,9 +150,10 @@ Render's creation flow starts a first build at once, from the branch's latest co
    - **Docker build context:** `.` (the repository root).
    - **Region:** a US region (Virginia, Ohio or Oregon). It can't be changed later.
    - **Instance size:** within Alex's budget. The final size comes from measuring the real copy (section 6, check 9, and PR B).
+   - **Branch:** for the operator-only copy, the PR's branch `margenx/trial-a2-deploy` (section 0, "The approved commit"); for a shop's copy, `main`.
    - **Auto-Deploy: Off.**
    - **Environment:** the trial settings from section 2, **without `TUNNEL_TOKEN`** and without `MARGINX_TRIAL_CLOSED`. **No Secret Files** (Render copies them into the build folder), no disk, no cron job, no other service.
-2. **Pin the build:** **Manual Deploy → Deploy a specific commit**, giving the **approved commit** (the merged commit Alex approved, recorded on #141 or #131).
+2. **Pin the build:** **Manual Deploy → Deploy a specific commit**, giving the **approved commit** (section 0): for the operator-only copy, PR #141's head as approved on #141.
 3. **Verify, still offline:**
    - the deploy's commit in Render's events is exactly the approved one;
    - the log shows `margenx-trial: not starting: tunnel token missing: TUNNEL_TOKEN`;
@@ -159,18 +174,63 @@ Render's creation flow starts a first build at once, from the branch's latest co
 
 **Restarts:** Render restarts a *running* copy that stops by itself. That's a running copy, not an ended trial. **A Suspended service stays stopped** until someone presses Resume (section 8).
 
-## 6. The operator-only test copy's checks (made-up files only; results on PR #141 before merge)
+## 6. The operator-only test copy's checks (made-up files only; results on PR #141, against the approved commit, before merge)
 The plan checks PR A by "a run against the operator-only copy, with results on the PR". These checks come from the PR #137 round-1 review (test requirements for A2) and the PR #141 round-1 review. Each is recorded on #141 **in words only**: no email, token, cookie, or screenshot showing them.
 
 1. **The built image.**
    - The build of the approved commit succeeded on Render, for linux/amd64.
    - **The build log** contains no token, no invited email and no setting value. Render passes settings as build arguments; the Dockerfile uses none, so at most a warning names unused arguments.
-   - **The image itself:** where Docker is available, build the same commit with made-up marker values passed as build arguments, the way Render does: `docker build --platform linux/amd64 --build-arg TUNNEL_TOKEN=marker-token --build-arg MARGINX_TRIAL_INVITED_EMAIL=marker@example.com ...`. Then search `docker history --no-trunc` and `docker inspect` for the markers: there must be none.
+   - **The image itself (required).** Render's built image can't be downloaded, so the same commit is built on Alex's Mac (Docker Desktop, section 0), the way Render builds it:
+     - every setting from section 2 is passed as a build argument with an obviously made-up marker value;
+     - a provenance attestation is made;
+     - then the whole image is searched for the markers: every layer, the image settings and history, and the attestation.
+
+     Run from a copy of the repository at the approved commit:
+     ```
+     docker buildx create --name margenx-check --driver docker-container --use
+     docker buildx build --platform linux/amd64 -f deploy/trial/Dockerfile \
+       --build-arg MARGINX_TRIAL=margenx-marker-1 --build-arg MARGINX_TRIAL_TEAM_DOMAIN=margenx-marker-2 \
+       --build-arg MARGINX_TRIAL_AUDIENCE=margenx-marker-3 --build-arg MARGINX_TRIAL_INVITED_EMAIL=margenx-marker-4 \
+       --build-arg MARGINX_TRIAL_HOST=margenx-marker-5 --build-arg TUNNEL_TOKEN=margenx-marker-6 \
+       --build-arg MARGINX_TRIAL_CLOSED=margenx-marker-7 \
+       --attest type=provenance,mode=min \
+       --output type=oci,dest=margenx-check.tar,compression=uncompressed .
+     grep -a -c "slsa.dev/provenance" margenx-check.tar   # at least 1: the attestation is in the file
+     grep -a -c "margenx-marker" margenx-check.tar        # must be 0
+     ```
+     The second count must be **0**. Provenance in `mode=max` records build-argument values by design (Docker's documentation), so this image is never built with it.
+   - **Render's own builder.** Render's image, and any attestation its builder makes, can't be inspected from outside. So:
+     - the retention evidence (plan section 3.4) includes **Render's written answer**: does its build keep build arguments, or make provenance attestations, and in which mode?
+     - **until that answer is in,** the tunnel token is treated as possibly kept by Render. After the operator-only run, that copy's tunnel is deleted in Cloudflare, so its token works nowhere, and no shop's copy starts;
+     - **if Render keeps build arguments,** a shop's copy runs from an image built elsewhere instead of a Render build. That's a reviewed change (section 9).
 2. **Start, and setup steps 3 and 5,** as recorded during section 5.
 3. **Only through the tunnel.**
    - The Render service has no public address.
    - Without logging in, the app's address shows Cloudflare's login page, never MargenX.
-   - In the running copy (Render's Shell), the listening sockets are only `127.0.0.1:8501` (MargenX) and `127.0.0.1:20241` (cloudflared's metrics). Read them with `python -c "print(open('/proc/net/tcp').read())"`; the slim image has no `ss` or `netstat`.
+   - **In the running copy (Render's Shell), IPv4 and IPv6:** the only sockets waiting for connections are TCP `127.0.0.1:8501` (MargenX) and TCP `127.0.0.1:20241` (cloudflared's metrics). Nothing in `tcp6`, and no UDP socket waiting for traffic. The slim image has no `ss` or `netstat`, so read the kernel's tables:
+     ```
+     python - <<'EOF'
+     import socket
+     def addr(h, v6):
+         ip, port = h.split(":")
+         b = bytes.fromhex(ip)
+         if v6:
+             b = b"".join(b[i:i + 4][::-1] for i in range(0, 16, 4))
+             return f"[{socket.inet_ntop(socket.AF_INET6, b)}]:{int(port, 16)}"
+         return f"{socket.inet_ntop(socket.AF_INET, b[::-1])}:{int(port, 16)}"
+     for name in ("tcp", "tcp6", "udp", "udp6"):
+         try:
+             rows = open(f"/proc/net/{name}").read().splitlines()[1:]
+         except FileNotFoundError:
+             print(name, "(not present)"); continue
+         for row in rows:
+             f = row.split()
+             waiting = f[3] == "0A" if name.startswith("tcp") else set(f[2].split(":")[0]) == {"0"}
+             if waiting:  # TCP: listening; UDP: bound and waiting for anyone's traffic
+                 print(name, addr(f[1], name.endswith("6")))
+     EOF
+     ```
+     It must print exactly `tcp 127.0.0.1:8501` and `tcp 127.0.0.1:20241`, plus "(not present)" for any table this kernel doesn't have.
 4. **The real login, everywhere.** After Alex's emailed code:
    - the page loads (made-up samples only);
    - the live connection works (the page reacts);
@@ -188,7 +248,7 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
    - A second tab is cut off.
    - Logging back in needs a new code.
    - Note how long Cloudflare's logout takes.
-7. **The stop procedure (section 7) on this copy,** including its restart check. With a results tab open, step 1 (Suspend) must cut the tab within seconds. **Afterwards,** re-add Alex's email and remove `MARGINX_TRIAL_CLOSED` only if the copy is to be used again.
+7. **The stop procedure (section 7) on this copy,** including its restart check. With a results tab open, step 1 (Suspend) must cut the tab within seconds. **Afterwards,** re-add Alex's email and the public hostname, and remove `MARGINX_TRIAL_CLOSED`, only if the copy is to be used again.
 8. **Logs hold no secrets.** Search Render's logs, cloudflared's lines included, for:
    - the token;
    - `CF_Authorization` and the assertion header's value;
@@ -212,30 +272,33 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
 4. **Verify the cutoff.**
    1. An open tab has lost its connection: leave it open, unreloaded, for step vi.
    2. A slow upload didn't finish being processed. That applies once uploads are on; release check 5.
-   3. **The restart check: the copy itself refuses the former invite.** Set `MARGINX_TRIAL_CLOSED=1` on the copy with **"Save only"**.
+   3. **The restart check: the copy itself refuses the former invite.** First, with the copy still suspended:
+      - set `MARGINX_TRIAL_CLOSED=1` on the copy with **"Save only"**;
+      - **disconnect the public route:** in the tunnel's settings, delete its public hostname (the app's address → `127.0.0.1:8501`). With no public hostname, the tunnel carries nothing to the copy, even while the copy runs. Confirm the tunnel's list of public hostnames is empty.
    4. **Wait at least one minute after step 3.** Cloudflare blocks a revoked person's re-login for up to a minute, and a refusal during that minute proves nothing.
-   5. **Resume the copy and confirm it's healthy:**
+   5. **Resume the copy, and with the route still disconnected, confirm the setting took effect and the copy is healthy:**
       - the log shows `margenx-trial: closed: this copy refuses every login`, then `margenx-trial: running`;
       - the running deploy's commit is the approved one;
-      - the tunnel is **Healthy** in Cloudflare.
+      - the tunnel's connector is **Healthy** in Cloudflare.
 
-      If the `closed` line doesn't appear, the setting didn't reach the copy: Suspend, then **Manual Deploy → the approved commit**, which starts it with the current settings, and confirm again. Only test a copy that is running and healthy: a refusal from a stopped tunnel proves nothing.
-   6. **Test both ways back in:**
+      **If the `closed` line doesn't appear,** the setting didn't reach the copy: Suspend at once and leave the route disconnected. Then **Manual Deploy → the approved commit**, which starts it with the current settings, and confirm again. The route is never reconnected to a copy whose log doesn't show the `closed` line.
+   6. **Only then reconnect the public route:** add back exactly the one public hostname, as in step 4.5 (HTTP → `127.0.0.1:8501`, the host header setting empty, **Protect with Access** on with the same team name and AUD tag).
+   7. **Test both ways back in:**
       - the **original signed-in browser**: reload the tab left open in step i (it reconnects with its old login);
       - **a fresh login** with the former email.
 
-      Both must be refused.
-   7. **Suspend again, whatever the result.** If anything got in, treat it as an incident: the copy stays suspended, and Alex is told at once.
+      Both must be refused. Only test a copy that is running and healthy: a refusal from a stopped tunnel proves nothing.
+   8. **Suspend again, whatever the result, then delete the public hostname again:** an ended trial's copy keeps no route. If anything got in, treat it as an incident: the copy stays suspended, and Alex is told at once.
 
 **Removing the email or revoking sessions without stopping the copy never ends a trial:** an already-open live connection may stay open.
 
 ## 8. Nothing brings an ended trial back by itself
-- **Render:** a Suspended service stays suspended until someone presses **Resume**. Nobody presses Resume, Restart or Manual Deploy on an ended trial's copy, except for the restart check (section 7, step 4), which ends suspended again.
+- **Render:** a Suspended service stays suspended until someone presses **Resume**. Nobody presses Resume, Restart or Manual Deploy on an ended trial's copy, except for the restart check (section 7, step 4), which ends suspended again, with no public route.
 - **No pushes, no schedules:**
   - Auto-Deploy is off, so a push to GitHub doesn't deploy.
   - There is no cron job or scheduled job.
 - **The launcher:** never restarts a program. If one stops, the whole copy stops.
-- **The tunnel:** with the copy stopped, nothing connects to it. Cloudflare shows its own error page, and MargenX is unreachable.
+- **The tunnel:** with the copy stopped, nothing connects to it, and after the stop procedure it has no public hostname either. Cloudflare shows its own error page, and MargenX is unreachable.
 
 ## 9. Changing anything
 - **During a trial,** nothing changes except in an emergency, and then the stop comes first.

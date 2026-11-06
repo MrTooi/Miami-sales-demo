@@ -15,7 +15,11 @@ The rules this launcher keeps:
 - **Each program gets only its own settings.** The tunnel token goes to cloudflared only; the trial
   settings go to MargenX only.
 - **A stop always wins.** A stop that arrives while MargenX is still starting ends the wait at once,
-  and the tunnel is never started.
+  and the tunnel is never started. No stop can slip in between the last check and the tunnel's start:
+  from that check until the tunnel exists, the host's stop signals are held back and then looked at.
+  A stop that arrived before the start means the tunnel is never started; one that arrives during the
+  start itself (the few milliseconds of creating the process) means the new tunnel is killed at once,
+  without the usual grace period.
 - **Closed mode** (`MARGINX_TRIAL_CLOSED=1`, for the stop procedure's restart check): MargenX is given a
   placeholder that is nobody's address instead of the invited email, so this copy itself refuses every
   login, whatever Cloudflare forwards. The launcher says so in its log.
@@ -49,6 +53,7 @@ TRIAL_SETTINGS = ("MARGINX_TRIAL", "MARGINX_TRIAL_TEAM_DOMAIN", "MARGINX_TRIAL_A
                   "MARGINX_TRIAL_INVITED_EMAIL", "MARGINX_TRIAL_HOST")
 # What both programs may see besides their own settings: enough to run, nothing else.
 BASE_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED")
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 READY_SECONDS = 60
 STOP_SECONDS = 5
 POLL_SECONDS = 0.5
@@ -147,13 +152,24 @@ def stop(proc, seconds: float = STOP_SECONDS) -> None:
         proc.wait()
 
 
+def _stop_pending() -> bool:
+    """A host stop that arrived while the stop signals were held back."""
+    return bool(set(STOP_SIGNALS) & signal.sigpending())
+
+
+def _release_stop_signals() -> None:
+    """Runs in a new program just before it starts: it must not inherit the launcher's held-back stop
+    signals, or the host's stop couldn't reach it."""
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, STOP_SIGNALS)
+
+
 def say(message: str) -> None:
     print(f"margenx-trial: {message}", flush=True)
 
 
 def run(environ: Mapping[str, str] = os.environ, spawn: Callable = subprocess.Popen,
         ready: Callable = wait_until_listening, streamlit=None, tunnel=None,
-        poll_seconds: float = POLL_SECONDS) -> int:
+        poll_seconds: float = POLL_SECONDS, before_tunnel: Callable[[], None] = lambda: None) -> int:
     """Start MargenX, wait until it listens, start the tunnel, then watch both. Returns the exit code."""
     found = problems(environ)
     if found:
@@ -165,20 +181,36 @@ def run(environ: Mapping[str, str] = os.environ, spawn: Callable = subprocess.Po
 
     def on_stop(signum, frame):
         asked_to_stop["yes"] = True
-    previous = {sig: signal.signal(sig, on_stop) for sig in (signal.SIGTERM, signal.SIGINT)}
+    previous = {sig: signal.signal(sig, on_stop) for sig in STOP_SIGNALS}
     app = tunnel_proc = None
     try:
         if closed(environ):
             say("closed: this copy refuses every login (the invited email is replaced by nobody's address)")
         app = spawn(streamlit or streamlit_command(), cwd=str(APP_DIR), env=streamlit_env(environ))
         is_listening = ready(app, lambda: asked_to_stop["yes"])
-        if asked_to_stop["yes"]:  # checked again right before the tunnel: a stop always wins
-            say("stopping: asked to stop by the host before the tunnel was started")
-            return EXIT_STOPPED_BY_HOST
-        if not is_listening:
-            say("not starting: MargenX didn't start listening on this container")
-            return EXIT_PROGRAM_STOPPED
-        tunnel_proc = spawn(tunnel or tunnel_command(), cwd=str(APP_DIR), env=tunnel_env(environ))
+        # From the last check until the tunnel exists, the host's stop signals are held back, so a stop
+        # can't slip in between the check and the start: it is seen by the second check below.
+        signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+        try:
+            if asked_to_stop["yes"]:
+                say("stopping: asked to stop by the host before the tunnel was started")
+                return EXIT_STOPPED_BY_HOST
+            if not is_listening:
+                say("not starting: MargenX didn't start listening on this container")
+                return EXIT_PROGRAM_STOPPED
+            before_tunnel()  # tests only: a stop arriving here, after the check above
+            if _stop_pending():  # a stop always wins: the tunnel is never started
+                say("stopping: asked to stop by the host before the tunnel was started")
+                return EXIT_STOPPED_BY_HOST
+            tunnel_proc = spawn(tunnel or tunnel_command(), cwd=str(APP_DIR), env=tunnel_env(environ),
+                                preexec_fn=_release_stop_signals)
+            if _stop_pending():  # the stop came during the start itself: kill the new tunnel at once
+                tunnel_proc.kill()
+                tunnel_proc.wait()
+                say("stopping: asked to stop by the host while the tunnel was starting; it was killed at once")
+                return EXIT_STOPPED_BY_HOST
+        finally:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, STOP_SIGNALS)  # a held-back stop is handled now
         say("running: MargenX on this container only, and the tunnel")
         while not asked_to_stop["yes"]:
             if app.poll() is not None:

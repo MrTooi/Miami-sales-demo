@@ -237,6 +237,7 @@ STAND_IN = textwrap.dedent("""
         sys.exit(0)
     signal.signal(signal.SIGTERM, on_term)
     note("started env=" + ",".join(sorted(os.environ)))
+    note("held back=" + ",".join(sorted(str(int(s)) for s in signal.pthread_sigmask(signal.SIG_BLOCK, []))))
     if role == "app":
         time.sleep(float(sys.argv[5]))  # like Streamlit, it takes a moment before it listens
         server = socket.socket()
@@ -250,12 +251,20 @@ STAND_IN = textwrap.dedent("""
 """)
 
 DRIVER = textwrap.dedent("""
-    import functools, json, sys
+    import functools, json, os, signal, subprocess, sys, time
     sys.path.insert(0, sys.argv[1])
     import launch
     log, port, stand_in, app_life, tunnel_life = sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6]
-    environ, listen_delay = json.loads(sys.argv[7]), sys.argv[8]
-    code = launch.run(environ=environ,
+    environ, listen_delay, stop_before_tunnel = json.loads(sys.argv[7]), sys.argv[8], sys.argv[9] == "1"
+    def before_tunnel():
+        if stop_before_tunnel:  # the host's stop arrives after the launcher's last check
+            os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(0.2)  # plenty of time for a handler to run, if the stop weren't held back
+    def spawn(command, **options):  # notes each program the moment the launcher creates it
+        with open(log, "a") as f:
+            f.write(f"{time.monotonic():.6f} {command[3]} spawned\\n")
+        return subprocess.Popen(command, **options)
+    code = launch.run(environ=environ, before_tunnel=before_tunnel, spawn=spawn,
                       streamlit=[sys.executable, stand_in, log, "app", str(port), app_life, listen_delay],
                       tunnel=[sys.executable, stand_in, log, "tunnel", "0", tunnel_life, "0"],
                       ready=functools.partial(launch.wait_until_listening, port=port, seconds=20),
@@ -282,12 +291,12 @@ class LauncherProcessTests(unittest.TestCase):
         self.driver = Path(self.folder.name) / "driver.py"
         self.driver.write_text(DRIVER)
 
-    def start(self, app_life=60, tunnel_life=60, listen_delay=0, extra=None):
+    def start(self, app_life=60, tunnel_life=60, listen_delay=0, extra=None, stop_before_tunnel=False):
         import json
         environ = {**SETTINGS, "PATH": os.environ.get("PATH", ""), **(extra or {})}
         return subprocess.Popen([sys.executable, str(self.driver), str(ROOT / "deploy" / "trial"), str(self.log),
                                  str(free_port()), str(self.stand_in), str(app_life), str(tunnel_life),
-                                 json.dumps(environ), str(listen_delay)],
+                                 json.dumps(environ), str(listen_delay), "1" if stop_before_tunnel else "0"],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     def events(self, with_time=False):
@@ -345,6 +354,24 @@ class LauncherProcessTests(unittest.TestCase):
         self.assertFalse([1 for r, t in self.events() if r == "tunnel"])  # never started
         self.assertIn(["app", "stopped"], self.events())
         self.assertNotIn("running", out)
+
+    def test_a_stop_after_the_last_check_still_never_starts_the_tunnel(self):
+        proc = self.start(stop_before_tunnel=True)  # the stop lands between the check and the start
+        code, out = self.finish(proc)
+        self.assertEqual(launch.EXIT_STOPPED_BY_HOST, code, out)
+        self.assertFalse([1 for r, t in self.events() if r == "tunnel"])  # never started
+        self.assertIn(["app", "stopped"], self.events())
+        self.assertNotIn("running", out)
+
+    def test_the_programs_never_inherit_the_held_back_stop_signals(self):
+        proc = self.start()
+        self.wait_for("tunnel", "held back")
+        proc.send_signal(signal.SIGTERM)
+        self.finish(proc)
+        held = {r: t.split("=", 1)[1] for r, t in self.events() if t.startswith("held back")}
+        for role in ("app", "tunnel"):  # so the host's stop always reaches both programs
+            self.assertNotIn(str(int(signal.SIGTERM)), held[role].split(","), role)
+            self.assertNotIn(str(int(signal.SIGINT)), held[role].split(","), role)
 
     def test_closed_mode_says_so_in_the_log_and_margenx_gets_nobodys_address(self):
         proc = self.start(extra={"MARGINX_TRIAL_CLOSED": "1"})
