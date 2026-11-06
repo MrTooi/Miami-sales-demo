@@ -1,0 +1,24 @@
+# MargenX website trial image (deploy/trial/Dockerfile). Everything is left out of the build by default;
+# only the files the image copies are let back in. This also keeps out anything a host drops into the
+# build folder, such as secret files (docs/TRIAL_DEPLOYMENT.md). tests/test_trial_deploy.py checks
+# that this list matches the Dockerfile's COPY lines.
+*
+!trial_app.py
+!marginx_pilot.py
+!trial_access.py
+!marginx_ui.py
+!pilot_safety.py
+!job_intake.py
+!job_matching.py
+!job_profit.py
+!marginx_insights.py
+!finance_engine.py
+!quickbooks_layouts.py
+!quickbooks_rules.py
+!pages/1_MargenX_Import.py
+!assets/margenx-logo.png
+!sample_data/marginx/*.csv
+!.streamlit/config.toml
+!deploy/trial/launch.py
+!deploy/trial/fetch_cloudflared.py
+!deploy/trial/requirements.lock
