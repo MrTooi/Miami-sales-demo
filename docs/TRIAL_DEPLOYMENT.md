@@ -110,6 +110,7 @@ Both are Alex's exact email for the operator-only copy, and MargenX refuses anyo
 ### 4.2 Zero Trust
 - **Team name:** choose one; it becomes `MARGINX_TRIAL_TEAM_DOMAIN`.
 - **Login method:** under login methods, **add "One-time PIN"** (the emailed code). Since 2026-06-18 it isn't there by default.
+- **The login page shops see:** Reusable components → Custom pages → Access login page. Set the organization name to **MargenX**, and the header text to "Enter the email address MargenX invited. We'll email you a one-time code." Otherwise the page shows Cloudflare's auto-generated team name (seen in the B4 run, #141).
 
 ### 4.3 The Access application (created with nobody allowed)
 **Type and address:** a **Self-hosted** application for the app's exact address (for example `app.margenx.org`), with **no path**, so every address under it is covered: page, media, uploads and the live connection.
@@ -173,6 +174,8 @@ Render's creation flow starts a first build at once, from the branch's latest co
 - a changed setting is saved with "Save only" and then deployed deliberately.
 
 **Restarts:** Render restarts a *running* copy that stops by itself. That's a running copy, not an ended trial. **A Suspended service stays stopped** until someone presses Resume (section 8).
+
+**Suspend is not instant (measured twice in the B4 run, #141):** Render shows "Suspended" at once, and stops billing, but it delivers the stop signal to the copy **about 2 minutes later**. Until then the copy keeps running and serving open tabs. Once the signal arrives, the launcher stops MargenX and then the tunnel within the same second. This is why the stop procedure (section 7) cuts the Cloudflare side first.
 
 ## 6. The operator-only test copy's checks (made-up files only; results on PR #141, against the approved commit, before merge)
 The plan checks PR A by "a run against the operator-only copy, with results on the PR". These checks come from the PR #137 round-1 review (test requirements for A2) and the PR #141 round-1 review. Each is recorded on #141 **in words only**: no email, token, cookie, or screenshot showing them.
@@ -270,7 +273,7 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
    - A second tab is cut off.
    - Logging back in needs a new code.
    - Note how long Cloudflare's logout takes.
-7. **The stop procedure (section 7) on this copy,** including its restart check. With a results tab open, step 1 (Suspend) must cut the tab within seconds. **Afterwards,** re-add Alex's email and the public hostname, and remove `MARGINX_TRIAL_CLOSED`, only if the copy is to be used again.
+7. **The stop procedure (section 7) on this copy,** including its restart check. With a results tab open, **record when the open tab is cut**, and the times of Suspend, the copy's `stopping` log line and the tunnel going down. The B4 run measured Render's Suspend alone: the tab was cut about **2 minutes** after Suspend (#141). The effect of step 1's Cloudflare cut on an already-open tab is measured by PR B's release check ("a demonstrated stop that cuts an open tab and a slow upload"). **Afterwards,** re-add Alex's email and the public hostname, and remove `MARGINX_TRIAL_CLOSED`, only if the copy is to be used again.
 8. **Logs hold no secrets.** Search Render's logs, cloudflared's lines included, for:
    - the token;
    - `CF_Authorization` and the assertion header's value;
@@ -283,9 +286,10 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
 **If any check fails,** the copy is stopped (section 7, step 1), the problem is fixed in a PR, and the affected checks are run again.
 
 ## 7. The stop procedure (closeout, early end, emergency: always the same, in this order)
-1. **Stop the copy.**
-   - On Render: the service → **Suspend**.
-   - This ends the app and the tunnel, and it's what cuts open tabs and uploads.
+1. **Cut the public route, then stop the copy.**
+   1. **Cloudflare first:** in the tunnel's settings (Routes), **delete its public hostname** (the app's address → `127.0.0.1:8501`). New requests can no longer reach the copy, and the address's DNS record is removed with it. Its effect on an *already-open* tab isn't measured yet (PR B's release check).
+   2. **Then Render:** the service → **Suspend**. Render shows "Suspended" at once, but the copy keeps running until Render delivers the stop signal, **about 2 minutes later** (section 5, "Suspend is not instant").
+   3. **The stop is complete only when both are seen:** the copy's log shows `margenx-trial: stopping: asked to stop by the host`, and the tunnel shows **Down** (0 connections) in Cloudflare. The launcher stops MargenX first, then the tunnel, which is what finally cuts open tabs and uploads.
 2. **Remove the email from the Access rule.**
    - Zero Trust → Access → Applications → the app → its rule → delete the email.
    - If it was the only email, the application now lets nobody in.
@@ -295,14 +299,15 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
    1. An open tab has lost its connection: leave it open, unreloaded, for step vi.
    2. A slow upload didn't finish being processed. That applies once uploads are on; release check 5.
    3. **The restart check: the copy itself refuses the former invite.** First, with the copy still suspended:
-      - set `MARGINX_TRIAL_CLOSED=1` on the copy with **"Save only"**;
-      - **disconnect the public route:** in the tunnel's settings, delete its public hostname (the app's address → `127.0.0.1:8501`). With no public hostname, the tunnel carries nothing to the copy, even while the copy runs. Confirm the tunnel's list of public hostnames is empty.
+      - set `MARGINX_TRIAL_CLOSED=1` on the copy. A suspended service offers only a plain **"Save"**, which starts no deploy;
+      - **confirm the public route is still disconnected** (step 1): the tunnel's list of public hostnames is empty. With no public hostname, the tunnel carries nothing to the copy, even while the copy runs.
    4. **Wait at least one minute after step 3.** Cloudflare blocks a revoked person's re-login for up to a minute, and a refusal during that minute proves nothing.
    5. **Resume the copy, and with the route still disconnected, confirm the setting took effect and the copy is healthy:**
       - the log shows `margenx-trial: closed: this copy refuses every login`, then `margenx-trial: running`, **from this start**: both lines come after this Resume's time in Render's events, and from the instance now running. An older line from an earlier start proves nothing;
       - the running deploy's commit is the approved one;
       - the tunnel's connector is **Healthy** in Cloudflare;
-      - **public requests can't reach MargenX:** opening the app's address shows only a Cloudflare page (its login or an error), never MargenX's page.
+      - **the route is really off:** the tunnel's published routes are **empty**, and the running connector's latest `Updated to new configuration` log line shows **no ingress rule for the app's address**, only the catch-all `http_status:404`. A Cloudflare login page appearing at the address isn't proof by itself;
+      - **public requests can't reach MargenX:** the app's address doesn't resolve, or shows only a Cloudflare page (its login or an error), never MargenX's page.
 
       **If the `closed` line doesn't appear,** the setting didn't reach the copy: Suspend at once and leave the route disconnected. Then **Manual Deploy → the approved commit**, which starts it with the current settings, and confirm again. The route is never reconnected to a copy whose log doesn't show the `closed` line.
    6. **Only then reconnect the public route:** add back exactly the one public hostname, as in step 4.5 (HTTP → `127.0.0.1:8501`, the host header setting empty, **Protect with Access** on with the same team name and AUD tag).
@@ -311,7 +316,7 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
       - **a fresh login** with the former email.
 
       Both must be refused. Only test a copy that is running and healthy: a refusal from a stopped tunnel proves nothing.
-   8. **Suspend again, whatever the result, then delete the public hostname again:** an ended trial's copy keeps no route. If anything got in, treat it as an incident: the copy stays suspended, and Alex is told at once.
+   8. **Delete the public hostname again, then Suspend again, whatever the result:** an ended trial's copy keeps no route. Wait for the `stopping` line and the tunnel showing Down (step 1.iii). If anything got in, treat it as an incident: the copy stays suspended, and Alex is told at once.
 
 **Removing the email or revoking sessions without stopping the copy never ends a trial:** an already-open live connection may stay open.
 
