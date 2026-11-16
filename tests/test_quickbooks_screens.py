@@ -126,6 +126,11 @@ class QuestionScreenTests(unittest.TestCase):
         save(at, "A job that isn't in this report (I'll name it)")
         self.assertEqual(before, answers(at))
         self.assertIn("Please type the job's name, or pick another answer.", [i.value for i in at.info])
+        # The choice stays, so only the name is needed (the automated review of ebeb09a).
+        self.assertEqual("A job that isn't in this report (I'll name it)", at.radio[0].options[at.radio[0].index])
+        at.text_input[0].set_value("Job Z").run()
+        button(at, "Save answer").click().run()
+        self.assertIn("Job Z", [a.outside_job for a in answers(at).lines.values()])
 
     def test_the_end_says_no_questions_left_is_not_final(self):
         at = start()
@@ -164,6 +169,58 @@ class SafetyTests(unittest.TestCase):
         shown = text(at)
         self.assertIn(r"\!\[x\](https://example.invalid/x.png)", shown)
         self.assertNotIn("](https://example.invalid/x.png)", shown.replace(r"\]", ""))
+
+    def test_another_report_never_inherits_an_unsaved_choice(self):
+        # The automated review of ebeb09a: a choice is made but not saved, then the report is replaced.
+        def page():
+            import sys
+            from decimal import Decimal as D
+            from pathlib import Path
+            import streamlit as st
+            for folder in (Path.cwd(), Path.cwd() / "tests"):
+                sys.path.insert(0, str(folder))
+            import quickbooks_fixtures as fx
+            import quickbooks_pnl as qp
+            import quickbooks_screens as qscreens
+            amount = D("4000") if st.session_state.get("which", "a") == "a" else D("4100")
+            data = fx.xlsx(fx.report_rows({"Income": [("Design income", [
+                fx.line(2, "Invoice", "1001", "Customer X (fictional):Job A", amount, None),
+                fx.line(3, "Invoice", "1002", "Customer X (fictional)", D("700"), None)])]}))
+            qscreens.question_screen(qp.read_profit_and_loss_detail("p.xlsx", data))
+
+        at = AppTest.from_function(page, default_timeout=30)
+        at.run()
+        at.radio[0].set_value("Yes, each sub-customer is a job").run()
+        self.assertFalse(button(at, "Save answer").disabled)
+        at.session_state["which"] = "b"
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertEqual([JOBS], title(at))
+        self.assertIsNone(at.radio[0].value)
+        self.assertTrue(button(at, "Save answer").disabled)
+
+    def test_two_screens_on_one_page_never_share_widgets(self):
+        def page():
+            import sys
+            from decimal import Decimal as D
+            from pathlib import Path
+            for folder in (Path.cwd(), Path.cwd() / "tests"):
+                sys.path.insert(0, str(folder))
+            import quickbooks_fixtures as fx
+            import quickbooks_pnl as qp
+            import quickbooks_screens as qscreens
+            data = fx.xlsx(fx.report_rows({"Income": [("Design income", [
+                fx.line(2, "Invoice", "1001", "Customer X (fictional):Job A", D("4000"), None)])]}))
+            report = qp.read_profit_and_loss_detail("p.xlsx", data)
+            qscreens.question_screen(report, key="one")
+            qscreens.question_screen(report, key="two")
+
+        at = AppTest.from_function(page, default_timeout=30)
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertEqual(2, len(at.radio))
+        at.radio[0].set_value("Yes, each sub-customer is a job").run()
+        self.assertIsNone(at.radio[1].value)
 
     def test_the_upload_page_still_refuses_quickbooks_reports(self):
         import sys

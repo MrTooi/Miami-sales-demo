@@ -32,6 +32,7 @@ DONE_NOTE = ("No questions left doesn't mean every figure is final. Money Margen
 class _State:
     """This report's answers in this session, and where the owner is."""
     answers: qf.OwnerAnswers
+    name: str  # this screen and this report: every widget key starts with it (the automated review of ebeb09a)
     skipped: list[str] = dataclasses.field(default_factory=list)  # question keys, in the order skipped
     history: list[tuple[qq.Question, str]] = dataclasses.field(default_factory=list)  # (question, choice) saved
     changing: int | None = None  # the history entry being changed, if any
@@ -43,7 +44,7 @@ def _state(report: qp.ProfitAndLossDetail, key: str) -> _State:
     fingerprint = qf.report_fingerprint(report)
     name = f"{key}-{fingerprint}"  # another report, or another version of this one, starts afresh
     if name not in st.session_state:
-        st.session_state[name] = _State(qf.OwnerAnswers(report=fingerprint))
+        st.session_state[name] = _State(qf.OwnerAnswers(report=fingerprint), name)
     return st.session_state[name]
 
 
@@ -82,7 +83,7 @@ def question_screen(report: qp.ProfitAndLossDetail, cross_check=None, *, key: st
         elif listing.questions:
             st.info(f"You skipped {_plural(len(listing.questions), 'question')}. They stay on \"Needs a check\" "
                     "until you answer them.")
-            if st.button("Go through the skipped questions", key=f"{key}-again-{state.turn}"):
+            if st.button("Go through the skipped questions", key=f"{state.name}-again-{state.turn}"):
                 state.skipped.clear()
                 state.turn += 1
                 st.rerun()
@@ -90,13 +91,15 @@ def question_screen(report: qp.ProfitAndLossDetail, cross_check=None, *, key: st
             st.success("No questions left.")
             st.caption(DONE_NOTE)
 
-    _review(state, listing, key)
+    _review(state, listing)
     return state.answers
 
 
 def _ask(report: qp.ProfitAndLossDetail, state: _State, question: qq.Question, cross_check, *,
          previous: str | None = None, progress: tuple[int, int] | None = None) -> None:
-    widget = f"{question.key}-{state.turn}"
+    # Every widget belongs to this screen, this report and this turn: another report, or another screen on the
+    # page, never inherits a choice or a typed name (the automated review of ebeb09a).
+    widget = f"{state.name}-{question.key}-{state.turn}"
     if previous is None:
         number, total = progress or (question.number, question.total)
         st.markdown(f"**Question {number} of {total}**")
@@ -140,6 +143,10 @@ def _save(report: qp.ProfitAndLossDetail, state: _State, question: qq.Question, 
           cross_check) -> None:
     new = qq.answer(report, state.answers, question, choice, outside_job=outside, cross_check=cross_check,
                     answered_at=_now())
+    if choice == "outside job" and not (outside or "").strip():
+        # Kept on screen as it is (same turn), so the owner only has to type the name.
+        state.message = "Please type the job's name, or pick another answer."
+        return
     state.turn += 1
     if choice == qq.NOT_SURE:
         # "Not sure yet" clears any earlier answer to it (6a) and moves on, like skipping.
@@ -151,13 +158,10 @@ def _save(report: qp.ProfitAndLossDetail, state: _State, question: qq.Question, 
         state.message = "Left on \"Needs a check\". You can come back to it any time."
         return
     if new == state.answers:
-        if choice == "outside job" and not (outside or "").strip():
-            state.message = "Please type the job's name, or pick another answer."
-        else:
-            # The question no longer fits (an earlier answer changed what this line is): nothing was saved.
-            state.message = ("That question has changed since, so nothing was saved. The questions shown now are "
-                             "the current ones.")
-            state.changing = None
+        # The question no longer fits (an earlier answer changed what this line is): nothing was saved.
+        state.message = ("That question has changed since, so nothing was saved. The questions shown now are the "
+                         "current ones.")
+        state.changing = None
         return
     state.answers = new
     state.skipped = [k for k in state.skipped if k != question.key]
@@ -166,7 +170,7 @@ def _save(report: qp.ProfitAndLossDetail, state: _State, question: qq.Question, 
     state.message = "Saved."
 
 
-def _review(state: _State, listing: qq.QuestionList, key: str) -> None:
+def _review(state: _State, listing: qq.QuestionList) -> None:
     answered = len(state.history)
     left = len(listing.questions)
     with st.expander(f"Your answers ({answered}) and what's left ({left})"):
@@ -175,7 +179,7 @@ def _review(state: _State, listing: qq.QuestionList, key: str) -> None:
         for index, (question, choice) in enumerate(state.history):
             text, change = st.columns([4, 1])
             text.markdown(ui.md_text(f"{question.title} → {_label(question, choice)}"))
-            if change.button("Change", key=f"{key}-change-{index}-{state.turn}"):
+            if change.button("Change", key=f"{state.name}-change-{index}-{state.turn}"):
                 state.changing = index
                 state.turn += 1
                 st.rerun()
