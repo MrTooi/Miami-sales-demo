@@ -48,14 +48,33 @@ def plain(reason: str) -> str:
     return _BARE_AMOUNT.sub(lambda m: f"({m.group(1)}${m.group(2)})", text)
 
 
+def _held(figure: qf.Figure) -> tuple[int, int]:
+    """(lines held with a known amount, lines held whose amount can't be read), each line once."""
+    known, unknown = set(), set()
+    for hold in figure.holds:
+        if hold.row is not None:
+            (known if hold.amount is not None else unknown).add((hold.report, hold.row))
+    return len(known), len(unknown - known)
+
+
+def _held_text(figure: qf.Figure) -> str:
+    """The amount held, never understated: an amount that can't be read is said, not left out (the automated
+    review of 8a41156)."""
+    known, unknown = _held(figure)
+    parts = []
+    if known:
+        parts.append(money(figure.held_amount))
+    if unknown:
+        parts.append(f"{unknown} line{'' if unknown == 1 else 's'} of unknown amount")
+    return " plus ".join(parts)
+
+
 def cell(figure: qf.Figure) -> str:
     """A figure with its status beside it: "$4,000.00 · Complete" or "$3,800.00 · Needs a check ($50.00 held)"."""
     if figure.status == qp.COMPLETE:
         return f"{money(figure.amount)} · {FINAL}"
-    held = figure.held_amount
-    known = any(h.amount is not None and h.row is not None for h in figure.holds)
-    detail = f"{money(held)} held" if known else "see why below"
-    return f"{money(figure.amount)} · {NOT_FINAL} ({detail})"
+    amounts = _held_text(figure)
+    return f"{money(figure.amount)} · {NOT_FINAL} ({amounts + ' held' if amounts else 'see why below'})"
 
 
 def held_lines(figures: qf.Figures) -> dict[tuple[str, int | None], list[str]]:
@@ -82,10 +101,12 @@ def headline(report: qp.ProfitAndLossDetail, figures: qf.Figures) -> str:
         return f"After job costs, {where}: the business {made} {shown}. This figure is final for this report."
     # The count and the amount both come from this figure's own holds, each line once (the automated review of
     # 9234135: lines holding only a job or a customer aren't the business's).
-    lines = len({(hold.report, hold.row) for hold in profit.holds if hold.row is not None})
-    held = profit.held_amount
-    why = (f"{money(held)} on {lines} line{'' if lines == 1 else 's'} is still held back"
-           if lines else "something that applies to the whole report is still open")
+    known, unknown = _held(profit)
+    lines = known + unknown
+    if lines:
+        why = f"{lines} line{'' if lines == 1 else 's'} {'is' if lines == 1 else 'are'} still held back ({_held_text(profit)})"
+    else:
+        why = "something that applies to the whole report is still open"
     return (f"After job costs, {where}: the business {made} {shown} so far, but this isn't final yet: {why}. "
             "See what's missing below.")
 
