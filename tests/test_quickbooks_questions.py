@@ -371,6 +371,28 @@ class AnsweringTests(unittest.TestCase):
                 self.assertEqual("t2", given.lines[entry.row].answered_at)
                 self.assertEqual(cost, qq.answer(report, given, job, qq.NOT_SURE))
 
+    def test_a_vendor_cost_goes_to_the_customer_and_job_picked_when_job_names_repeat(self):
+        # The automated review of 3d403a6: two customers each have a "Job A".
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None),
+                                                     L(3, "Invoice", "1002", f"{Y}:Job A", D("3000"), None)])],
+                       "Expenses": [("Job Materials", [L(5, "Bill", "B-2", "Garden Supply (fictional)", D("900"),
+                                                         None)])]})
+        answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
+        answers = qq.answer(report, answers, first(qq.open_questions(report, answers), qq.ACCOUNT, "Job Materials"),
+                            qf.JOB_COSTS_ACCOUNT)
+        vendor = first(qq.open_questions(report, answers), qq.LINE, "$900.00")
+        jobs = [c for c in vendor.choices if c.value.startswith("job:")]
+        self.assertEqual({(X, "Job A"), (Y, "Job A")}, {tuple(c.value[4:].split(qq.SEPARATOR)) for c in jobs})
+        self.assertEqual(2, len({c.label for c in jobs}))  # the owner can tell them apart
+        for choice in jobs:
+            customer = choice.value[4:].split(qq.SEPARATOR)[0]
+            other = Y if customer == X else X
+            with self.subTest(customer):
+                figures = qf.figures(report, qq.answer(report, answers, vendor, choice.value))
+                self.assertEqual((), figures.warnings)
+                self.assertEqual(D("900"), figures.jobs[(customer, "Job A")]["job_costs"].amount)
+                self.assertEqual(D("0"), figures.jobs[(other, "Job A")]["job_costs"].amount or D("0"))
+
     def test_no_job_question_for_a_customer_without_jobs(self):
         # Simpler questions (plan step 6): Customer Y has no jobs in the report, so its customer-only sale holds no job
         # back (S8) and isn't asked about; Customer X's is.
