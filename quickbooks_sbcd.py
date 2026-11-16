@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 
 import job_intake as ji
 import quickbooks_layouts as qlayouts
@@ -175,6 +175,19 @@ class _Reader:
         self.placed: list[tuple[int, tuple[str, ...], tuple[str, ...], str | None]] = []  # row, cells, path, note
         self.grand_total: Decimal | None = None
         self.grand_seen = False
+        # Where each closing row is, by the name it closes, so a lookahead never rescans the report (the PR #139
+        # review: one scan per customer made large reports slow).
+        self.closings: dict[str, list[tuple[int, bool]]] = {}
+        self.grand_index: int | None = None
+        for index, (_, cells) in enumerate(self.rows):
+            kind, text = self.kind(cells)
+            if kind != "labelled":
+                continue
+            if text == GRAND_TOTAL and self.grand_index is None:
+                self.grand_index = index
+            match = TOTAL_FOR.fullmatch(text)
+            if match:
+                self.closings.setdefault(match.group(1), []).append((index, bool(match.group(2))))
 
     # -- helpers --
     def problem(self, row: int, text: str, customer: str | None | object = "current") -> None:
@@ -199,16 +212,17 @@ class _Reader:
     def lookahead_is_child(self, index: int, group: _Group) -> bool:
         """After a customer's own "Total for X", is the next heading its sub-customer? Only when the next
         closing row naming it or a group above it is "Total for X with sub-customers"."""
-        above = {g.name for g in self.stack[:-1]}
-        for _, cells in self.rows[index:]:
-            kind, text = self.kind(cells)
-            if kind == "labelled":
-                match = TOTAL_FOR.fullmatch(text)
-                if match and match.group(1) == group.name and match.group(2):
-                    return True
-                if (match and match.group(1) in above) or text == GRAND_TOTAL:
-                    return False
-        return False
+        def first_at_or_after(entries, wanted_with_sub=None):
+            positions = [i for i, with_sub in entries if i >= index and (wanted_with_sub is None or with_sub == wanted_with_sub)]
+            return positions[0] if positions else None
+
+        own = first_at_or_after(self.closings.get(group.name, []), True)
+        if own is None:
+            return False
+        stops = [first_at_or_after(self.closings.get(g.name, [])) for g in self.stack[:-1]]
+        if self.grand_index is not None and self.grand_index >= index:
+            stops.append(self.grand_index)
+        return all(stop is None or own < stop for stop in stops)
 
     def close_finished(self, index: int | None = None, upto: str | None = None) -> None:
         while self.stack and self.stack[-1].direct_closed:
@@ -225,7 +239,7 @@ class _Reader:
     def sums(self, lines: list) -> tuple[Decimal | None, Decimal | None]:
         """The exact sum of the lines' amounts (None if one isn't exact cents) and of their quantities (None if
         one isn't a number)."""
-        amounts = [qp.line_amount(cells[self.amount]) for _, cells in lines]
+        amounts = [qp.line_amount(cells[self.amount] if self.amount < len(cells) else "") for _, cells in lines]
         amount = None if any(a is None for a in amounts) else sum(amounts, ZERO)
         if self.quantity is None:
             return amount, ZERO
@@ -241,7 +255,7 @@ class _Reader:
         """Checks a total row's Amount (and Quantity, when shown) against its lines; returns the stored Amount
         as cents when it matched."""
         amount, quantity = self.sums(lines)
-        stored = cells[self.amount]
+        stored = cells[self.amount] if self.amount < len(cells) else ""
         cents = qp.total_cents(stored)
         if cents is None:
             reason = (f"the stored total '{stored}' isn't a whole number of cents (MargenX allows only Excel's "
@@ -370,11 +384,18 @@ class _Reader:
 def _times(quantity: Decimal, price: Decimal) -> Decimal | None:
     """Quantity × Sales price rounded half up to the cent, or None when it's too large to be money (never a crash:
     the automated review of 5f45bbd)."""
+    digits = len(quantity.as_tuple().digits) + len(price.as_tuple().digits)
+    if digits > 60:
+        return None  # more digits than any real price or quantity: held, never repaired
     try:
-        product = quantity * price
-        if product.copy_abs() > qp.MAX_MONEY:
-            return None
-        return product.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        with localcontext() as exact:
+            # Enough precision that the product is exact, so it is rounded once, to the cent (the automated review
+            # of 658ae53: default precision rounded it first).
+            exact.prec = digits + 5
+            product = quantity * price
+            if product.copy_abs() > qp.MAX_MONEY:
+                return None
+            return product.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     except InvalidOperation:
         return None
 
@@ -449,9 +470,12 @@ def reconcile(layout: qlayouts.ReportLayout, source: str, sheet: str = "") -> Sa
             amount=amount, customer_path=path, outcome=qp.INCLUDED if counts_as else qp.NOT_RESOLVED,
             counts_as=counts_as, reason=reason))
 
+    by_customer: dict[str, list[SalesLine]] = {}
+    for line in lines:
+        by_customer.setdefault(line.customer, []).append(line)
     coverage = {}
     for name, group in reader.customers.items():
-        mine = [l for l in lines if l.customer == name]
+        mine = by_customer.get(name, [])
         known = [l for l in mine if l.amount is not None]
         line_sum, _ = reader.sums(group.all_lines())
         coverage[name] = CustomerCoverage(

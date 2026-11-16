@@ -189,6 +189,32 @@ class HeldTests(unittest.TestCase):
         self.assertEqual(qp.NOT_RESOLVED, line.outcome)
         self.assert_held(report, BAY, "doesn't give its Amount")
 
+    def test_quantity_times_price_is_exact_before_it_is_rounded(self):
+        # The automated review of 658ae53: 1 × 1.00499999999999999999999999999 is 1.00 to the cent, never 1.01.
+        for amount, matches in (("1.00", True), ("1.01", False)):
+            with self.subTest(amount):
+                rows = fx.sbcd_rows(customers(bay_lines=[S(7, "Invoice", "1006", "Planters", 1, 1, amount=amount)]))
+                row = next(i for i, r in enumerate(rows, 1) if len(r) > 3 and r[3] == "1006")
+                # Stored exactly as text in the file: openpyxl would round it to a 16-digit number.
+                data = fx.xlsx(rows, stored={f"H{row}": "1.00499999999999999999999999999"})
+                report = qs.read_sales_by_customer_detail("sales.xlsx", data)
+                self.assertEqual("1.00499999999999999999999999999",
+                                 next(l for l in report.lines if l.num == "1006").price_text)
+                self.assertEqual(matches, report.customers[BAY].all_counted, report.problems)
+
+    def test_a_short_row_never_crashes_the_reader(self):
+        rows = fx.sbcd_rows(customers())
+        table = [(n, list(r)) for n, r in enumerate(rows, 1) if r]
+        found = qlayouts.recognise_sales_by_customer_detail(
+            [(n, [("" if c is None else str(c)) for c in r] + [""] * (10 - len(r))) for n, r in table], is_xlsx=True)
+        body = tuple((n, cells[:5]) if cells[2] == "Invoice" and cells[3] == "1006" else (n, cells)
+                     for n, cells in found.layout.body)
+        import dataclasses
+        report = qs.reconcile(dataclasses.replace(found.layout, body=body), "sales.xlsx")
+        line = next(l for l in report.lines if l.num == "1006")
+        self.assertEqual((qp.NOT_RESOLVED, None), (line.outcome, line.amount))
+        self.assertFalse(report.customers[BAY].all_counted)
+
     def test_lines_with_uneven_cents_or_dates_outside_the_period_are_held(self):
         uneven = S(7, "Invoice", "1006", "Planters", 1, "120.005", amount="120.005")
         late = S(7, "Invoice", "1008", "Planters", 1, 120)

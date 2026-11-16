@@ -91,7 +91,17 @@ def xlsx(rows, *, formulas: dict[str, str] | None = None, stored: dict[str, str]
          sheets: int = 1) -> bytes:
     """An Excel file of the rows. formulas: cell -> formula, written with the cell's value as its saved
     result, as QuickBooks' export does (openpyxl alone would save a formula with no result). stored:
-    cell -> the exact number text to store for that cell."""
+    cell -> the exact number text to store for that cell. A Decimal value is always stored exactly as written,
+    as the real export stores amounts ("870.56"): openpyxl alone would turn it into a 16-digit float
+    ("870.5599999999999"), which MargenX rightly refuses as not exact cents."""
+    from openpyxl.utils import get_column_letter
+
+    exact = {}
+    for number, row in enumerate(rows, 1):
+        for column, value in enumerate(row, 1):
+            if isinstance(value, Decimal):
+                exact[f"{get_column_letter(column)}{number}"] = format(value, "f")
+    stored = {**exact, **(stored or {})}
     book = Workbook()
     for index in range(sheets):
         sheet = book.active if index == 0 else book.create_sheet()
