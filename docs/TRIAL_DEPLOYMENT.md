@@ -175,7 +175,7 @@ Render's creation flow starts a first build at once, from the branch's latest co
 
 **Restarts:** Render restarts a *running* copy that stops by itself. That's a running copy, not an ended trial. **A Suspended service stays stopped** until someone presses Resume (section 8).
 
-**Suspend is not instant (measured twice in the B4 run, #141):** Render shows "Suspended" at once, and stops billing, but it delivers the stop signal to the copy **about 2 minutes later**. Until then the copy keeps running and serving open tabs. Once the signal arrives, the launcher stops MargenX and then the tunnel within the same second. This is why the stop procedure (section 7) cuts the Cloudflare side first.
+**Suspend is not instant (measured three times in the B4 run, #141: 121 s, 120 s, 121 s):** Render shows "Suspended" at once, and stops billing, but it delivers the stop signal to the copy **about 2 minutes later**. Until then the copy keeps running and serving open tabs. Once the signal arrives, the launcher stops MargenX and then the tunnel within the same second. This is why the stop procedure (section 7) **presses Suspend first**, so the countdown starts at once, and then deletes the tunnel's public hostname. That stops new requests, but not a tab that is already open.
 
 ## 6. The operator-only test copy's checks (made-up files only; results on PR #141, against the approved commit, before merge)
 The plan checks PR A by "a run against the operator-only copy, with results on the PR". These checks come from the PR #137 round-1 review (test requirements for A2) and the PR #141 round-1 review. Each is recorded on #141 **in words only**: no email, token, cookie, or screenshot showing them.
