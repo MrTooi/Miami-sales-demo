@@ -193,8 +193,10 @@ or every customer, must be held.
 ## 7. The two QuickBooks reports cross-checked (issue #128, step 5b)
 
 Sales come only from Profit and Loss Detail. Sales by Customer Detail only confirms or questions them,
-line by line. When it confirms every sales line of a job, that job can be Complete; one report alone
-never makes a job Complete.
+line by line. One report alone never makes a job Complete. A job can be Complete only when:
+- the second report confirms every line counted in its sales (owner-resolved ones too);
+- the owner has confirmed that both files were exported for the whole business, with no filter. A
+  filter QuickBooks doesn't print can't be seen in the files, and could leave out a cost account.
 
 **Worked by hand** (`tests/test_quickbooks_crosscheck.py`):
 - **The plan's $900 example, with both reports matching:** both jobs are held until the $900 vendor

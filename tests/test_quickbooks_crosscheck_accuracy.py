@@ -36,8 +36,8 @@ class KnownAnswerTests(unittest.TestCase):
                 self.assertTrue(check.usable, check.reasons)
                 self.assertEqual((pair.unmatched_pnl, pair.unmatched_sbcd),
                                  (len(check.pnl_unmatched), len(check.sbcd_unmatched)))
-                result = qf.figures(pnl, qf.OwnerAnswers(report=qf.report_fingerprint(pnl), sub_customers_are_jobs=True),
-                                    cross_check=check)
+                result = qf.figures(pnl, qf.OwnerAnswers(report=qf.report_fingerprint(pnl), sub_customers_are_jobs=True,
+                                                         unfiltered_pair=check.pair), cross_check=check)
                 self.assertEqual(set(pair.jobs), set(result.jobs))
                 for job, (cents, ok) in pair.jobs.items():
                     figures = result.jobs[job]

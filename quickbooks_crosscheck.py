@@ -14,7 +14,12 @@ Plan rules S3 and S4 (v7), and the step 5a review's guidance:
   $100 lines need two matches, never one). Customer and job are used where they're reliable: a pair whose
   Profit and Loss Name proves a customer or job that the other report's headings contradict isn't a
   match. Sales by Customer Detail's headings never prove ownership by themselves (step 5a).
-- A line that doesn't match, in either report, holds the figures it could change (quickbooks_figures).
+- A line that doesn't match, in either report, holds the figures it could change (quickbooks_figures). So
+  does any line counted in sales without a partner, whatever its type (an Income Journal Entry the owner
+  resolved as a reduction, say).
+- Matching reports still can't show a filter QuickBooks doesn't print (one that left out a cost account,
+  say). So a job's profit becomes Complete only once the owner confirms both files were exported for the
+  whole business, with no filter; that confirmation is bound to this exact pair of files (CrossCheck.pair).
   Other Income lines (a Deposit, an Expense adjustment, a Journal Entry...) aren't in the sales report at
   all, so they aren't matched; they stay governed by S1 and S9 (never counted by themselves).
 
@@ -39,6 +44,7 @@ class CrossCheck:
     """What the second report says about the first. usable: the reports cover the same scope and the second
     one reconciles completely, so its matches count; otherwise reasons says why not, in plain words."""
     pnl_fingerprint: str  # the Profit and Loss Detail it was made for (quickbooks_figures.report_fingerprint)
+    sbcd_fingerprint: str  # the Sales by Customer Detail it was made with (sales_fingerprint)
     usable: bool
     reasons: tuple[str, ...]
     matched: tuple[tuple[int, int], ...]  # (Profit and Loss row, Sales by Customer row)
@@ -46,6 +52,11 @@ class CrossCheck:
     sbcd_unmatched: tuple[int, ...]  # rows of Sales by Customer Detail with no match
     sbcd_unmatched_amounts: tuple[tuple[int, Decimal | None], ...]  # those rows with their amounts
     sbcd_jobs: dict  # Profit and Loss row -> (customer heading, sub-customer heading or None) of its match
+
+    @property
+    def pair(self) -> str:
+        """The two files this cross-check is about: what the owner's "no filter" confirmation is bound to."""
+        return f"{self.pnl_fingerprint}:{self.sbcd_fingerprint}"
 
 
 # The sales forms Sales by Customer Detail lists (seen in its export): only these are expected in both reports.
@@ -58,6 +69,17 @@ def _clean(text: str) -> str:
 
 def _key(transaction_type: str, num: str, date: str, amount: Decimal | None):
     return (_clean(transaction_type).casefold(), _clean(num), _clean(date), amount)
+
+
+def sales_fingerprint(sbcd: qs.SalesByCustomerDetail) -> str:
+    """The whole Sales by Customer Detail as read: company, dates, basis, footer, columns, and every row cell by cell."""
+    import hashlib
+    import json
+
+    layout = sbcd.layout
+    parts = [layout.company, layout.period, layout.basis, layout.footer, sorted(layout.columns.items()),
+             [[row, list(cells)] for row, cells in layout.body]]
+    return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
 
 
 def scope_problems(pnl: qp.ProfitAndLossDetail, sbcd: qs.SalesByCustomerDetail) -> list[str]:
@@ -110,6 +132,7 @@ def cross_check(pnl: qp.ProfitAndLossDetail, sbcd: qs.SalesByCustomerDetail) -> 
         matched.append((line.row, partner.row))
         jobs[line.row] = (partner.customer, partner.sub_customer)
     left = sorted(((l.row, l.amount) for group in waiting.values() for l in group), key=lambda pair: pair[0])
-    return CrossCheck(qf.report_fingerprint(pnl), not reasons, tuple(reasons), tuple(sorted(matched)),
+    return CrossCheck(qf.report_fingerprint(pnl), sales_fingerprint(sbcd), not reasons, tuple(reasons),
+                      tuple(sorted(matched)),
                       tuple(sorted(pnl_unmatched)),
                       tuple(row for row, _ in left), tuple(left), jobs)

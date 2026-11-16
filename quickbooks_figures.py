@@ -85,6 +85,9 @@ NOT_SURE_ACCOUNT = "not sure"
 ACCOUNT_USES = (JOB_COSTS_ACCOUNT, OVERHEAD_ACCOUNT, MIXED_ACCOUNT, NOT_SURE_ACCOUNT)
 
 CROSS_CHECK_REPORT = "Sales by Customer Detail"
+NO_FILTER_YET = ("The two reports agree, but a filter QuickBooks doesn't print can't be seen in the files: confirm both "
+                 "were exported for the whole business, with no filter (all customers, all accounts), before a job's "
+                 "profit can be Complete.")
 ONE_REPORT = ("One report alone can't make a job's profit Complete: a second report has to cross-check its "
               "sales first (issue #128, S3).")
 
@@ -125,6 +128,10 @@ class OwnerAnswers:
     or for an earlier version of this one, are never used (the PR #138 manual review, blocker 3)."""
     report: str = ""
     sub_customers_are_jobs: bool | None = None  # "Do you use sub-customers in QuickBooks for jobs?"
+    # "Both reports were exported for the whole business, with no filter (all customers, all accounts)": the pair
+    # of files it was said for (CrossCheck.pair). A filter QuickBooks doesn't print can't be seen in the files, so
+    # this is the only evidence that their scope agrees (the PR #140 manual review, blocker 2).
+    unfiltered_pair: str = ""
     accounts: Mapping[tuple[str, ...], AccountAnswer] = field(default_factory=dict)  # by account path as written
     lines: Mapping[int, LineAnswer] = field(default_factory=dict)  # by Excel row
 
@@ -245,6 +252,7 @@ class _Builder:
         self.report = report
         self.cross_check = cross_check
         self.one_report = True  # S3, until a usable cross-check lifts it (step 5b)
+        self.one_report_reason = ONE_REPORT
         self.warnings: list[str] = []
         if answers != OwnerAnswers() and answers.report != report_fingerprint(report):
             self.warnings.append("These answers were given for a different report, or for an earlier version of this "
@@ -557,12 +565,22 @@ class _Builder:
         if not check.usable:
             self.warn("Sales by Customer Detail couldn't be used as the cross-check: " + "; ".join(check.reasons) + ".")
             return
-        self.one_report = False
+        if self.answers.unfiltered_pair != check.pair:
+            self.one_report_reason = NO_FILTER_YET
+        else:
+            self.one_report = False
         by_row = {r.row: r for r in resolutions}
-        for row in check.pnl_unmatched:
+        # Every line that ends up in sales needs a partner in the second report, whatever its type: a line the owner
+        # resolved as revenue or a reduction (an Income Journal Entry, say) is checked like any other (the PR #140
+        # manual review, blocker 1).
+        partnered = {pnl_row for pnl_row, _ in check.matched}
+        counted_alone = [r.row for r in resolutions if r.kind in (REVENUE, REDUCTION) and r.row not in partnered]
+        for row in sorted(set(check.pnl_unmatched) | set(counted_alone)):
             line = self.lines[row]
             shown = f"{line.amount:,.2f}" if line.amount is not None else "amount unknown"
-            customer, job = self.who(line, None)
+            counted = by_row.get(row)
+            customer, job = ((counted.customer, counted.job) if counted is not None and counted.kind in (REVENUE, REDUCTION)
+                             else self.who(line, None))
             hold = Hold(row, line.amount, f"Row {row} ({shown}) isn't in Sales by Customer Detail, so the two reports "
                                           "don't agree on it.")
             self.hold("company", None, "sales", hold)
@@ -593,7 +611,9 @@ class _Builder:
         layout = self.report.layout
         return (f"Within QuickBooks' Profit and Loss Detail for {layout.company}, {layout.period}, "
                 f"{layout.basis.lower()} basis. A filter QuickBooks doesn't print in the file can't be seen, so "
-                "this isn't proof the report covers the whole business.")
+                "this isn't proof the report covers the whole business"
+                + (", beyond your word that both reports were exported with no filter."
+                   if not self.one_report else "."))
 
     def assemble(self):
         holds: dict[tuple, list[Hold]] = {}
@@ -645,7 +665,8 @@ class _Builder:
             s, c = figure(("job", job, "sales")), figure(("job", job, "job_costs"))
             jobs[job] = {"sales": s, "job_costs": c,
                          "profit_after_job_costs": derived(s.amount - c.amount, s, c,
-                                                           extra=(Hold(None, None, ONE_REPORT),) if self.one_report else ())}
+                                                           extra=(Hold(None, None, self.one_report_reason),)
+                                                           if self.one_report else ())}
         return company, customers, jobs
 
 

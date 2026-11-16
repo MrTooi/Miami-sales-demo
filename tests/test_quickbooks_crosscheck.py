@@ -52,9 +52,11 @@ COSTS = [L(5, "Bill", "B-1", f"{X}:Job A", D("1000.0"), D("1000.0")),
          L(6, "Bill", "B-2", f"{X}:Job B", D("500.0"), D("1500.0"))]
 
 
-def figures(report, check, lines=None, accounts=None):
+def figures(report, check, lines=None, accounts=None, unfiltered=True):
+    """The figures with the owner's answers; unfiltered: the owner confirmed this pair was exported with no filter."""
     answers = qf.OwnerAnswers(report=qf.report_fingerprint(report), sub_customers_are_jobs=True,
-                              accounts=accounts if accounts is not None else JOB_COSTS, lines=lines or {})
+                              accounts=accounts if accounts is not None else JOB_COSTS, lines=lines or {},
+                              unfiltered_pair=check.pair if (unfiltered and check is not None) else "")
     return qf.figures(report, answers, cross_check=check)
 
 
@@ -204,6 +206,41 @@ class MatchingTests(unittest.TestCase):
         deposit = next(l.row for l in report.lines if l.transaction_type == "Deposit")
         self.assertIn(("Profit and Loss Detail", deposit), holds(result.jobs[A]["sales"]))  # still held: never counted
         self.assertEqual(qp.COMPLETE, result.jobs[B]["profit_after_job_costs"].status)
+
+
+class ManualReviewOfCbd4c0eTests(unittest.TestCase):
+    """The PR #140 manual review's two blockers, with the reviewer's own examples."""
+
+    def test_a_line_counted_without_a_partner_holds_whatever_its_type(self):
+        # Blocker 1: a $5,000 invoice in both reports, and a -$500 Income Journal Entry only in Profit and Loss Detail,
+        # resolved by the owner as a sales reduction for Job A: never $4,500 Complete.
+        report = pnl([L(2, "Invoice", "1001", f"{X}:Job A", D("5000.00"), D("5000.00")),
+                      L(3, "Journal Entry", "JE-7", f"{X}:Job A", D("-500.00"), D("4500.00"))])
+        check = qc.cross_check(report, sbcd([(X, [], [("Job A", [S(2, "Invoice", "1001", "Design", 1, 5000)])])]))
+        self.assertEqual(((), ()), (check.pnl_unmatched, check.sbcd_unmatched))  # not a sales form: not expected there
+        entry = next(l.row for l in report.lines if l.num == "JE-7")
+        result = figures(report, check, lines={entry: qf.LineAnswer(qf.REDUCTION)})
+        self.assertEqual(D("4500"), result.jobs[A]["sales"].amount)
+        for figure in (result.jobs[A]["sales"], result.jobs[A]["profit_after_job_costs"], result.customers[X]["sales"],
+                       result.company["sales"]):
+            self.assertIn(("Profit and Loss Detail", entry), holds(figure))
+            self.assertEqual(qp.NEEDS_A_CHECK, figure.status)
+
+    def test_a_job_is_complete_only_once_the_owner_confirms_no_filter_for_this_pair(self):
+        # Blocker 2: matching reports can't show a filter QuickBooks doesn't print (one that left out a cost account),
+        # so the owner's word, bound to these two files, is needed before a job's profit can be Complete.
+        report = pnl(both_jobs_income(), COSTS)
+        check = qc.cross_check(report, sbcd(both_jobs_sales()))
+        unconfirmed = figures(report, check, unfiltered=False)
+        self.assertEqual([qf.NO_FILTER_YET], [h.reason for h in unconfirmed.jobs[A]["profit_after_job_costs"].holds])
+        other_pair = qc.cross_check(report, sbcd(both_jobs_sales(S(8, "Invoice", "1010", "Design", 1, 5))))
+        answers = qf.OwnerAnswers(report=qf.report_fingerprint(report), sub_customers_are_jobs=True, accounts=JOB_COSTS,
+                                  unfiltered_pair=other_pair.pair)
+        said_for_another_pair = qf.figures(report, answers, cross_check=check)
+        self.assertEqual(qp.NEEDS_A_CHECK, said_for_another_pair.jobs[A]["profit_after_job_costs"].status)
+        confirmed = figures(report, check)
+        self.assertEqual(qp.COMPLETE, confirmed.jobs[A]["profit_after_job_costs"].status)
+        self.assertIn("beyond your word that both reports were exported with no filter", confirmed.scope)
 
 
 class ScopeTests(unittest.TestCase):
