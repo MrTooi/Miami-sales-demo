@@ -95,13 +95,16 @@ class QuestionScreenTests(unittest.TestCase):
         self.assertIs(False, answers(at).sub_customers_are_jobs)
 
     def test_saving_the_same_answer_again_says_it_is_unchanged(self):
-        # The automated review of 1a4bc4a: within the same second the answers are identical; that's not "changed since".
-        at = save(start(), "Yes, each sub-customer is a job")
-        before = answers(at)
-        button(at, "Back").click().run()
-        save(at, "Yes, each sub-customer is a job")
+        # The automated reviews of 1a4bc4a and d2bb8b5: with the clock frozen the answers are identical; that's
+        # "unchanged", never "changed since".
+        from unittest import mock
+        with mock.patch("quickbooks_screens._now", return_value="2026-11-15T00:00:00+00:00"):
+            at = save(start(), "Yes, each sub-customer is a job")
+            before = answers(at)
+            button(at, "Back").click().run()
+            save(at, "Yes, each sub-customer is a job")
         infos = [i.value for i in at.info]
-        self.assertTrue("Your answer is unchanged." in infos or "Saved." in infos, infos)
+        self.assertIn("Your answer is unchanged.", infos)
         self.assertNotIn("changed since", " ".join(infos))
         self.assertEqual(before.sub_customers_are_jobs, answers(at).sub_customers_are_jobs)
         self.assertEqual([MATERIALS], title(at))
@@ -304,6 +307,74 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual(before, at.session_state["answers"])
         self.assertIn("That question has changed since, so nothing was saved. The questions shown now are the current "
                       "ones.", [i.value for i in at.info])
+
+    @staticmethod
+    def two_reports():
+        """A page with a Profit and Loss report and a Sales by Customer Detail; session_state["product"] picks
+        which second report, so only the second report can be swapped."""
+        def page():
+            import sys
+            from decimal import Decimal as D
+            from pathlib import Path
+            import streamlit as st
+            for folder in (Path.cwd(), Path.cwd() / "tests"):
+                sys.path.insert(0, str(folder))
+            import quickbooks_crosscheck as qc
+            import quickbooks_fixtures as fx
+            import quickbooks_pnl as qp
+            import quickbooks_sbcd as qs
+            import quickbooks_screens as qscreens
+            x = "Customer X (fictional)"
+            report = qp.read_profit_and_loss_detail("p.xlsx", fx.xlsx(fx.report_rows({"Income": [("Design income", [
+                fx.line(2, "Invoice", "1001", f"{x}:Job A", D("4000"), None)])]})))
+            product = st.session_state.get("product", "Design")
+            sales = qs.read_sales_by_customer_detail("s.xlsx", fx.xlsx(fx.sbcd_rows(
+                [(x, [], [("Job A", [fx.sale(2, "Invoice", "1001", product, 1, 4000)])])])))
+            check = qc.cross_check(report, sales)
+            st.session_state["pair"] = check.pair
+            st.session_state["answers"] = qscreens.question_screen(report, check)
+
+        at = AppTest.from_function(page, default_timeout=30)
+        at.run()
+        save(at, "Yes, each sub-customer is a job")
+        assert title(at) == ["Did you export both reports for the whole business, with no filter?"], title(at)
+        return at
+
+    def swap_second_report(self, at):
+        first_pair = at.session_state["pair"]
+        at.session_state["product"] = "Design work"
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertNotEqual(first_pair, at.session_state["pair"])
+
+    def test_an_unsaved_no_filter_yes_never_carries_to_another_pair(self):
+        # The PR #143 manual review, blocker: "Yes" picked for pair A, not saved; only the second report is replaced.
+        at = self.two_reports()
+        at.radio[0].set_value("Yes, both have no filter").run()
+        self.assertFalse(button(at, "Save answer").disabled)
+        self.swap_second_report(at)
+        self.assertEqual(["Did you export both reports for the whole business, with no filter?"], title(at))
+        self.assertIsNone(at.radio[0].value)
+        self.assertTrue(button(at, "Save answer").disabled)
+        self.assertEqual("", at.session_state["answers"].unfiltered_pair)
+
+    def test_skipping_one_pair_never_skips_another(self):
+        at = self.two_reports()
+        button(at, "Skip for now").click().run()
+        self.assertEqual([], title(at))
+        self.swap_second_report(at)
+        self.assertEqual(["Did you export both reports for the whole business, with no filter?"], title(at))
+
+    def test_a_confirmation_counts_only_for_the_pair_in_use(self):
+        at = self.two_reports()
+        save(at, "Yes, both have no filter")
+        self.assertEqual(at.session_state["pair"], at.session_state["answers"].unfiltered_pair)
+        review = next(e for e in at.expander if e.label.startswith("Your answers"))
+        self.assertTrue(review.label.startswith("Your answers (2)"), review.label)
+        self.swap_second_report(at)
+        review = next(e for e in at.expander if e.label.startswith("Your answers"))
+        self.assertTrue(review.label.startswith("Your answers (1)"), review.label)
+        self.assertEqual(["Did you export both reports for the whole business, with no filter?"], title(at))
 
     def test_the_upload_page_still_refuses_quickbooks_reports(self):
         import sys
