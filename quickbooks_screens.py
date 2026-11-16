@@ -213,6 +213,16 @@ def _save(report: qp.ProfitAndLossDetail, state: _State, question: qq.Question, 
         state.changing = None
         state.message = "Left on \"Needs a check\". You can come back to it any time."
         return
+    shown = _label(question, choice)
+    if choice == "outside job":
+        shown = f"A job that isn't in this report: \"{outside.strip()}\""
+    if new == state.answers and any(e.question.key == question.key and e.shown == shown and _stored(e, new)
+                                    for e in state.history):
+        # The same answer saved again (within the same second, so nothing changed): kept, not "changed since"
+        # (the automated review of 1a4bc4a).
+        state.changing = None
+        state.message = "Your answer is unchanged."
+        return
     if new == state.answers:
         # The question no longer fits (an earlier answer changed what this line is): nothing was saved.
         state.message = ("That question has changed since, so nothing was saved. The questions shown now are the "
@@ -221,9 +231,6 @@ def _save(report: qp.ProfitAndLossDetail, state: _State, question: qq.Question, 
         return
     state.answers = new
     state.skipped = [k for k in state.skipped if k != question.key]
-    shown = _label(question, choice)
-    if choice == "outside job":
-        shown = f"A job that isn't in this report: \"{outside.strip()}\""
     state.history = [e for e in state.history if e.question.key != question.key] + [_Entry(question, choice, shown)]
     state.history = [e for e in state.history if _stored(e, new)]  # answers replaced by this one are gone
     state.changing = None

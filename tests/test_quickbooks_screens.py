@@ -94,6 +94,18 @@ class QuestionScreenTests(unittest.TestCase):
         save(at, "No, show profit by customer")
         self.assertIs(False, answers(at).sub_customers_are_jobs)
 
+    def test_saving_the_same_answer_again_says_it_is_unchanged(self):
+        # The automated review of 1a4bc4a: within the same second the answers are identical; that's not "changed since".
+        at = save(start(), "Yes, each sub-customer is a job")
+        before = answers(at)
+        button(at, "Back").click().run()
+        save(at, "Yes, each sub-customer is a job")
+        infos = [i.value for i in at.info]
+        self.assertTrue("Your answer is unchanged." in infos or "Saved." in infos, infos)
+        self.assertNotIn("changed since", " ".join(infos))
+        self.assertEqual(before.sub_customers_are_jobs, answers(at).sub_customers_are_jobs)
+        self.assertEqual([MATERIALS], title(at))
+
     def test_keep_my_answer_changes_nothing(self):
         at = save(start(), "Yes, each sub-customer is a job")
         before = answers(at)
