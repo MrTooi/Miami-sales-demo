@@ -90,6 +90,8 @@ class QuestionList:
 
     @property
     def done(self) -> bool:
+        """No questions left. This never means the figures are Complete: held lines, report problems and the
+        figures' own statuses can still hold them back, and the screen (6b) must say so (PR #142 manual review)."""
         return not self.questions
 
 
@@ -157,8 +159,7 @@ def open_questions(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
                             small_print="Plan rule S5", choices=(Choice("yes", "Yes, each sub-customer is a job"),
                                                                  Choice("no", "No, show profit by customer"))))
 
-    if cross_check is not None and getattr(cross_check, "usable", False) and (
-            not bound or answers.unfiltered_pair != cross_check.pair):
+    if _cross_check_for(report, cross_check) and (not bound or answers.unfiltered_pair != cross_check.pair):
         pending.append(dict(key="no-filter", kind=NO_FILTER, pair=cross_check.pair,
                             title="Did you export both reports for the whole business, with no filter?",
                             details=("No filter means all customers and all accounts, for the same dates.",
@@ -298,53 +299,64 @@ def answer(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | None, ques
     if question.kind == JOBS:
         return dataclasses.replace(answers, sub_customers_are_jobs=choice == "yes")
     if question.kind == NO_FILTER:
-        if cross_check is None or not getattr(cross_check, "usable", False) or cross_check.pair != question.pair:
-            return answers  # only the pair of reports the question was asked about can be confirmed
+        if not _cross_check_for(report, cross_check) or cross_check.pair != question.pair:
+            return answers  # only the pair of reports the question was asked about, made for this report
         return dataclasses.replace(answers, unfiltered_pair=cross_check.pair)
     if question.kind == ACCOUNT:
         entries = tuple(question.entries) if choice == qf.OVERHEAD_ACCOUNT else ()  # exactly the entries shown
         accounts = {**answers.accounts, question.account: qf.AccountAnswer(choice, entries, answered_at)}
         return dataclasses.replace(answers, accounts=accounts)
     lines = dict(answers.lines)
-    previous = lines.get(question.row)
     if question.key.startswith("job:"):
         # Every choice of a "which job" question, overhead included (the automated reviews of 872a31a, bbee1be).
         # What the line is comes from the question, never from the earlier answer: after "overhead", a job makes
         # it a job cost again.
         if not _still_current(report, answers, question):
             return answers  # the line has been answered (or reopened) as something else since this question was asked
-        kind = question.line_kind
+        base, kind = _classification(answers, question.row), question.line_kind
+        common = dict(answered_at=answered_at, asked=question.key, base=base)
         if choice == qf.OVERHEAD:
-            lines[question.row] = qf.LineAnswer(qf.OVERHEAD, answered_at=answered_at)
+            lines[question.row] = qf.LineAnswer(qf.OVERHEAD, **common)
         elif choice.startswith("job:"):
             customer, job = choice[4:].split(SEPARATOR, 1)
             named = qf.names_of(next(l for l in report.lines if l.row == question.row))[0]
-            lines[question.row] = qf.LineAnswer(kind, customer=None if named else customer, job=job,
-                                                answered_at=answered_at)
+            lines[question.row] = qf.LineAnswer(kind, customer=None if named else customer, job=job, **common)
         elif choice == "no job":
-            lines[question.row] = qf.LineAnswer(kind, no_job=True, answered_at=answered_at)
+            lines[question.row] = qf.LineAnswer(kind, no_job=True, **common)
         else:
             if not (outside_job or "").strip():
                 return answers  # an outside job must be named; the question stays open
-            lines[question.row] = qf.LineAnswer(kind, outside_job=outside_job.strip(), answered_at=answered_at)
+            lines[question.row] = qf.LineAnswer(kind, outside_job=outside_job.strip(), **common)
     else:
-        lines[question.row] = qf.LineAnswer(choice, answered_at=answered_at)
+        lines[question.row] = qf.LineAnswer(choice, answered_at=answered_at, asked=question.key)
     return dataclasses.replace(answers, lines=lines)
 
 
-def _own_kinds(question: Question) -> set[str]:
-    """What a "which job" question's line can be while the question still applies: the kind it showed, or the
-    overhead the question itself offers."""
-    return {question.line_kind} | ({qf.OVERHEAD} if qf.OVERHEAD in {c.value for c in question.choices} else set())
+def _cross_check_for(report: qp.ProfitAndLossDetail, cross_check) -> bool:
+    """A usable cross-check made for this very Profit and Loss report (PR #142 manual review, blocker 2)."""
+    return (cross_check is not None and getattr(cross_check, "usable", False)
+            and getattr(cross_check, "pnl_fingerprint", None) == qf.report_fingerprint(report))
+
+
+def _classification(answers: qf.OwnerAnswers, row: int) -> qf.LineAnswer | None:
+    """The owner's own answer about what the line is (from "What is this line?"), without any job answer on top;
+    None when MargenX works it out by itself."""
+    current = answers.lines.get(row)
+    if current is not None and current.asked.startswith("job:"):
+        return current.base
+    return current
 
 
 def _still_current(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers, question: Question) -> bool:
-    previous = answers.lines.get(question.row)
-    if previous is not None:
-        now = previous.kind
-    else:
-        now = next(r for r in qf.figures(report, answers).resolutions if r.row == question.row).kind
-    return now in _own_kinds(question)
+    """A "which job" question still applies only while the line is what the question showed: the owner's latest
+    answer about what it is (or, with none, what MargenX works out by itself) is the kind the question showed.
+    So an old job question can never undo a later "overhead" given to "What is this line?" (PR #142 manual
+    review, blocker 1)."""
+    base = _classification(answers, question.row)
+    if base is not None:
+        return base.kind == question.line_kind
+    without = dataclasses.replace(answers, lines={r: a for r, a in answers.lines.items() if r != question.row})
+    return next(r for r in qf.figures(report, without).resolutions if r.row == question.row).kind == question.line_kind
 
 
 def _reopen(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers, question: Question) -> qf.OwnerAnswers:
@@ -352,20 +364,22 @@ def _reopen(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers, question: 
     if question.kind == JOBS:
         return dataclasses.replace(answers, sub_customers_are_jobs=None)
     if question.kind == NO_FILTER:
+        if answers.unfiltered_pair != question.pair:
+            return answers  # a confirmation of another pair of reports is never cleared by this question
         return dataclasses.replace(answers, unfiltered_pair="")
     if question.kind == ACCOUNT:
         return dataclasses.replace(answers, accounts={k: v for k, v in answers.accounts.items() if k != question.account})
     lines = dict(answers.lines)
     if question.key.startswith("job:"):
-        if question.row not in lines or not _still_current(report, answers, question):
+        current = lines.get(question.row)
+        if current is None or current.asked != question.key or not _still_current(report, answers, question):
             return answers  # nothing of this question's to reopen
-        previous = lines.pop(question.row)
-        # Only this question's own answer (the job, or its overhead) is reopened. What the line is, as the
-        # question showed it, stays when MargenX can't work it out by itself (the owner said it).
-        automatic = next(r for r in qf.figures(report, dataclasses.replace(answers, lines=lines)).resolutions
-                         if r.row == question.row)
-        if question.line_kind != automatic.kind:
-            lines[question.row] = qf.LineAnswer(question.line_kind, answered_at=previous.answered_at)
+        # Only this question's own answer (the job, or its overhead) is reopened: the owner's own answer about
+        # what the line is, if any, is put back exactly as it was given.
+        if current.base is None:
+            lines.pop(question.row)
+        else:
+            lines[question.row] = current.base
         return dataclasses.replace(answers, lines=lines)
     lines.pop(question.row, None)
     return dataclasses.replace(answers, lines=lines)

@@ -197,6 +197,43 @@ class AnsweringTests(unittest.TestCase):
         self.assertEqual(first_check.pair,
                          qq.answer(report, answers, asked, "yes", cross_check=first_check).unfiltered_pair)
 
+    def test_no_filter_is_only_asked_and_answered_for_a_cross_check_of_this_report(self):
+        # PR #142 manual review, blocker 2: report A is current, but the cross-check passed in was made for report B.
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None)])]})
+        other = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None),
+                                                    L(3, "Invoice", "1002", f"{X}:Job A", D("1"), None)])]})
+        sales = qs.read_sales_by_customer_detail("s.xlsx", fx.xlsx(fx.sbcd_rows(
+            [(X, [], [("Job A", [S(2, "Invoice", "1001", "Design", 1, 4000)])])])))
+        own, stale = qc.cross_check(report, sales), qc.cross_check(other, sales)
+        self.assertTrue(own.usable)
+        if not stale.usable:  # make sure the guard, not "usable", is what's tested
+            import dataclasses
+            stale = dataclasses.replace(stale, usable=True, reasons=())
+        answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
+        self.assertNotIn(qq.NO_FILTER, {q.kind for q in qq.open_questions(report, answers, stale).questions})
+        asked = first(qq.open_questions(report, answers, own), qq.NO_FILTER)
+        import dataclasses
+        forged = dataclasses.replace(asked, pair=stale.pair)
+        self.assertEqual(answers, qq.answer(report, answers, forged, "yes", cross_check=stale))
+
+    def test_not_sure_on_an_old_no_filter_question_keeps_a_newer_pairs_confirmation(self):
+        # PR #142 manual review, warning 1 (and the automated review of c909b95).
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None)])]})
+
+        def check(product):
+            sales = qs.read_sales_by_customer_detail("s.xlsx", fx.xlsx(fx.sbcd_rows(
+                [(X, [], [("Job A", [S(2, "Invoice", "1001", product, 1, 4000)])])])))
+            return qc.cross_check(report, sales)
+
+        a, b = check("Design"), check("Design work")
+        answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
+        old = first(qq.open_questions(report, answers, a), qq.NO_FILTER)
+        new = first(qq.open_questions(report, answers, b), qq.NO_FILTER)
+        confirmed = qq.answer(report, answers, new, "yes", cross_check=b)
+        self.assertEqual(b.pair, confirmed.unfiltered_pair)
+        self.assertEqual(confirmed, qq.answer(report, confirmed, old, qq.NOT_SURE, cross_check=b))
+        self.assertEqual("", qq.answer(report, confirmed, new, qq.NOT_SURE, cross_check=b).unfiltered_pair)
+
     def test_answers_for_another_report_are_never_carried_over(self):
         report, other = shop(), read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("10"), None)])]})
         theirs = qq.answer(other, None, qq.open_questions(other).questions[0], "yes")
@@ -290,19 +327,28 @@ class AnsweringTests(unittest.TestCase):
         self.assertIn(qf.OVERHEAD, [c.value for c in job.choices])
         return report, entry, cost, job
 
-    def test_a_cost_called_overhead_then_given_a_job_is_a_job_cost(self):
-        # On a cost line the job question itself offers overhead, so the latest answer wins either way.
-        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None)])],
-                       "Expenses": [("Job Materials", [L(5, "Journal Entry", "JE-1", "Vendor (fictional)", D("10"),
-                                                         None)])]})
+    def test_an_old_job_question_never_undoes_a_later_overhead(self):
+        # PR #142 manual review, blocker 1: a job cost, its job question, then "overhead" on "What is this line?".
+        # The old job question, answered with a job or with "Not sure yet", changes nothing.
+        report, entry, cost, job = self.held_cost_entry()
+        overhead = qq.answer(report, cost, entry, qf.OVERHEAD, answered_at="t2")
+        for choice in (job.choices[0].value, qf.OVERHEAD, "outside job", qq.NOT_SURE):
+            with self.subTest(choice):
+                self.assertEqual(overhead, qq.answer(report, overhead, job, choice, outside_job="Job Z"))
+        self.assertEqual((qf.OVERHEAD, "t2"), (overhead.lines[entry.row].kind, overhead.lines[entry.row].answered_at))
+        self.assertNotIn(job.key, {q.key for q in qq.open_questions(report, overhead).questions})
+
+    def test_reopening_a_job_answer_puts_back_the_owners_own_answer_exactly(self):
+        # PR #142 manual review, blocker 1: the classification comes back with its own time, never the job answer's.
+        report, entry, _, _ = self.held_cost_entry()
         answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
-        entry = first(qq.open_questions(report, answers), qq.LINE, "$10.00")
-        cost = qq.answer(report, answers, entry, qf.JOB_COST)
+        cost = qq.answer(report, answers, entry, qf.JOB_COST, answered_at="t1")
         job = first(qq.open_questions(report, cost), qq.LINE, "Which job")
-        overhead = qq.answer(report, cost, entry, qf.OVERHEAD)
-        assigned = qq.answer(report, overhead, job, job.choices[0].value)
-        self.assertEqual((qf.JOB_COST, "Job A"), (assigned.lines[entry.row].kind, assigned.lines[entry.row].job))
-        self.assertEqual((), qf.figures(report, assigned).warnings)
+        for choice in (job.choices[0].value, qf.OVERHEAD):
+            with self.subTest(choice):
+                given = qq.answer(report, cost, job, choice, answered_at="t2")
+                self.assertEqual("t2", given.lines[entry.row].answered_at)
+                self.assertEqual(cost, qq.answer(report, given, job, qq.NOT_SURE))
 
     def test_no_job_question_for_a_customer_without_jobs(self):
         # Simpler questions (plan step 6): Customer Y has no jobs in the report, so its customer-only sale holds no job
