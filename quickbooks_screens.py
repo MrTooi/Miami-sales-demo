@@ -28,13 +28,21 @@ DONE_NOTE = ("No questions left doesn't mean every figure is final. Money Margen
              "Each figure shows its own status.")
 
 
+@dataclasses.dataclass(frozen=True)
+class _Entry:
+    """One saved answer, as the owner gave it."""
+    question: qq.Question
+    choice: str
+    shown: str  # in the owner's words, with the job's name for an outside job (the automated review of a2a7063)
+
+
 @dataclasses.dataclass
 class _State:
     """This report's answers in this session, and where the owner is."""
     answers: qf.OwnerAnswers
     name: str  # this screen and this report: every widget key starts with it (the automated review of ebeb09a)
     skipped: list[str] = dataclasses.field(default_factory=list)  # question keys, in the order skipped
-    history: list[tuple[qq.Question, str]] = dataclasses.field(default_factory=list)  # (question, choice) saved
+    history: list[_Entry] = dataclasses.field(default_factory=list)  # saved answers, oldest first
     changing: int | None = None  # the history entry being changed, if any
     turn: int = 0  # changes every time a question is saved, so a fresh question never starts with a choice made
     message: str = ""  # what happened to the last answer, shown once
@@ -56,10 +64,58 @@ def _label(question: qq.Question, value: str) -> str:
     return next((c.label for c in question.choices if c.value == value), value)
 
 
+def _stored(entry: _Entry, answers: qf.OwnerAnswers) -> bool:
+    """Whether the answer is still recorded at all (a later answer to another question can replace it)."""
+    question = entry.question
+    if question.kind == qq.JOBS:
+        return answers.sub_customers_are_jobs is (entry.choice == "yes")
+    if question.kind == qq.NO_FILTER:
+        return answers.unfiltered_pair == question.pair
+    if question.kind == qq.ACCOUNT:
+        stored = answers.accounts.get(question.account)
+        return stored is not None and stored.use == entry.choice
+    return _own_line_answer(entry, answers) is not None
+
+
+def _own_line_answer(entry: _Entry, answers: qf.OwnerAnswers) -> qf.LineAnswer | None:
+    """This entry's own line answer: the recorded one, or the owner's classification a job answer builds on."""
+    stored = answers.lines.get(entry.question.row)
+    if stored is None:
+        return None
+    if stored.asked == entry.question.key:
+        return stored
+    if stored.base is not None and stored.base.asked == entry.question.key:
+        return stored.base
+    return None
+
+
+def _in_use(entry: _Entry, answers: qf.OwnerAnswers, result: qf.Figures, open_keys: set[str]) -> bool:
+    """Whether a saved answer still counts. A later answer can make an earlier one not apply (sub-customers no
+    longer jobs, a line answered as something else): it's then kept but shown apart, never counted as done (the
+    automated review of a2a7063)."""
+    question = entry.question
+    if question.kind == qq.JOBS:
+        return answers.sub_customers_are_jobs is (entry.choice == "yes")
+    if question.kind == qq.NO_FILTER:
+        return answers.unfiltered_pair == question.pair and question.key not in open_keys
+    if question.kind == qq.ACCOUNT:
+        stored = answers.accounts.get(question.account)
+        return stored is not None and stored.use == entry.choice and question.key not in open_keys
+    if _own_line_answer(entry, answers) is None:
+        return False
+    used = next((r.answer for r in result.resolutions if r.row == question.row), None)
+    if used != answers.lines.get(question.row):
+        return False
+    return not question.key.startswith("job:") or entry.choice == qf.OVERHEAD or result.jobs_on
+
+
 def question_screen(report: qp.ProfitAndLossDetail, cross_check=None, *, key: str = "qbo") -> qf.OwnerAnswers:
     """Show the open questions about this report and return the owner's answers so far (bound to the report)."""
     state = _state(report, key)
     listing = qq.open_questions(report, state.answers, cross_check)
+    result = qf.figures(report, state.answers, cross_check=cross_check)
+    open_keys = {q.key for q in listing.questions}
+    in_use = [i for i, e in enumerate(state.history) if _in_use(e, state.answers, result, open_keys)]
 
     for problem in listing.report_problems:
         st.error(ui.md_text(f"A problem in the report itself: {problem}"))
@@ -70,15 +126,15 @@ def question_screen(report: qp.ProfitAndLossDetail, cross_check=None, *, key: st
         state.message = ""
 
     if state.changing is not None:
-        question, previous = state.history[state.changing]
-        _ask(report, state, question, cross_check, previous=previous)
+        entry = state.history[state.changing]
+        _ask(report, state, entry.question, cross_check, previous=entry.shown, in_use=in_use)
     else:
         waiting = [q for q in listing.questions if q.key not in state.skipped]
         if waiting:
             # Progress counts what's answered too: answering can open new questions (jobs, entries), so the
             # total can grow, but the count never goes back to 1.
-            done = len(state.history)
-            _ask(report, state, waiting[0], cross_check,
+            done = len(in_use)
+            _ask(report, state, waiting[0], cross_check, in_use=in_use,
                  progress=(done + listing.questions.index(waiting[0]) + 1, done + len(listing.questions)))
         elif listing.questions:
             st.info(f"You skipped {_plural(len(listing.questions), 'question')}. They stay on \"Needs a check\" "
@@ -91,12 +147,12 @@ def question_screen(report: qp.ProfitAndLossDetail, cross_check=None, *, key: st
             st.success("No questions left.")
             st.caption(DONE_NOTE)
 
-    _review(state, listing)
+    _review(state, listing, in_use)
     return state.answers
 
 
 def _ask(report: qp.ProfitAndLossDetail, state: _State, question: qq.Question, cross_check, *,
-         previous: str | None = None, progress: tuple[int, int] | None = None) -> None:
+         previous: str | None = None, progress: tuple[int, int] | None = None, in_use: list[int] = ()) -> None:
     # Every widget belongs to this screen, this report and this turn: another report, or another screen on the
     # page, never inherits a choice or a typed name (the automated review of ebeb09a).
     widget = f"{state.name}-{question.key}-{state.turn}"
@@ -104,7 +160,7 @@ def _ask(report: qp.ProfitAndLossDetail, state: _State, question: qq.Question, c
         number, total = progress or (question.number, question.total)
         st.markdown(f"**Question {number} of {total}**")
     else:
-        st.markdown(f"**Changing an earlier answer.** You said: {ui.md_text(_label(question, previous))}")
+        st.markdown(f"**Changing an earlier answer.** You said: {ui.md_text(previous)}")
     st.subheader(ui.md_text(question.title))
     if question.row is not None:
         st.markdown(ui.md_text(f"Row {question.row} of the report"))
@@ -129,8 +185,8 @@ def _ask(report: qp.ProfitAndLossDetail, state: _State, question: qq.Question, c
             state.skipped.append(question.key)
             state.turn += 1
             st.rerun()
-        if state.history and back.button("Back", key=f"back-{widget}"):
-            state.changing = len(state.history) - 1
+        if in_use and back.button("Back", key=f"back-{widget}"):
+            state.changing = in_use[-1]
             state.turn += 1
             st.rerun()
     elif skip.button("Keep my answer", key=f"keep-{widget}"):
@@ -153,7 +209,7 @@ def _save(report: qp.ProfitAndLossDetail, state: _State, question: qq.Question, 
         state.answers = new
         if question.key not in state.skipped:
             state.skipped.append(question.key)
-        state.history = [(q, c) for q, c in state.history if q.key != question.key]
+        state.history = [e for e in state.history if e.question.key != question.key and _stored(e, new)]
         state.changing = None
         state.message = "Left on \"Needs a check\". You can come back to it any time."
         return
@@ -165,24 +221,35 @@ def _save(report: qp.ProfitAndLossDetail, state: _State, question: qq.Question, 
         return
     state.answers = new
     state.skipped = [k for k in state.skipped if k != question.key]
-    state.history = [(q, c) for q, c in state.history if q.key != question.key] + [(question, choice)]
+    shown = _label(question, choice)
+    if choice == "outside job":
+        shown = f"A job that isn't in this report: \"{outside.strip()}\""
+    state.history = [e for e in state.history if e.question.key != question.key] + [_Entry(question, choice, shown)]
+    state.history = [e for e in state.history if _stored(e, new)]  # answers replaced by this one are gone
     state.changing = None
     state.message = "Saved."
 
 
-def _review(state: _State, listing: qq.QuestionList) -> None:
-    answered = len(state.history)
+def _review(state: _State, listing: qq.QuestionList, in_use: list[int]) -> None:
     left = len(listing.questions)
-    with st.expander(f"Your answers ({answered}) and what's left ({left})"):
-        if not state.history:
+    apart = [i for i in range(len(state.history)) if i not in in_use]
+    with st.expander(f"Your answers ({len(in_use)}) and what's left ({left})"):
+        if not in_use:
             st.caption("No answers yet.")
-        for index, (question, choice) in enumerate(state.history):
+        for index in in_use:
+            entry = state.history[index]
             text, change = st.columns([4, 1])
-            text.markdown(ui.md_text(f"{question.title} → {_label(question, choice)}"))
+            text.markdown(ui.md_text(f"{entry.question.title} → {entry.shown}"))
             if change.button("Change", key=f"{state.name}-change-{index}-{state.turn}"):
                 state.changing = index
                 state.turn += 1
                 st.rerun()
+        if apart:
+            st.markdown("**Earlier answers that don't apply now** (because of a later answer; they count again only if "
+                        "you change that answer back)")
+            for index in apart:
+                entry = state.history[index]
+                st.markdown(ui.md_text(f"{entry.question.title} → {entry.shown}"))
         if listing.questions:
             st.markdown("**Still to answer**")
             for question in listing.questions:

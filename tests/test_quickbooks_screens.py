@@ -116,6 +116,24 @@ class QuestionScreenTests(unittest.TestCase):
         button(at, "Change").click().run()  # the first answer in the list
         self.assertIn("You said: Yes, each sub-customer is a job", text(at))
 
+    def test_answers_a_later_answer_makes_not_apply_are_shown_apart_and_not_counted(self):
+        # The automated review of a2a7063: the $700 sale is given Job A, then sub-customers are no longer jobs.
+        at = save(start(), "Yes, each sub-customer is a job")
+        while "Which job is this $700.00 for?" not in title(at):
+            button(at, "Skip for now").click().run()
+        save(at, at.radio[0].options[0])  # Job A
+        review = next(e for e in at.expander if e.label.startswith("Your answers"))
+        self.assertTrue(review.label.startswith("Your answers (2)"), review.label)
+        button(at, "Change").click().run()  # the job-use answer, first in the list
+        save(at, "No, show profit by customer")
+        review = next(e for e in at.expander if e.label.startswith("Your answers"))
+        self.assertTrue(review.label.startswith("Your answers (1)"), review.label)
+        shown = [m.value for m in review.markdown]
+        self.assertIn("Which job is this $700.00 for? → Job \"Job A\"", shown[shown.index(next(
+            m for m in shown if m.startswith("**Earlier answers that don't apply now**"))) + 1:])
+        self.assertEqual(1, len([b for b in at.button if b.label == "Change"]))  # only the answer in use
+        self.assertIn("of 4**", text(at))  # 1 answer in use + 3 open; the answer apart isn't counted (it would be 5)
+
     def test_an_outside_job_needs_its_name(self):
         at = save(start(), "Yes, each sub-customer is a job")
         save(at, "Job costs: what's in it is spent on specific jobs")
@@ -131,6 +149,12 @@ class QuestionScreenTests(unittest.TestCase):
         at.text_input[0].set_value("Job Z").run()
         button(at, "Save answer").click().run()
         self.assertIn("Job Z", [a.outside_job for a in answers(at).lines.values()])
+        # The name is what the review list and the change screen show (the automated review of a2a7063).
+        review = next(e for e in at.expander if e.label.startswith("Your answers"))
+        mine = 'Which job is this $700.00 for? → A job that isn\'t in this report: "Job Z"'
+        self.assertIn(mine, [m.value for m in review.markdown])
+        list(b for b in at.button if b.label == "Change")[-1].click().run()
+        self.assertIn('You said: A job that isn\'t in this report: "Job Z"', text(at))
 
     def test_the_end_says_no_questions_left_is_not_final(self):
         at = start()
@@ -221,6 +245,53 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual(2, len(at.radio))
         at.radio[0].set_value("Yes, each sub-customer is a job").run()
         self.assertIsNone(at.radio[1].value)
+
+    def test_a_question_that_no_longer_fits_saves_nothing_and_says_so(self):
+        # The automated review of a2a7063 (warning): 6a refuses a stale question; the screen says nothing was saved.
+        def page():
+            import sys
+            from decimal import Decimal as D
+            from pathlib import Path
+            import streamlit as st
+            for folder in (Path.cwd(), Path.cwd() / "tests"):
+                sys.path.insert(0, str(folder))
+            import quickbooks_figures as qf
+            import quickbooks_fixtures as fx
+            import quickbooks_pnl as qp
+            import quickbooks_screens as qscreens
+            data = fx.xlsx(fx.report_rows({
+                "Income": [("Design income", [fx.line(2, "Invoice", "1001", "Customer X (fictional):Job A", D("4000"),
+                                                      None)])],
+                "Expenses": [("Job Materials", [fx.line(5, "Journal Entry", "JE-1", "Vendor (fictional)", D("10"),
+                                                        None)])]}))
+            report = qp.read_profit_and_loss_detail("p.xlsx", data)
+            st.session_state["screen"] = f"qbo-{qf.report_fingerprint(report)}"
+            st.session_state["answers"] = qscreens.question_screen(report)
+
+        at = AppTest.from_function(page, default_timeout=30)
+        at.run()
+        save(at, "Yes, each sub-customer is a job")
+        save(at, "A cost of a job")
+        job_question = title(at)[0]
+        self.assertIn("Which job", job_question)
+        save(at, at.radio[0].options[0])  # Job A
+        state = at.session_state[at.session_state["screen"]]
+        old_job = next(e for e in state.history if e.question.key.startswith("job:"))
+        # The line is answered as overhead since: the job answer is replaced, so it leaves the list...
+        state.changing = next(i for i, e in enumerate(state.history) if e.question.key.startswith("line:"))
+        at.run()
+        save(at, "Overhead (a cost of running the business, not of one job)")
+        state = at.session_state[at.session_state["screen"]]
+        self.assertFalse(any(e.question.key.startswith("job:") for e in state.history))
+        before = at.session_state["answers"]
+        # ...and if the old job question is answered anyway (another tab, say), nothing is saved and the screen says so.
+        state.history.append(old_job)
+        state.changing = len(state.history) - 1
+        at.run()
+        save(at, at.radio[0].options[0])
+        self.assertEqual(before, at.session_state["answers"])
+        self.assertIn("That question has changed since, so nothing was saved. The questions shown now are the current "
+                      "ones.", [i.value for i in at.info])
 
     def test_the_upload_page_still_refuses_quickbooks_reports(self):
         import sys
