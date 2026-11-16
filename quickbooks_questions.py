@@ -4,8 +4,8 @@ Plan v7, step 6 ("Simpler questions"): group questions where S7 allows, show pro
 5"), let the owner skip, go back, change an answer and review what's left, show the original row and
 dollar amount, give no default answers, and use plain words with the codes in small print.
 
-This module is the list behind those screens; it has no screen of its own (step 6b shows it, and
-nothing is wired to an upload yet: job_intake still refuses every QuickBooks report).
+This module is the list behind those screens; it has no screen of its own (step 6b shows it, on the
+upload page for a recognised Profit and Loss Detail: quickbooks_upload).
 
 - open_questions(...) works out every question still open from the checked report(s) and the answers
   so far, in a fixed order: whether sub-customers are jobs; the no-filter confirmation (only when a

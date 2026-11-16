@@ -400,7 +400,53 @@ class SafetyTests(unittest.TestCase):
         self.assertTrue(review.label.startswith("Your answers (1)"), review.label)
         self.assertEqual(["Did you export both reports for the whole business, with no filter?"], title(at))
 
-    def test_the_upload_page_still_refuses_quickbooks_reports(self):
+    def swap_back(self, at):
+        at.session_state["product"] = "Design"
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+
+    def test_changing_a_no_filter_answer_is_dropped_when_its_pair_is_replaced(self):
+        # The automated review of 8763ef2, carried from PR #143: save pair A's "no filter", click Change, pick an
+        # unsaved answer, then replace only the second report. The old pair's question must not stay on screen.
+        at = self.two_reports()
+        save(at, "Yes, both have no filter")
+        review = next(e for e in at.expander if e.label.startswith("Your answers"))
+        changes = [b for b in review.button if b.label == "Change"]
+        self.assertEqual(2, len(changes))
+        changes[1].click().run()
+        self.assertIn("**Changing an earlier answer.**", text(at))
+        at.radio[0].set_value("Not sure yet: leave it on \"Needs a check\"").run()
+        self.swap_second_report(at)
+        self.assertNotIn("Changing an earlier answer", text(at))
+        self.assertEqual(["Did you export both reports for the whole business, with no filter?"], title(at))
+        self.assertIn("**Question 2 of 2**", text(at))
+        self.assertIsNone(at.radio[0].value)
+        self.assertTrue(button(at, "Save answer").disabled)
+        self.assertNotIn("Keep my answer", [b.label for b in at.button])
+        self.assertIn("The reports changed while you were changing an answer, so that change was dropped. The "
+                      "questions shown now are about the files you uploaded.", [i.value for i in at.info])
+        self.assertNotIn("Your answer is unchanged.", [i.value for i in at.info])
+        # Pair A's own confirmation is untouched, and counts again once pair A is back.
+        self.assertNotEqual(at.session_state["pair"], at.session_state["answers"].unfiltered_pair)
+        self.swap_back(at)
+        self.assertEqual(at.session_state["pair"], at.session_state["answers"].unfiltered_pair)
+        self.assertEqual([], title(at))
+
+    def test_going_through_skipped_questions_reopens_only_the_ones_open_now(self):
+        # The PR #143 manual review, warning: skip pair A's question, then pair B's; "Go through the skipped
+        # questions" for pair B must leave pair A's skipped.
+        at = self.two_reports()
+        button(at, "Skip for now").click().run()
+        self.swap_second_report(at)
+        button(at, "Skip for now").click().run()
+        self.assertEqual([], title(at))
+        button(at, "Go through the skipped questions").click().run()
+        self.assertEqual(["Did you export both reports for the whole business, with no filter?"], title(at))
+        self.swap_back(at)
+        self.assertEqual([], title(at))
+        self.assertIn("You skipped 1 question.", " ".join(i.value for i in at.info))
+
+    def test_the_plain_list_reader_still_refuses_quickbooks_reports(self):
         import sys
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import job_intake as ji
@@ -408,10 +454,12 @@ class SafetyTests(unittest.TestCase):
         with self.assertRaises(ji.IntakeError):
             ji.read_file("report.xlsx", fx.xlsx(fx.pnl_rows(), formulas=fx.FORMULAS, stored=fx.STORED))
 
-    def test_no_page_of_the_app_uses_the_screen_yet(self):
+    def test_the_upload_page_shows_the_screen_only_through_the_quickbooks_flow(self):
         root = Path(__file__).resolve().parents[1]
         pages = [root / "app.py", root / "trial_app.py", root / "marginx_pilot.py", *(root / "pages").glob("*.py")]
         self.assertEqual([], [p.name for p in pages if "quickbooks_screens" in p.read_text()])
+        self.assertIn("qscreens.question_screen(report, check", (root / "quickbooks_upload.py").read_text())
+        self.assertIn("import quickbooks_upload", (root / "pages" / "1_MargenX_Import.py").read_text())
 
 
 if __name__ == "__main__":

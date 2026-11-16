@@ -3,7 +3,7 @@ and the coverage ledger (S6).
 
 End to end on made-up files in the layout seen (tests/quickbooks_fixtures.py): Excel bytes -> rows
 -> recognised layout -> headings, lines and totals -> checks -> one ledger outcome per line ->
-each section's status. Uploads still refuse every QuickBooks report (checked below).
+each section's status. The reader for plain lists still refuses every QuickBooks report (checked below).
 """
 from decimal import Decimal
 import sys
@@ -108,8 +108,9 @@ class GoodReportTests(unittest.TestCase):
                 self.assertTrue(section.adds_up)
                 self.assertEqual(section.stored_total, section.included + section.excluded + section.not_resolved)
 
-    def test_the_upload_page_still_refuses_the_report(self):
-        with self.assertRaisesRegex(ji.IntakeError, "MargenX can't use QuickBooks reports yet"):
+    def test_the_plain_list_reader_still_refuses_the_report(self):
+        # The upload page reads it through quickbooks_upload instead (tests/test_quickbooks_upload.py).
+        with self.assertRaisesRegex(ji.IntakeError, "MargenX reads it as a QuickBooks report, never as a list"):
             ji.read_file("report.xlsx", GOOD_BYTES)
 
 

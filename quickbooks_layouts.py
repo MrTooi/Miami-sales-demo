@@ -17,9 +17,9 @@ the layout seen on 2026-10-26 (issue #128, "Layouts seen"):
 
 Anything else fails closed: the file is refused with a plain reason, and nothing from it is used (S2).
 
-Recognising a report never counts anything. Reading its lines, checking each "Total for ..." against
-its lines (step 3) and finding customers, jobs and accounts (step 4) come later, so for now
-job_intake still refuses a recognised report, with a reason that says what was recognised.
+Recognising a report never counts anything. A recognised report is read by its own flow on the upload
+page (quickbooks_upload, the switch-on of issue #128); job_intake, the reader for plain lists, still
+refuses it and every look-alike.
 """
 from __future__ import annotations
 
@@ -274,11 +274,13 @@ def _letter(index: int) -> str:
     return letters
 
 
-# Every QuickBooks report is refused for now (its lines aren't counted yet, steps 3 and 4), so no
-# refusal sends the owner to export a QuickBooks report again (the PR #134 review).
-NOT_YET = "MargenX can't use QuickBooks reports yet, so nothing from this file was used."
-PLAIN_LIST = ("For now, upload a plain list with one row per sale or cost, with columns such as Date, Customer, "
-              "Job and Amount.")
+# QuickBooks reports in a layout MargenX knows are read by their own flow (quickbooks_upload, issue #128); this
+# reason is for every other file that looks like a QuickBooks report, which the reader for plain lists refuses (S2).
+# No refusal promises that exporting again will work (the PR #134 review): a layout MargenX doesn't know yet may come
+# out the same way again.
+NOT_USED = "nothing from this file was used."
+PLAIN_LIST = ("You can upload QuickBooks Online's Profit and Loss Detail exported to Excel on the accrual basis, or a "
+              "plain list with one row per sale or cost, with columns such as Date, Customer, Job and Amount.")
 
 
 def quickbooks_refusal(table: list[tuple[int, list[str]]], title_lines: int, *, is_xlsx: bool) -> str | None:
@@ -286,8 +288,8 @@ def quickbooks_refusal(table: list[tuple[int, list[str]]], title_lines: int, *, 
 
     Says what made MargenX think the file came from QuickBooks, and what to upload instead.
     - A Profit and Loss Detail or Sales by Customer Detail file gets its own checks: it is either
-      recognised, or told exactly how it differs from the layout MargenX knows. Either way it is still
-      refused for now: uploads of QuickBooks reports are switched on only in a later step.
+      recognised, or told exactly how it differs from the layout MargenX knows. A recognised one is read
+      by its own flow on the upload page (quickbooks_upload); this reader for plain lists still refuses it.
     - "Transaction List by Customer" mixes invoices with customer payments: never a sales file.
     - Any other QuickBooks look-alike is refused, naming the sign that was found.
     """
@@ -300,19 +302,22 @@ def quickbooks_refusal(table: list[tuple[int, list[str]]], title_lines: int, *, 
         if found.layout:
             layout = found.layout
             return (f"This is QuickBooks' {claimed} report for {layout.company} ({layout.period}, "
-                    f"{layout.basis.lower()} basis). MargenX recognises this report, but {NOT_YET} {PLAIN_LIST}")
+                    f"{layout.basis.lower()} basis). MargenX reads it as a QuickBooks report, never as a list of "
+                    f"sales or costs, so {NOT_USED}")
         shown = found.problems[:3]
         more = len(found.problems) - len(shown)
         return (f"This looks like a QuickBooks report (it has the title '{claimed}'), but it isn't "
                 "exactly in the layout MargenX knows: " + "; ".join(shown) + (f" (and {more} more)" if more else "")
-                + f". Exporting it again won't help yet: {NOT_YET} {PLAIN_LIST}")
+                + f", so {NOT_USED} If you changed this report's settings in QuickBooks (columns, filters or basis), "
+                "export it again with its standard settings; otherwise MargenX can't read this version of the report "
+                f"yet. {PLAIN_LIST}")
     if any(qr.TRANSACTION_LIST.match(sign.removeprefix("the title '")) for sign in signs if sign.startswith("the title")):
         return ("This looks like QuickBooks' \"Transaction List by Customer\" report. It mixes invoices with "
                 "customer payments, and its totals add both together, so it can't be used as a sales file "
                 "(and it has no costs). Nothing from this file was used. " + PLAIN_LIST)
     sign = signs[0]
     reason = (f"This looks like a QuickBooks report (it has {sign}), and MargenX can't read this QuickBooks report "
-              f"yet, so nothing from this file was used. {PLAIN_LIST}")
+              f"yet, so {NOT_USED} {PLAIN_LIST}")
     if not sign.startswith("the title"):
         # Says what to change without asking the owner to delete anything (the PR #134 review), and never
         # suggests relabelling a real subtotal (the PR #136 review).

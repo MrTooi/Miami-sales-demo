@@ -11,10 +11,15 @@ a pilot shop's own files may be read with the owner's consent. Either way, files
 are processed in memory for this session only and never saved; "End session"
 forgets everything.
 
+A QuickBooks Online Profit and Loss Detail in the exact layout MargenX knows (with, optionally, its
+Sales by Customer Detail to check the sales) goes to the QuickBooks flow (quickbooks_upload, issue
+#128): the owner's questions, then the results. Every other file goes to the reader for plain lists,
+which refuses any QuickBooks look-alike.
+
 In the website trial (trial_access, issue #131), only the invited person gets in and the page
-checks their login itself. Until the QuickBooks Profit and Loss Detail reading (#128) is finished,
-the trial shows the made-up sample files only: it has no upload box, and the gate in front of the
-app refuses every upload.
+checks their login itself. Trial uploads stay off (#137) until the owner decides otherwise: the
+trial shows the made-up sample files only, it has no upload box, and the gate in front of the app
+refuses every upload.
 """
 from __future__ import annotations
 
@@ -37,6 +42,7 @@ import job_profit as jp  # noqa: E402
 import marginx_insights as mi  # noqa: E402
 import marginx_ui as ui  # noqa: E402
 import pilot_safety as ps  # noqa: E402
+import quickbooks_upload as qflow  # noqa: E402
 import trial_access as ta  # noqa: E402
 
 SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"
@@ -230,7 +236,8 @@ with main:
         if not use_samples:
             with heading.container():
                 ui.step_heading(1, "Add your reports",
-                                "Two exports from QuickBooks or Square: your sales and your costs. CSV or Excel.")
+                                "Two exports with your sales and your costs (CSV or Excel), or QuickBooks "
+                                "Online's Profit and Loss Detail as one Excel file.")
         with nav.container():
             ui.steps(1)
         st.stop()
@@ -551,18 +558,26 @@ with main:
     results: list[ji.IntakeResult] = []
     pending: list[str] = []
     ui.section("Your files")
-    for file_position, (file_name, file_data) in enumerate(files):
-        digest = hashlib.sha256(file_data).digest()
-        result = show_file(file_position, file_name, file_data, seen_files.get(digest))
-        if result is None:
-            pending.append(file_name)
-        elif result != EXCLUDED:
-            results.append(result)
-        seen_files.setdefault(digest, file_name)
-    with results_area:
-        shown = show_profit(results, pending)
+    # A file that is exactly a QuickBooks report MargenX knows (Profit and Loss Detail, and Sales by Customer Detail
+    # to check its sales) goes to the QuickBooks flow (issue #128): questions, then results. Every other file goes to
+    # the reader for plain lists below, which refuses any QuickBooks look-alike (S2).
+    quickbooks = qflow.sort_files(files)
+    if quickbooks.quickbooks:
+        shown, kinds = qflow.show(quickbooks, results_area, key=f"qbo-{session}")
+    else:
+        for file_position, (file_name, file_data) in enumerate(files):
+            digest = hashlib.sha256(file_data).digest()
+            result = show_file(file_position, file_name, file_data, seen_files.get(digest))
+            if result is None:
+                pending.append(file_name)
+            elif result != EXCLUDED:
+                results.append(result)
+            seen_files.setdefault(digest, file_name)
+        with results_area:
+            shown = show_profit(results, pending)
+        kinds = {r.kind for r in results}
     if slots is not None:
         with slots.container():
-            ui.file_slots({r.kind for r in results})
+            ui.file_slots(kinds)
     with nav.container():
         ui.steps(3 if shown else 2)

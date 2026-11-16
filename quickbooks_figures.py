@@ -42,7 +42,7 @@ The rules, from plan v7:
   report: its company, dates and accrual basis. A filter that QuickBooks doesn't print in the file
   can't be detected, so this is not proof that the report covers the whole business.
 
-Nothing here is wired to an upload yet: job_intake still refuses every QuickBooks report.
+The upload page reads a recognised report through quickbooks_upload; job_intake still refuses QuickBooks reports.
 """
 from __future__ import annotations
 

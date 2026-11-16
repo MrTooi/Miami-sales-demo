@@ -146,7 +146,7 @@ class CogsInvoiceRegressionTests(unittest.TestCase):
         self.assertEqual(cogs_rows, {r["row"] for r in result.accepted} & cogs_rows)
         self.assertEqual(D("2205.0"), sum(r["amount"] for r in result.accepted))
 
-    def test_the_page_refuses_the_report_and_shows_no_sales(self):
+    def test_the_page_never_mixes_the_report_with_a_cost_file_and_shows_no_sales(self):
         from streamlit.testing.v1 import AppTest
 
         page = Path(__file__).resolve().parents[1] / "pages" / "1_MargenX_Import.py"
@@ -161,8 +161,11 @@ class CogsInvoiceRegressionTests(unittest.TestCase):
             at = AppTest.from_string(source, default_timeout=60)
             at.run()
         self.assertFalse(at.exception, at.exception)
+        # The report goes to the QuickBooks flow, which never mixes it with another cost file (the switch-on of
+        # #128): no figure is shown until one of them is removed. The report alone: tests/test_quickbooks_upload.py.
         errors = " ".join(e.value for e in at.error)
-        self.assertIn("This file can't be read: This is QuickBooks' Profit and Loss Detail report", errors)
+        self.assertIn("A QuickBooks Profit and Loss Detail already has your sales and your costs", errors)
+        self.assertEqual([], at.dataframe)
         markdown = " ".join(m.value for m in at.markdown)
         self.assertNotIn("Here's where your money was made", markdown)
         for amount in ("$405", "$2,205", "$1,800"):
@@ -364,8 +367,8 @@ class QuickBooksLookAlikeTests(unittest.TestCase):
             for name in ("report.xlsx", "report.csv"):
                 with self.subTest(title=rows[1][0], name=name):
                     reason = self.refusal(rows, name)
-                    if name.endswith(".xlsx"):  # recognised (steps 2 and 5a), not used yet
-                        self.assertIn("MargenX recognises this report, but MargenX can't use QuickBooks reports yet", reason)
+                    if name.endswith(".xlsx"):  # recognised (steps 2 and 5a): read only by its own flow on the page
+                        self.assertIn("MargenX reads it as a QuickBooks report, never as a list of sales or costs", reason)
                     else:
                         self.assertIn(f"it has the title '{rows[1][0]}'", reason)
                     self.assertIn("othing from this file was used", reason)
