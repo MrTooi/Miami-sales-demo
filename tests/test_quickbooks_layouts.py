@@ -2,7 +2,7 @@
 review follow-ups (a QuickBooks-only column alone in a row; clearer refusal reasons).
 
 Every row is made up (tests/quickbooks_fixtures.py). Only the layout copies the export seen on
-2026-10-26. A recognised report is still refused for now: its lines are read in steps 3 and 4.
+2026-10-26. A recognised report is still refused by the reader for plain lists: the upload page reads it in its own flow.
 """
 from datetime import date
 import sys
@@ -88,13 +88,14 @@ class RecognisedLayoutTests(unittest.TestCase):
                                                title="Profit  and Loss  Detail"))).layout
         self.assertEqual(fx.COMPANY, layout.company)
 
-    def test_a_recognised_report_is_still_refused_and_says_what_was_recognised(self):
+    def test_a_recognised_report_is_still_refused_by_the_plain_list_reader_and_says_what_was_recognised(self):
+        # The upload page sends a recognised report to its own flow (quickbooks_upload); the reader for plain lists
+        # never reads it.
         reason = refusal(GOOD)
         self.assertEqual(
             "This is QuickBooks' Profit and Loss Detail report for Biscayne Landscaping (fictional) (January 1-October "
-            "26, 2026, accrual basis). MargenX recognises this report, but MargenX can't use QuickBooks reports yet, so "
-            "nothing from this file was used. For now, upload a plain list with one row per sale or cost, with "
-            "columns such as Date, Customer, Job and Amount.", reason)
+            "26, 2026, accrual basis). MargenX reads it as a QuickBooks report, never as a list of sales or costs, so "
+            "nothing from this file was used.", reason)
         for amount in ("900", "1,200", "150", "349"):
             self.assertNotIn(amount, reason)
 
@@ -110,7 +111,10 @@ class VariantTests(unittest.TestCase):
         self.assertIn("This looks like a QuickBooks report (it has the title 'Profit and Loss Detail'), but it isn't "
                       "exactly in the layout MargenX knows", reason)
         self.assertIn("nothing from this file was used.", reason)
-        self.assertIn("Exporting it again won't help yet", reason)  # never sent to another refusal
+        # Never promises that exporting again will work (the PR #134 review): only standard settings, conditionally.
+        self.assertIn("If you changed this report's settings in QuickBooks (columns, filters or basis), export it again "
+                      "with its standard settings; otherwise MargenX can't read this version of the report yet.", reason)
+        self.assertNotIn("will work", reason)
         return reason
 
     def test_each_variant_is_refused_with_its_reason(self):
@@ -165,8 +169,7 @@ class VariantTests(unittest.TestCase):
     def test_the_csv_version_is_refused_with_how_to_export_excel(self):
         for name in ("report.csv",):
             reason = self.assert_refused(fx.csv_bytes(fx.pnl_rows()), "it's a CSV file", name)
-            self.assertIn("Exporting it again won't help yet", reason)
-            self.assertNotIn("Export to Excel", reason)
+            self.assertIn("Profit and Loss Detail exported to Excel on the accrual basis", reason)
         with self.assertRaisesRegex(ji.IntakeError, "it's a CSV file"):
             ji.read_csv(fx.csv_bytes(fx.pnl_rows()))
 
@@ -231,13 +234,14 @@ class RefusalWordingTests(unittest.TestCase):
                 reason = refusal(fx.csv_bytes(rows), "file.csv")
                 self.assertIn(f"If this file didn't come from QuickBooks, {advice}", reason)
                 self.assertNotIn("reword", reason)
-                self.assertIn("upload a plain list with one row per sale or cost", reason)
+                self.assertIn("or a plain list with one row per sale or cost", reason)
+                self.assertIn("QuickBooks Online's Profit and Loss Detail exported to Excel", reason)
 
     def test_a_title_says_what_to_upload_instead_without_rename_advice(self):
         reason = refusal(fx.csv_bytes([["Sales by Product/Service Detail"], *self.PLAIN]), "file.csv")
         self.assertIn("it has the title 'Sales by Product/Service Detail'", reason)
         self.assertIn("MargenX can't read this QuickBooks report yet", reason)
-        self.assertIn("upload a plain list with one row per sale or cost", reason)
+        self.assertIn("or a plain list with one row per sale or cost", reason)
         self.assertNotIn("rename", reason)
 
     def test_plain_sample_files_still_open(self):

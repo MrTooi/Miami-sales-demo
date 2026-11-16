@@ -22,7 +22,7 @@ Takes a report whose layout quickbooks_layouts recognised (step 2) and:
 
 Totals are only ever checks; every figure is a sum of lines. Customers, jobs and accounts (S5, S7,
 S8, S9) are step 4, so the ledger keeps each line's Name whole and leaves customer and job unknown.
-Nothing here is wired to an upload yet: job_intake still refuses every QuickBooks report.
+The upload page reads a recognised report through quickbooks_upload; job_intake still refuses QuickBooks reports.
 """
 from __future__ import annotations
 
@@ -584,8 +584,7 @@ def read_profit_and_loss_detail(name: str, data: bytes) -> ProfitAndLossDetail:
     """Read an uploaded file as Profit and Loss Detail, end to end. Raises ji.IntakeError, with the same
     plain reason the upload page gives, when the file isn't exactly the layout MargenX knows.
 
-    Not called by the upload page yet: until steps 4 and later are built, uploads still refuse every
-    QuickBooks report (job_intake)."""
+    The upload page calls it through quickbooks_upload, only for a file already recognised."""
     is_xlsx = name.lower().endswith(".xlsx")
     if not is_xlsx or not data.startswith(b"PK\x03\x04"):
         raise ji.IntakeError("MargenX reads QuickBooks' Profit and Loss Detail only as an Excel (.xlsx) file.")

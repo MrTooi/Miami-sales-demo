@@ -15,6 +15,14 @@
 !finance_engine.py
 !quickbooks_layouts.py
 !quickbooks_rules.py
+!quickbooks_upload.py
+!quickbooks_pnl.py
+!quickbooks_sbcd.py
+!quickbooks_crosscheck.py
+!quickbooks_figures.py
+!quickbooks_questions.py
+!quickbooks_screens.py
+!quickbooks_results.py
 !pages/1_MargenX_Import.py
 !assets/margenx-logo.png
 !sample_data/marginx/*.csv

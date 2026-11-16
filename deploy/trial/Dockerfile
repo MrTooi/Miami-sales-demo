@@ -28,7 +28,8 @@ RUN pip install --require-hashes --only-binary=:all: --no-deps -r /tmp/requireme
 WORKDIR /app
 COPY trial_app.py marginx_pilot.py trial_access.py marginx_ui.py pilot_safety.py job_intake.py \
      job_matching.py job_profit.py marginx_insights.py finance_engine.py quickbooks_layouts.py \
-     quickbooks_rules.py /app/
+     quickbooks_rules.py quickbooks_upload.py quickbooks_pnl.py quickbooks_sbcd.py quickbooks_crosscheck.py \
+     quickbooks_figures.py quickbooks_questions.py quickbooks_screens.py quickbooks_results.py /app/
 COPY pages/1_MargenX_Import.py /app/pages/1_MargenX_Import.py
 COPY assets/margenx-logo.png /app/assets/margenx-logo.png
 COPY sample_data/marginx/*.csv /app/sample_data/marginx/

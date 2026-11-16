@@ -29,8 +29,8 @@ Loss Detail's "Customer:Job" Names, which step 5b cross-checks line by line (S4,
 sub-customers nested more than two levels deep aren't the layout seen: they are held.
 
 Plan rule S4: when both reports are uploaded, sales come from Profit and Loss Detail; this report is a
-cross-check only, and its sales are never added (step 5b). Nothing here is wired to an upload yet: job_intake
-still refuses every QuickBooks report.
+cross-check only, and its sales are never added (step 5b). The upload page reads a recognised report through
+quickbooks_upload; job_intake still refuses QuickBooks reports.
 """
 from __future__ import annotations
 
@@ -491,8 +491,8 @@ def reconcile(layout: qlayouts.ReportLayout, source: str, sheet: str = "") -> Sa
 
 def read_sales_by_customer_detail(name: str, data: bytes) -> SalesByCustomerDetail:
     """Read an uploaded file as Sales by Customer Detail, end to end. Raises ji.IntakeError, with the same plain
-    reason the upload page gives, when the file isn't exactly the layout MargenX knows. Not called by the upload
-    page yet."""
+    reason the upload page gives, when the file isn't exactly the layout MargenX knows. The upload page calls it through
+    quickbooks_upload, only for a file already recognised."""
     if not name.lower().endswith(".xlsx") or not data.startswith(b"PK\x03\x04"):
         raise ji.IntakeError("MargenX reads QuickBooks' Sales by Customer Detail only as an Excel (.xlsx) file.")
     sheet, table = ji._xlsx_sheet(data)

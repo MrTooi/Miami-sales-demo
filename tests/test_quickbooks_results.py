@@ -64,7 +64,7 @@ class LayerTests(unittest.TestCase):
         self.assertIn("3 lines are still held back ($3,600.00)", line)
         self.assertNotIn("final for this report", line)
         cells = [r["Amount and status"] for r in qr.company_rows(figures)]
-        self.assertIn("$0.00 · Needs a check ($3,600.00 held)", cells)
+        self.assertIn("$0.00 · Needs a check ($3,600.00 held across 3 lines)", cells)
         for text in cells:
             self.assertTrue(text.endswith("· Complete") or "· Needs a check (" in text, text)
 
@@ -112,10 +112,36 @@ class LayerTests(unittest.TestCase):
 
         self.assertEqual("$100.00 · Needs a check ($50.00 held)", qr.cell(figure(D("50"))))
         self.assertEqual("$100.00 · Needs a check (1 line of unknown amount held)", qr.cell(figure(None)))
-        self.assertEqual("$100.00 · Needs a check ($50.00 plus 2 lines of unknown amount held)",
+        self.assertEqual("$100.00 · Needs a check ($50.00 plus 2 lines of unknown amount held across 3 lines)",
                          qr.cell(figure(D("50"), None, None)))
         self.assertEqual("$100.00 · Needs a check (see why below)",
                          qr.cell(qf.Figure(D("100"), (qf.Hold(None, None, "the whole report"),))))
+
+    def test_offsetting_held_lines_are_labelled_a_net_with_their_count(self):
+        # The PR #144 manual review, warning 1: +$50 and -$50 held never read as "$0.00 held".
+        def figure(*amounts):
+            return qf.Figure(D("100"), tuple(qf.Hold(row, amount, "held") for row, amount in enumerate(amounts, 1)))
+
+        self.assertEqual("$100.00 · Needs a check (net $0.00 held across 2 lines)", qr.cell(figure(D("50"), D("-50"))))
+        self.assertEqual("$100.00 · Needs a check (net -$20.00 held across 3 lines)",
+                         qr.cell(figure(D("50"), D("-50"), D("-20"))))
+        self.assertEqual("$100.00 · Needs a check ($70.00 held across 2 lines)", qr.cell(figure(D("50"), D("20"))))
+        self.assertEqual("$100.00 · Needs a check (-$70.00 held across 2 lines)", qr.cell(figure(D("-50"), D("-20"))))
+        # One line held by two holds is still one line.
+        self.assertEqual("$100.00 · Needs a check ($50.00 held)",
+                         qr.cell(qf.Figure(D("100"), (qf.Hold(1, D("50"), "a"), qf.Hold(1, D("50"), "b")))))
+
+    def test_whats_missing_shows_each_held_amount_beside_its_reason(self):
+        # The PR #144 manual review, warning 2: the amount comes from the hold, not only from the reason's words.
+        held = {"sales": qf.Figure(D("0"), (qf.Hold(3, D("20"), "Row 3 (20.00) is held."),
+                                             qf.Hold(4, D("-50"), "A reason with no amount."),
+                                             qf.Hold(5, None, "A line that can't be read."),
+                                             qf.Hold(7, D("12.5"), "The other report's line.", "Sales by Customer Detail"),
+                                             qf.Hold(None, None, "The whole report.")))}
+        figures = qf.Figures("scope", False, held, {}, {}, (), ())
+        self.assertEqual(["$20.00 held · Row 3 is held.", "-$50.00 held · A reason with no amount.", "amount unknown held · A line that can't be read.",
+                          "$12.50 held · Sales by Customer Detail: The other report's line.", "The whole report."],
+                         qr.missing(figures))
 
     def test_a_loss_is_called_a_loss(self):
         report = qp.read_profit_and_loss_detail("p.xlsx", fx.xlsx(fx.report_rows({
@@ -173,7 +199,8 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(["Figure", "Amount and status"], list(company.columns))
         texts = [m.value.replace("\\$", "$") for m in at.markdown]
         self.assertIn("**What's missing** (3)", texts)
-        self.assertIn("- Row 16 ($1,000.00) is a cost, but whether it's a job cost or overhead isn't known yet.", texts)
+        self.assertIn("- $1,000.00 held · Row 16 is a cost, but whether it's a job cost or overhead isn't known yet.",
+                      texts)
         details = next(e for e in at.expander if e.label.startswith("Details:"))
         self.assertTrue(details.caption[0].value.startswith("Within QuickBooks' Profit and Loss Detail"))
         self.assertEqual([], [s for s in at.success if "Nothing is missing" in s.value])
@@ -221,10 +248,44 @@ class ScreenTests(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertIn(r"\!\[x\](https://example.invalid/x.png)", at.subheader[0].value)
 
-    def test_no_page_of_the_app_uses_the_results_yet(self):
+    def test_an_unreadable_amount_stays_visible_through_the_whole_screen(self):
+        # The automated review of 1919f66 (warning), carried from PR #144: an amount the report holds that can't be
+        # read (fractions of a cent), end to end through results_screen(): the headline, the cell and What's missing.
+        def page():
+            import sys
+            from decimal import Decimal as D
+            from pathlib import Path
+            for folder in (Path.cwd(), Path.cwd() / "tests"):
+                sys.path.insert(0, str(folder))
+            import quickbooks_fixtures as fx
+            import quickbooks_pnl as qp
+            import quickbooks_results as qresults
+            x = "Customer X (fictional)"
+            rows = fx.report_rows({"Income": [("Design income", [fx.line(2, "Invoice", "1001", x, D("4000"), None)])],
+                                   "Expenses": [("Job Materials", [fx.line(5, "Bill", "B-1", f"{x}:Job A", D("1000"),
+                                                                           None)])]})
+            row = next(r for r in rows if len(r) > 2 and r[2] == "Bill")
+            row[9] = "1000.005"  # not an exact number of cents: never rounded, never counted
+            qresults.results_screen(qp.read_profit_and_loss_detail("p.xlsx", fx.xlsx(rows)))
+
+        at = AppTest.from_function(page, default_timeout=30)
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+        headline = at.subheader[0].value.replace("\\$", "$")
+        self.assertIn("isn't final yet", headline)
+        self.assertIn("1 line of unknown amount", headline)
+        company = dict(zip(at.dataframe[0].value["Figure"], at.dataframe[0].value["Amount and status"]))
+        self.assertIn("1 line of unknown amount held", company["Job costs"])
+        self.assertIn("1 line of unknown amount held", company["Profit after job costs"])
+        missing = [m.value.replace("\\$", "$") for m in at.markdown if m.value.startswith("- ")]
+        self.assertTrue(any(m.startswith("- amount unknown held · Row ") for m in missing), missing)
+        self.assertEqual([], [s for s in at.success if "Nothing is missing" in s.value])
+
+    def test_the_upload_page_shows_the_results_only_through_the_quickbooks_flow(self):
         root = Path(__file__).resolve().parents[1]
         pages = [root / "app.py", root / "trial_app.py", root / "marginx_pilot.py", *(root / "pages").glob("*.py")]
         self.assertEqual([], [p.name for p in pages if "quickbooks_results" in p.read_text()])
+        self.assertIn("qresults.results_screen(report, answers, check)", (root / "quickbooks_upload.py").read_text())
 
 
 if __name__ == "__main__":

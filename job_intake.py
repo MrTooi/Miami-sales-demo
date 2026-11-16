@@ -364,7 +364,8 @@ def read_file(name: str, data: bytes) -> tuple[list[str], list[Record], list[str
 def _refuse_quickbooks(table: list[tuple[int, list[str]]], *, is_xlsx: bool) -> None:
     """A file that looks like a QuickBooks report is refused before anything is read from it: this
     reader can't tell an invoice under Cost of Goods Sold from a sale (issue #128, S2). A recognised
-    Profit and Loss Detail report is refused too, until its own reader is built (steps 3 and 4)."""
+    Profit and Loss Detail or Sales by Customer Detail is refused here too: the upload page sends it to
+    its own reader first (quickbooks_upload), so it never reaches this one."""
     refusal = qlayouts.quickbooks_refusal(table, MAX_TITLE_LINES, is_xlsx=is_xlsx)
     if refusal:
         raise IntakeError(refusal)

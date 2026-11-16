@@ -8,8 +8,8 @@ the money MargenX holds without asking is always shown with its amount.
 What is asked and what an answer can change are decided by quickbooks_questions (step 6a); this screen only
 shows them and passes the owner's choice on. Answers live in this browser session only, never on disk.
 
-Not switched on yet: QuickBooks uploads are still refused (job_intake), so no page calls this. The results
-screens (step 7) and the switch-on PR come after it.
+The upload page (pages/1_MargenX_Import.py) shows it for a recognised Profit and Loss Detail, with the results
+(quickbooks_results, step 7) below it.
 """
 from __future__ import annotations
 
@@ -126,6 +126,14 @@ def _in_use(entry: _Entry, answers: qf.OwnerAnswers, result: qf.Figures, open_ke
     return not question.key.startswith("job:") or entry.choice == qf.OVERHEAD or result.jobs_on
 
 
+def _still_editable(entry: _Entry, cross_check) -> bool:
+    """Whether a saved answer the owner opened to change is still about the files in use. A no-filter answer is
+    about one exact pair of reports: once that pair isn't the one in use, there's nothing left to change."""
+    if entry.question.kind != qq.NO_FILTER:
+        return True
+    return cross_check is not None and cross_check.pair == entry.question.pair
+
+
 def question_screen(report: qp.ProfitAndLossDetail, cross_check=None, *, key: str = "qbo") -> qf.OwnerAnswers:
     """Show the open questions about this report and return the owner's answers so far (bound to the report)."""
     state = _state(report, key)
@@ -142,6 +150,16 @@ def question_screen(report: qp.ProfitAndLossDetail, cross_check=None, *, key: st
         st.info(_md(state.message))
         state.message = ""
 
+    if state.changing is not None and not _still_editable(state.history[state.changing], cross_check):
+        # The owner was changing a no-filter answer for a pair of reports that is no longer the one in use (the
+        # second report was replaced): that edit is dropped, so the old pair's question is never shown or saved as
+        # if it were about these files (the PR #143 automated review of 8763ef2, carried to the switch-on PR).
+        state.changing = None
+        state.turn += 1
+        state.message = ("The reports changed while you were changing an answer, so that change was dropped. The "
+                         "questions shown now are about the files you uploaded.")
+        st.info(_md(state.message))
+        state.message = ""
     if state.changing is not None:
         entry = state.history[state.changing]
         _ask(report, state, entry.question, cross_check, previous=entry.shown, in_use=in_use)
@@ -157,7 +175,9 @@ def question_screen(report: qp.ProfitAndLossDetail, cross_check=None, *, key: st
             st.info(f"You skipped {_plural(len(listing.questions), 'question')}. They stay on \"Needs a check\" "
                     "until you answer them.")
             if st.button("Go through the skipped questions", key=f"{state.name}-again-{state.turn}"):
-                state.skipped.clear()
+                # Only the questions open now come back: a question skipped for another pair of reports stays
+                # skipped, so it can't reappear for these files (the PR #143 manual review, warning).
+                state.skipped = [k for k in state.skipped if k not in open_keys]
                 state.turn += 1
                 st.rerun()
         else:

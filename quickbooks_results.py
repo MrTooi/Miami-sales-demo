@@ -8,7 +8,7 @@
 4. Details folded away: the scope, and how each line was counted.
 
 Every number comes from quickbooks_figures (exact Decimal, holds included); nothing is added up here except
-the count of lines held. Not switched on yet: QuickBooks uploads are still refused, so no page calls this.
+the count of lines held. The upload page (pages/1_MargenX_Import.py) shows it below the questions.
 """
 from __future__ import annotations
 
@@ -57,13 +57,22 @@ def _held(figure: qf.Figure) -> tuple[int, int]:
     return len(known), len(unknown - known)
 
 
+def _offsetting(figure: qf.Figure) -> bool:
+    """True when the known held amounts go both ways (a +$50 and a -$50 line, say), so their sum is a net, not the
+    money at stake."""
+    amounts = {(hold.report, hold.row): hold.amount for hold in figure.holds
+               if hold.row is not None and hold.amount is not None}
+    return any(a > 0 for a in amounts.values()) and any(a < 0 for a in amounts.values())
+
+
 def _held_text(figure: qf.Figure) -> str:
     """The amount held, never understated: an amount that can't be read is said, not left out (the automated
-    review of 8a41156)."""
+    review of 8a41156). Lines that add and lines that take away are labelled a net, so +$50 and -$50 never read as
+    "$0.00 held" (the PR #144 manual review, warning 1)."""
     known, unknown = _held(figure)
     parts = []
     if known:
-        parts.append(money(figure.held_amount))
+        parts.append(("net " if _offsetting(figure) else "") + money(figure.held_amount))
     if unknown:
         parts.append(f"{unknown} line{'' if unknown == 1 else 's'} of unknown amount")
     return " plus ".join(parts)
@@ -74,19 +83,37 @@ def cell(figure: qf.Figure) -> str:
     if figure.status == qp.COMPLETE:
         return f"{money(figure.amount)} · {FINAL}"
     amounts = _held_text(figure)
-    return f"{money(figure.amount)} · {NOT_FINAL} ({amounts + ' held' if amounts else 'see why below'})"
+    if not amounts:
+        return f"{money(figure.amount)} · {NOT_FINAL} (see why below)"
+    lines = sum(_held(figure))
+    across = f" across {lines} lines" if lines > 1 else ""
+    return f"{money(figure.amount)} · {NOT_FINAL} ({amounts} held{across})"
+
+
+def _holds(figures: qf.Figures):
+    for group in (figures.company, *figures.customers.values(), *figures.jobs.values()):
+        for figure in group.values():
+            yield from figure.holds
 
 
 def held_lines(figures: qf.Figures) -> dict[tuple[str, int | None], list[str]]:
     """Every line (or the report itself) holding any figure back, each once, with its reasons in plain words."""
     found: dict[tuple[str, int | None], list[str]] = {}
-    groups = [figures.company, *figures.customers.values(), *figures.jobs.values()]
-    for group in groups:
-        for figure in group.values():
-            for hold in figure.holds:
-                reasons = found.setdefault((hold.report, hold.row), [])
-                if plain(hold.reason) not in reasons:
-                    reasons.append(plain(hold.reason))
+    for hold in _holds(figures):
+        reasons = found.setdefault((hold.report, hold.row), [])
+        if plain(hold.reason) not in reasons:
+            reasons.append(plain(hold.reason))
+    return found
+
+
+def held_amounts(figures: qf.Figures) -> dict[tuple[str, int], list[Decimal | None]]:
+    """Each held line's amount as the holds carry it (None when it can't be read), each distinct amount once."""
+    found: dict[tuple[str, int], list[Decimal | None]] = {}
+    for hold in _holds(figures):
+        if hold.row is not None:
+            amounts = found.setdefault((hold.report, hold.row), [])
+            if hold.amount not in amounts:
+                amounts.append(hold.amount)
     return found
 
 
@@ -135,10 +162,19 @@ def missing(figures: qf.Figures) -> list[str]:
     """What's missing, in plain words: one line per held line (by row), then the report-wide reasons."""
     out = []
     held = held_lines(figures)
+    amounts = held_amounts(figures)
     for (report, row), reasons in sorted(held.items(), key=lambda item: (item[0][1] is None, item[0][0],
                                                                          item[0][1] or 0)):
         prefix = "" if row is None or report == "Profit and Loss Detail" else f"{report}: "
-        out.append(prefix + " ".join(reasons))
+        text = " ".join(reasons)
+        if row is not None:
+            # The amount comes from the hold itself, beside its reason, so it's shown even when a reason's words
+            # don't carry it (the PR #144 manual review, warning 2). The same amount isn't repeated in the words.
+            held = amounts[(report, row)]
+            if len(held) == 1:
+                text = text.replace(f" ({money(held[0])})", "")
+            prefix = " / ".join(money(a) for a in held) + " held · " + prefix
+        out.append(prefix + text)
     return out
 
 
