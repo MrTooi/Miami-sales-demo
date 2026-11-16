@@ -696,3 +696,49 @@ class StepRuleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpeedCheckBeforeTheFirstShopTests(unittest.TestCase):
+    """The before-first-shop speed check (issue #128): a figure's holds were found by searching a list, which took
+    seconds on a few thousand lines. Each hold is still listed once, in the order first met, and a big report
+    is quick."""
+
+    @staticmethod
+    def _once_in_order(*parts):
+        """The rule written the slow, obvious way: every hold of the parts, once, in the order first met."""
+        seen = []
+        for part in parts:
+            for hold in part:
+                if hold not in seen:
+                    seen.append(hold)
+        return tuple(seen)
+
+    def test_each_hold_is_listed_once_in_the_order_first_met(self):
+        vendors = [L(7 + i, "Bill", f"B-{3 + i}", f"Garden Supply {i} (fictional)", 100.0 + i, 0.0) for i in range(4)]
+        report = two_jobs(extra_expenses=vendors)
+        held_rows = [l.row for l in report.lines if l.name.startswith("Garden Supply")]  # vendor name only
+        result = figures(report, answers(JOB_COSTS))
+        for job in (A, B):
+            fig = result.jobs[job]
+            profit = fig["profit_after_job_costs"].holds
+            self.assertEqual(self._once_in_order(fig["sales"].holds, fig["job_costs"].holds,
+                                                 (qf.Hold(None, None, qf.ONE_REPORT),)), profit)
+            self.assertEqual(held_rows, [h.row for h in profit if h.reason != qf.ONE_REPORT])
+        customer = result.customers[X]
+        self.assertEqual(self._once_in_order(customer["sales"].holds, customer["job_costs"].holds),
+                         customer["profit_after_job_costs"].holds)
+        self.assertEqual(held_rows, [h.row for h in customer["profit_after_job_costs"].holds])
+        self.assertEqual(len(set(customer["profit_after_job_costs"].holds)),
+                         len(customer["profit_after_job_costs"].holds))
+
+    def test_three_thousand_held_lines_take_well_under_a_second(self):
+        import time
+        bills = [L(1 + i % 26, "Bill", f"B-{i}", f"Vendor {i % 40} (fictional)", D("10.00") + D(i % 97), None)
+                 for i in range(3000)]
+        report = two_jobs(extra_expenses=bills)
+        start = time.perf_counter()
+        result = figures(report, answers())
+        took = time.perf_counter() - start
+        held = result.customers[X]["profit_after_job_costs"]
+        self.assertEqual(3000 + 2, len({h.row for h in held.holds}))  # every bill, plus Job Materials unanswered
+        self.assertLess(took, 1.0, f"figures took {took:.2f}s for 3,000 held lines")
