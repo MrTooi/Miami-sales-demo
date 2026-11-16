@@ -249,6 +249,33 @@ class AnsweringTests(unittest.TestCase):
         self.assertNotIn(entry.row, reopened.lines)
         self.assertEqual(reopened, qq.answer(report, reopened, job, job.choices[0].value))
 
+    def test_overhead_on_an_old_job_question_after_reopening_changes_nothing(self):
+        # The automated review of bbee1be: a held entry called a job cost, its job question, the classification
+        # reopened with "Not sure yet", then "overhead" on the old job question.
+        report, entry, cost, job = self.held_cost_entry()
+        reopened = qq.answer(report, cost, entry, qq.NOT_SURE)
+        self.assertEqual(reopened, qq.answer(report, reopened, job, qf.OVERHEAD))
+
+    def test_not_sure_after_overhead_on_the_job_question_keeps_the_owners_job_cost(self):
+        # The automated review of bbee1be: only the job question's own answer is reopened.
+        report, entry, cost, job = self.held_cost_entry()
+        overhead = qq.answer(report, cost, job, qf.OVERHEAD)
+        self.assertEqual(qf.OVERHEAD, overhead.lines[entry.row].kind)
+        reopened = qq.answer(report, overhead, job, qq.NOT_SURE)
+        self.assertEqual(cost, reopened)
+        self.assertIn(job.key, {q.key for q in qq.open_questions(report, reopened).questions})
+
+    def held_cost_entry(self):
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None)])],
+                       "Expenses": [("Job Materials", [L(5, "Journal Entry", "JE-1", "Vendor (fictional)", D("10"),
+                                                         None)])]})
+        answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
+        entry = first(qq.open_questions(report, answers), qq.LINE, "$10.00")
+        cost = qq.answer(report, answers, entry, qf.JOB_COST)
+        job = first(qq.open_questions(report, cost), qq.LINE, "Which job")
+        self.assertIn(qf.OVERHEAD, [c.value for c in job.choices])
+        return report, entry, cost, job
+
     def test_a_cost_called_overhead_then_given_a_job_is_a_job_cost(self):
         # On a cost line the job question itself offers overhead, so the latest answer wins either way.
         report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None)])],
