@@ -1,0 +1,259 @@
+"""Issue #128, step 6a: the owner's questions about a QuickBooks report (plan v7, step 6).
+
+Made-up reports in the layouts seen (tests/quickbooks_fixtures.py), read end to end. The questions come
+in a fixed order with their progress; each shows the line's row, date, Name and amount; only the choices
+the rules allow are offered, none pre-selected, and "not sure" always leaves the question open.
+"""
+from decimal import Decimal
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import quickbooks_crosscheck as qc  # noqa: E402
+import quickbooks_figures as qf  # noqa: E402
+import quickbooks_fixtures as fx  # noqa: E402
+import quickbooks_pnl as qp  # noqa: E402
+import quickbooks_questions as qq  # noqa: E402
+import quickbooks_sbcd as qs  # noqa: E402
+
+D = Decimal
+L, S = fx.line, fx.sale
+X, Y = "Customer X (fictional)", "Customer Y (fictional)"
+
+
+def read(sections):
+    return qp.read_profit_and_loss_detail("pnl.xlsx", fx.xlsx(fx.report_rows(sections)))
+
+
+def shop():
+    """Job A for Customer X ($4,000 invoice, -$200 credit memo, $1,000 materials), a $700 invoice for Customer X with no
+    job, a $50 Deposit, a $900 bill with only a vendor's name, and a $500 office expense."""
+    return read({
+        "Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None),
+                                      L(3, "Invoice", "1002", X, D("700"), None),
+                                      L(4, "Credit Memo", "1003", f"{X}:Job A", D("-200"), None),
+                                      L(5, "Deposit", "", f"{X}:Job A", D("50"), None, "", "Checking")])],
+        "Expenses": [("Job Materials", [L(5, "Bill", "B-1", f"{X}:Job A", D("1000"), None),
+                                        L(6, "Bill", "B-2", "Garden Supply (fictional)", D("900"), None)]),
+                     ("Office Supplies", [L(7, "Expense", "", "Office Depot (fictional)", D("500"), None)])]})
+
+
+def first(questions, kind, contains=""):
+    return next(q for q in questions.questions if q.kind == kind and contains in q.title)
+
+
+class OrderAndShapeTests(unittest.TestCase):
+    def test_questions_come_in_order_with_their_progress(self):
+        questions = qq.open_questions(shop())
+        kinds = [q.kind for q in questions.questions]
+        self.assertEqual([qq.JOBS, qq.ACCOUNT, qq.ACCOUNT, qq.LINE], kinds)
+        self.assertEqual(["Question 1 of 4", "Question 2 of 4", "Question 3 of 4", "Question 4 of 4"],
+                         [q.progress for q in questions.questions])
+        self.assertEqual("Do you use sub-customers in QuickBooks for jobs?", questions.questions[0].title)
+        self.assertFalse(questions.done)
+
+    def test_every_question_offers_not_sure_and_only_allowed_choices(self):
+        for question in qq.open_questions(shop()).questions:
+            with self.subTest(question.key):
+                self.assertEqual(qq.NOT_SURE, question.choices[-1].value)
+                self.assertEqual(len({c.value for c in question.choices}), len(question.choices))
+        memo = first(qq.open_questions(shop()), qq.LINE, "-$200.00")
+        # A negative line in Income can only be a reduction (never revenue); it isn't outside the period.
+        self.assertEqual([qf.REDUCTION, qq.NOT_SURE], [c.value for c in memo.choices])
+        self.assertIn("10/04/2026 · Credit Memo 1003", memo.details[0])
+        self.assertIn("-$200.00", memo.details[1])
+        self.assertIn("Row ", memo.small_print)
+
+    def test_money_received_is_shown_as_held_never_asked(self):
+        questions = qq.open_questions(shop())
+        self.assertEqual(1, len(questions.held_lines))
+        self.assertIn("money received or moved, so MargenX never counts it", questions.held_lines[0].reason)
+        self.assertNotIn("$50.00", " ".join(q.title for q in questions.questions))
+
+    def test_the_account_question_lists_every_entry(self):
+        account = first(qq.open_questions(shop()), qq.ACCOUNT, "Job Materials")
+        self.assertEqual(("Expenses", "Job Materials"), account.account)
+        self.assertIn("2 entries, $1,900.00 in all:", account.details[0])
+        self.assertEqual(3, len(account.details))
+        self.assertEqual([qf.JOB_COSTS_ACCOUNT, qf.OVERHEAD_ACCOUNT, qf.MIXED_ACCOUNT, qq.NOT_SURE],
+                         [c.value for c in account.choices])
+
+
+class AnsweringTests(unittest.TestCase):
+    def test_not_sure_and_skipping_leave_the_question_open(self):
+        report = shop()
+        questions = qq.open_questions(report)
+        same = qq.answer(report, None, questions.questions[0], qq.NOT_SURE)
+        self.assertEqual([q.key for q in questions.questions], [q.key for q in qq.open_questions(report, same).questions])
+        offered = qq.answer(report, None, questions.questions[0], "something not offered")
+        self.assertEqual(4, len(qq.open_questions(report, offered).questions))
+
+    def test_answering_never_changes_the_old_answers(self):
+        report = shop()
+        before = qf.OwnerAnswers(report=qf.report_fingerprint(report))
+        after = qq.answer(report, before, qq.open_questions(report).questions[0], "yes")
+        self.assertIsNone(before.sub_customers_are_jobs)
+        self.assertTrue(after.sub_customers_are_jobs)
+
+    def test_changing_an_answer_changes_whats_left(self):
+        report = shop()
+        jobs_question = qq.open_questions(report).questions[0]
+        yes = qq.answer(report, None, jobs_question, "yes")
+        left = qq.open_questions(report, yes)
+        self.assertTrue(any("Which job is this $700.00 for?" == q.title for q in left.questions))
+        no = qq.answer(report, yes, jobs_question, "no")  # going back and changing it
+        self.assertFalse(any(q.title.startswith("Which job") for q in qq.open_questions(report, no).questions))
+
+    def test_answers_for_another_report_are_never_carried_over(self):
+        report, other = shop(), read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("10"), None)])]})
+        theirs = qq.answer(other, None, qq.open_questions(other).questions[0], "yes")
+        mine = qq.answer(report, theirs, first(qq.open_questions(report), qq.ACCOUNT, "Office"), qf.OVERHEAD_ACCOUNT)
+        self.assertIsNone(mine.sub_customers_are_jobs)
+        self.assertEqual(qf.report_fingerprint(report), mine.report)
+
+    def test_overhead_records_the_exact_entries_and_asks_again_if_they_change(self):
+        report = shop()
+        office = first(qq.open_questions(report), qq.ACCOUNT, "Office Supplies")
+        answers = qq.answer(report, None, office, qf.OVERHEAD_ACCOUNT)
+        self.assertEqual(qf.entry_keys(report, ("Expenses", "Office Supplies")),
+                         answers.accounts[("Expenses", "Office Supplies")].entries)
+        self.assertFalse(any(q.key == office.key for q in qq.open_questions(report, answers).questions))
+        stale = qf.OwnerAnswers(report=answers.report, accounts={("Expenses", "Office Supplies"): qf.AccountAnswer(
+            qf.OVERHEAD_ACCOUNT, (("1", "x", "", "", "500"),))})
+        self.assertTrue(any(q.key == office.key for q in qq.open_questions(report, stale).questions))
+
+    def test_a_vendor_cost_can_go_to_any_job_or_overhead(self):
+        report = shop()
+        answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
+        answers = qq.answer(report, answers, first(qq.open_questions(report, answers), qq.ACCOUNT, "Job Materials"),
+                            qf.JOB_COSTS_ACCOUNT)
+        vendor = first(qq.open_questions(report, answers), qq.LINE, "$900.00")
+        self.assertEqual(f"job:{X}{qq.SEPARATOR}Job A", vendor.choices[0].value)
+        self.assertIn(qf.OVERHEAD, [c.value for c in vendor.choices])
+        self.assertNotIn("outside job", [c.value for c in vendor.choices])  # no customer to name a job for
+        assigned = qq.answer(report, answers, vendor, vendor.choices[0].value)
+        figures = qf.figures(report, assigned)
+        self.assertEqual(D("1900"), figures.jobs[(X, "Job A")]["job_costs"].amount)
+        self.assertFalse(any(q.key == vendor.key for q in qq.open_questions(report, assigned).questions))
+
+    def test_no_job_question_for_a_customer_without_jobs(self):
+        # Simpler questions (plan step 6): Customer Y has no jobs in the report, so its customer-only sale holds no job
+        # back (S8) and isn't asked about; Customer X's is.
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None),
+                                                     L(3, "Invoice", "1002", X, D("700"), None),
+                                                     L(4, "Invoice", "1003", Y, D("300"), None)])]})
+        answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
+        titles = [q.title for q in qq.open_questions(report, answers).questions]
+        self.assertEqual(["Which job is this $700.00 for?"], titles)
+        self.assertEqual(qp.COMPLETE, qf.figures(report, answers).customers[Y]["sales"].status)
+
+    def test_an_outside_job_must_be_named(self):
+        report = shop()
+        answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
+        sale = first(qq.open_questions(report, answers), qq.LINE, "$700.00")
+        unchanged = qq.answer(report, answers, sale, "outside job", outside_job="  ")
+        self.assertEqual(answers, unchanged)
+        named = qq.answer(report, answers, sale, "outside job", outside_job="Old patio, 2025 (fictional)")
+        self.assertFalse(any(q.key == sale.key for q in qq.open_questions(report, named).questions))
+
+    def test_a_mixed_account_asks_entry_by_entry(self):
+        report = shop()
+        answers = qq.answer(report, None, first(qq.open_questions(report), qq.ACCOUNT, "Office"), qf.MIXED_ACCOUNT)
+        entry = first(qq.open_questions(report, answers), qq.LINE, "Is this $500.00 entry a job cost or overhead?")
+        self.assertEqual([qf.JOB_COST, qf.OVERHEAD, qq.NOT_SURE], [c.value for c in entry.choices])
+
+    def test_a_deposit_outside_the_period_can_only_be_left_out(self):
+        late = L(5, "Deposit", "", f"{X}:Job A", D("50"), None, "", "Checking")
+        late[1] = "11/02/2026"
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None), late])]})
+        question = first(qq.open_questions(report), qq.LINE, "$50.00")
+        self.assertEqual([qf.OUTSIDE_PERIOD, qq.NOT_SURE], [c.value for c in question.choices])
+        self.assertEqual((), qq.open_questions(report).held_lines)
+
+
+class ConsistencyTests(unittest.TestCase):
+    def test_every_choice_offered_is_one_the_rules_accept(self):
+        # Whatever the owner picks among the choices shown, MargenX takes it (no "can't be used" warning): a
+        # question never offers an answer the figures would refuse.
+        late = L(5, "Deposit", "", f"{X}:Job A", D("50"), None, "", "Checking")
+        late[1] = "11/02/2026"
+        late_sale = L(6, "Invoice", "1009", f"{X}:Job A", D("80"), None)
+        late_sale[1] = "11/03/2026"
+        reports = [shop(), read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None),
+                                                               late, late_sale,
+                                                               L(7, "Journal Entry", "JE-1", Y, D("-30"), None)])],
+                                 "Other Income": [("Interest Earned", [L(8, "Journal Entry", "JE-2", "Bank (fictional)",
+                                                                         D("4"), None)])]})]
+        for report in reports:
+            for jobs in ("yes", "no"):
+                base = qq.answer(report, None, qq.open_questions(report).questions[0], jobs)
+                for question in qq.open_questions(report, base).questions:
+                    for choice in question.choices:
+                        if choice.value == qq.NOT_SURE:
+                            continue
+                        with self.subTest(report=report.layout.company, jobs=jobs, q=question.title, c=choice.value):
+                            answered = qq.answer(report, base, question, choice.value, outside_job="Old job (fictional)")
+                            self.assertEqual((), qf.figures(report, answered).warnings)
+                            self.assertFalse(any(q.key == question.key for q in qq.open_questions(report, answered).questions)
+                                             and question.kind != qq.ACCOUNT)
+
+    def test_a_line_whose_date_cant_be_read_is_shown_held(self):
+        odd = L(5, "Credit Memo", "1010", f"{X}:Job A", D("-20"), None)
+        odd[1] = "2026-10-05"
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None), odd])]})
+        questions = qq.open_questions(report)
+        self.assertIn("can't be read, so no answer can count it", " ".join(h.reason for h in questions.held_lines))
+        self.assertFalse(any("-$20.00" in q.title for q in questions.questions))
+
+
+class CrossCheckAndProblemTests(unittest.TestCase):
+    def test_the_no_filter_question_appears_only_with_a_usable_cross_check(self):
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None)])]})
+        sales = qs.read_sales_by_customer_detail("s.xlsx", fx.xlsx(fx.sbcd_rows(
+            [(X, [], [("Job A", [S(2, "Invoice", "1001", "Design", 1, 4000)])])])))
+        check = qc.cross_check(report, sales)
+        self.assertNotIn(qq.NO_FILTER, [q.kind for q in qq.open_questions(report).questions])
+        answers = qq.answer(report, None, qq.open_questions(report, None, check).questions[0], "yes", cross_check=check)
+        question = first(qq.open_questions(report, answers, check), qq.NO_FILTER)
+        answers = qq.answer(report, answers, question, "yes", cross_check=check)
+        self.assertTrue(qq.open_questions(report, answers, check).done)
+        self.assertEqual(qf.figures(report, answers, cross_check=check).jobs[(X, "Job A")]["profit_after_job_costs"].status,
+                         qp.COMPLETE)
+
+    def test_the_reports_own_problems_are_listed(self):
+        rows = fx.report_rows({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None)])]})
+        rows = [r if r[:1] != ["Total for Design income"] else fx.total("Total for Design income", D("4100")) for r in rows]
+        report = qp.read_profit_and_loss_detail("t.xlsx", fx.xlsx(rows))
+        problems = qq.open_questions(report).report_problems
+        self.assertTrue(problems)
+        self.assertIn("it says 4,100.00, but its lines add up to 4,000.00", " ".join(problems))
+
+
+class WalkThroughTests(unittest.TestCase):
+    def test_answering_every_question_leaves_only_what_can_never_be_counted(self):
+        report = shop()
+        answers = None
+        script = {qq.JOBS: "yes", "Job Materials": qf.JOB_COSTS_ACCOUNT, "Office Supplies": qf.OVERHEAD_ACCOUNT,
+                  "-$200.00": qf.REDUCTION, "$700.00": "no job", "$900.00": f"job:{X}{qq.SEPARATOR}Job A"}
+        for _ in range(20):
+            questions = qq.open_questions(report, answers)
+            if questions.done:
+                break
+            question = questions.questions[0]
+            choice = next(v for k, v in script.items() if k == question.kind or k in question.title)
+            answers = qq.answer(report, answers, question, choice)
+        self.assertTrue(qq.open_questions(report, answers).done)
+        figures = qf.figures(report, answers)
+        self.assertEqual((), figures.warnings)
+        job = figures.jobs[(X, "Job A")]
+        # $4,000 - $200 sales; $1,000 + $900 costs. The $50 Deposit is still held (never counted).
+        self.assertEqual((D("3800"), D("1900")), (job["sales"].amount, job["job_costs"].amount))
+        deposit = next(l.row for l in report.lines if l.transaction_type == "Deposit")
+        self.assertEqual({deposit}, {h.row for h in job["sales"].holds if h.row is not None})
+        self.assertEqual(D("500"), figures.company["overhead"].amount)
+
+
+if __name__ == "__main__":
+    unittest.main()
