@@ -80,10 +80,12 @@ def headline(report: qp.ProfitAndLossDetail, figures: qf.Figures) -> str:
     where = f"{layout.company}, {layout.period}"
     if profit.status == qp.COMPLETE:
         return f"After job costs, {where}: the business {made} {shown}. This figure is final for this report."
-    lines = sum(1 for (_, row) in held_lines(figures) if row is not None)
+    # The count and the amount both come from this figure's own holds, each line once (the automated review of
+    # 9234135: lines holding only a job or a customer aren't the business's).
+    lines = len({(hold.report, hold.row) for hold in profit.holds if hold.row is not None})
     held = profit.held_amount
     why = (f"{money(held)} on {lines} line{'' if lines == 1 else 's'} is still held back"
-           if lines else "the report itself has a problem")
+           if lines else "something that applies to the whole report is still open")
     return (f"After job costs, {where}: the business {made} {shown} so far, but this isn't final yet: {why}. "
             "See what's missing below.")
 

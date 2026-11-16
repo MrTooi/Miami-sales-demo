@@ -94,6 +94,17 @@ class LayerTests(unittest.TestCase):
         self.assertEqual("-$600.00 · Needs a check (see why below)", cell)
         self.assertIn("This figure is final for this report.", qr.headline(report, figures))  # the business's own
 
+    def test_the_headline_counts_only_the_lines_holding_its_own_figure(self):
+        # The automated review of 9234135: the $700 sale with no job holds only Customer X's jobs, never the business.
+        report = qp.read_profit_and_loss_detail("p.xlsx", fx.xlsx(fx.report_rows({
+            "Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None),
+                                          L(3, "Invoice", "1002", X, D("700"), None)])],
+            "Expenses": [("Job Materials", [L(5, "Bill", "B-1", f"{X}:Job A", D("1000"), None)])]})))
+        answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
+        figures = qf.figures(report, answers)
+        self.assertEqual(2, len([key for key in qr.held_lines(figures) if key[1] is not None]))  # across all figures
+        self.assertIn("$1,000.00 on 1 line is still held back", qr.headline(report, figures))
+
     def test_a_loss_is_called_a_loss(self):
         report = qp.read_profit_and_loss_detail("p.xlsx", fx.xlsx(fx.report_rows({
             "Income": [("Design income", [L(2, "Invoice", "1001", X, D("100"), None)])],
@@ -116,11 +127,30 @@ class LayerTests(unittest.TestCase):
         self.assertEqual("'@SUM(1) (fictional)", rows[0]["Customer"])
 
 
+def walk(node, out=None):
+    """Every element on the page, in the order shown."""
+    out = [] if out is None else out
+    children = getattr(node, "children", None)
+    if children:
+        for key in sorted(children):
+            walk(children[key], out)
+    else:
+        out.append((node.type, str(getattr(node, "value", ""))))
+    return out
+
+
 class ScreenTests(unittest.TestCase):
     def test_the_screen_shows_the_layers_in_order(self):
         at = AppTest.from_file(PAGE, default_timeout=30)
         at.run()
         self.assertFalse(at.exception, at.exception)
+        # The automated review of 9234135 (warning): the order itself, as shown on the page.
+        shown = [(kind, value) for kind, value in walk(at.main) if kind in ("subheader", "markdown", "caption")]
+        after_questions = shown[[i for i, (kind, _) in enumerate(shown) if kind == "subheader"][-1]:]
+        order = [next(i for i, (_, value) in enumerate(after_questions) if value.startswith(start))
+                 for start in ("After job costs,", "**Your business**", "**By customer**", "**What's missing**",
+                               "Within QuickBooks' Profit and Loss Detail")]
+        self.assertEqual(sorted(order), order)
         bare = [v for v in [e.value for e in (*at.markdown, *at.subheader, *at.caption, *at.success, *at.warning)]
                 if re.search(r"(?<!\\)\$", v)]
         self.assertEqual([], bare)  # a bare "$" starts a math formula (found in the browser)
