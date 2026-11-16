@@ -164,6 +164,25 @@ class AnsweringTests(unittest.TestCase):
         self.assertEqual("", answers.unfiltered_pair)
         self.assertIn(no_filter.key, {q.key for q in qq.open_questions(report, answers, check).questions})
 
+    def test_no_filter_confirms_only_the_pair_it_was_asked_about(self):
+        # The automated review of 872a31a: the second report is replaced before the question is answered.
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None)])]})
+
+        def check(product):
+            sales = qs.read_sales_by_customer_detail("s.xlsx", fx.xlsx(fx.sbcd_rows(
+                [(X, [], [("Job A", [S(2, "Invoice", "1001", product, 1, 4000)])])])))
+            return qc.cross_check(report, sales)
+
+        first_check, second_check = check("Design"), check("Design work")
+        self.assertTrue(first_check.usable and second_check.usable)
+        self.assertNotEqual(first_check.pair, second_check.pair)
+        answers = qq.answer(report, None, qq.open_questions(report, None, first_check).questions[0], "yes",
+                            cross_check=first_check)
+        asked = first(qq.open_questions(report, answers, first_check), qq.NO_FILTER)
+        self.assertEqual(answers, qq.answer(report, answers, asked, "yes", cross_check=second_check))
+        self.assertEqual(first_check.pair,
+                         qq.answer(report, answers, asked, "yes", cross_check=first_check).unfiltered_pair)
+
     def test_answers_for_another_report_are_never_carried_over(self):
         report, other = shop(), read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("10"), None)])]})
         theirs = qq.answer(other, None, qq.open_questions(other).questions[0], "yes")
@@ -195,6 +214,54 @@ class AnsweringTests(unittest.TestCase):
         figures = qf.figures(report, assigned)
         self.assertEqual(D("1900"), figures.jobs[(X, "Job A")]["job_costs"].amount)
         self.assertFalse(any(q.key == vendor.key for q in qq.open_questions(report, assigned).questions))
+
+    def test_overhead_then_a_job_makes_it_a_job_cost_again(self):
+        # The automated review of 872a31a: overhead first, then back to the same question and a job.
+        report = shop()
+        answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
+        answers = qq.answer(report, answers, first(qq.open_questions(report, answers), qq.ACCOUNT, "Job Materials"),
+                            qf.JOB_COSTS_ACCOUNT)
+        vendor = first(qq.open_questions(report, answers), qq.LINE, "$900.00")
+        self.assertEqual(qf.JOB_COST, vendor.line_kind)
+        overhead = qq.answer(report, answers, vendor, qf.OVERHEAD)
+        self.assertEqual(qf.OVERHEAD, overhead.lines[vendor.row].kind)
+        assigned = qq.answer(report, overhead, vendor, vendor.choices[0].value)
+        self.assertEqual((qf.JOB_COST, "Job A"), (assigned.lines[vendor.row].kind, assigned.lines[vendor.row].job))
+        figures = qf.figures(report, assigned)
+        self.assertEqual((), figures.warnings)
+        self.assertEqual(D("1900"), figures.jobs[(X, "Job A")]["job_costs"].amount)
+        self.assertEqual(qf.figures(report, qq.answer(report, answers, vendor, vendor.choices[0].value)), figures)
+        # And "Not sure yet" after overhead reopens it fully: nothing is left as overhead.
+        reopened = qq.answer(report, overhead, vendor, qq.NOT_SURE)
+        self.assertNotIn(vendor.row, reopened.lines)
+        self.assertIn(vendor.key, {q.key for q in qq.open_questions(report, reopened).questions})
+
+    def test_a_job_question_from_before_the_line_was_reopened_changes_nothing(self):
+        # The owner said "revenue", was asked which job, then went back to "Not sure yet" on what the line is:
+        # the old job question can't bring "revenue" back.
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None),
+                                                     L(3, "Journal Entry", "JE-1", X, D("40"), None)])]})
+        answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
+        entry = first(qq.open_questions(report, answers), qq.LINE, "$40.00")
+        revenue = qq.answer(report, answers, entry, qf.REVENUE)
+        job = first(qq.open_questions(report, revenue), qq.LINE, "Which job")
+        reopened = qq.answer(report, revenue, entry, qq.NOT_SURE)
+        self.assertNotIn(entry.row, reopened.lines)
+        self.assertEqual(reopened, qq.answer(report, reopened, job, job.choices[0].value))
+
+    def test_a_cost_called_overhead_then_given_a_job_is_a_job_cost(self):
+        # On a cost line the job question itself offers overhead, so the latest answer wins either way.
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None)])],
+                       "Expenses": [("Job Materials", [L(5, "Journal Entry", "JE-1", "Vendor (fictional)", D("10"),
+                                                         None)])]})
+        answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
+        entry = first(qq.open_questions(report, answers), qq.LINE, "$10.00")
+        cost = qq.answer(report, answers, entry, qf.JOB_COST)
+        job = first(qq.open_questions(report, cost), qq.LINE, "Which job")
+        overhead = qq.answer(report, cost, entry, qf.OVERHEAD)
+        assigned = qq.answer(report, overhead, job, job.choices[0].value)
+        self.assertEqual((qf.JOB_COST, "Job A"), (assigned.lines[entry.row].kind, assigned.lines[entry.row].job))
+        self.assertEqual((), qf.figures(report, assigned).warnings)
 
     def test_no_job_question_for_a_customer_without_jobs(self):
         # Simpler questions (plan step 6): Customer Y has no jobs in the report, so its customer-only sale holds no job

@@ -63,6 +63,8 @@ class Question:
     amount: Decimal | None = None
     entries: tuple = ()  # for ACCOUNT: the exact entries shown (what an "overhead" answer confirms)
     report: str = ""  # the report it was asked about (its fingerprint): an answer for any other report changes nothing
+    pair: str = ""  # for NO_FILTER: the exact pair of reports it was asked about (CrossCheck.pair)
+    line_kind: str = ""  # for "which job": what the line is, as the question shows it (a job answer keeps exactly this)
 
     @property
     def progress(self) -> str:
@@ -142,7 +144,7 @@ def open_questions(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
 
     if cross_check is not None and getattr(cross_check, "usable", False) and (
             not bound or answers.unfiltered_pair != cross_check.pair):
-        pending.append(dict(key="no-filter", kind=NO_FILTER,
+        pending.append(dict(key="no-filter", kind=NO_FILTER, pair=cross_check.pair,
                             title="Did you export both reports for the whole business, with no filter?",
                             details=("No filter means all customers and all accounts, for the same dates.",
                                      "MargenX can't see a filter QuickBooks doesn't print in the file, so it needs "
@@ -252,7 +254,8 @@ def _line_question(report, answers, result, resolution, line, mixed) -> dict | N
             choices.append(Choice("outside job", "A job that isn't in this report (I'll name it)"))
         if resolution.kind == qf.JOB_COST and customer is None:
             choices.append(Choice(qf.OVERHEAD, KIND_LABELS[qf.OVERHEAD]))
-        return {**common, "key": f"job:{row}", "title": f"Which job is this {_money(line.amount)} for?",
+        return {**common, "key": f"job:{row}", "line_kind": resolution.kind,
+                "title": f"Which job is this {_money(line.amount)} for?",
                 "details": (*common["details"], f"It's {whose}, but which job it belongs to isn't known."),
                 "choices": tuple(choices)}
     return None
@@ -280,8 +283,8 @@ def answer(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | None, ques
     if question.kind == JOBS:
         return dataclasses.replace(answers, sub_customers_are_jobs=choice == "yes")
     if question.kind == NO_FILTER:
-        if cross_check is None or not getattr(cross_check, "usable", False):
-            return answers
+        if cross_check is None or not getattr(cross_check, "usable", False) or cross_check.pair != question.pair:
+            return answers  # only the pair of reports the question was asked about can be confirmed
         return dataclasses.replace(answers, unfiltered_pair=cross_check.pair)
     if question.kind == ACCOUNT:
         entries = tuple(question.entries) if choice == qf.OVERHEAD_ACCOUNT else ()  # exactly the entries shown
@@ -290,10 +293,16 @@ def answer(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | None, ques
     lines = dict(answers.lines)
     previous = lines.get(question.row)
     if choice.startswith("job:") or choice in ("no job", "outside job"):
-        kind = previous.kind if previous is not None else None
-        if kind is None:
-            resolution = next(r for r in qf.figures(report, answers).resolutions if r.row == question.row)
-            kind = resolution.kind
+        # What the line is comes from the question, never from the earlier answer: after "overhead", a job
+        # makes it a job cost again (the automated review of 872a31a).
+        kind = question.line_kind
+        own = {kind} | ({qf.OVERHEAD} if qf.OVERHEAD in {c.value for c in question.choices} else set())
+        if previous is not None:
+            now = previous.kind
+        else:
+            now = next(r for r in qf.figures(report, answers).resolutions if r.row == question.row).kind
+        if now not in own:
+            return answers  # the line has been answered (or reopened) as something else since this question was asked
         if choice.startswith("job:"):
             customer, job = choice[4:].split(SEPARATOR, 1)
             named = qf.names_of(next(l for l in report.lines if l.row == question.row))[0]
@@ -320,11 +329,11 @@ def _reopen(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers, question: 
         return dataclasses.replace(answers, accounts={k: v for k, v in answers.accounts.items() if k != question.account})
     lines = dict(answers.lines)
     previous = lines.pop(question.row, None)
-    if question.key.startswith("job:") and previous is not None:
-        # Only the job part is reopened. If the earlier answer also said what the line is (not what MargenX
-        # makes of it by itself), that part stays.
+    if question.key.startswith("job:") and previous is not None and previous.kind == question.line_kind:
+        # Only the job part is reopened. If the owner said what the line is (not what MargenX makes of it by
+        # itself), that part stays. An "overhead" given here is this question's own answer, so it goes.
         automatic = next(r for r in qf.figures(report, dataclasses.replace(answers, lines=lines)).resolutions
                          if r.row == question.row)
-        if previous.kind != automatic.kind:
-            lines[question.row] = qf.LineAnswer(previous.kind, answered_at=previous.answered_at)
+        if question.line_kind != automatic.kind:
+            lines[question.row] = qf.LineAnswer(question.line_kind, answered_at=previous.answered_at)
     return dataclasses.replace(answers, lines=lines)
