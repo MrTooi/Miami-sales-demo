@@ -621,12 +621,13 @@ class _Builder:
                    if not self.one_report else "."))
 
     def assemble(self):
-        holds: dict[tuple, list[Hold]] = {}
+        # Each figure's holds, once each, in the order first met. A dict keeps that order and finds a repeat at
+        # once (Hold is frozen, so equal holds hash alike); a list search here took seconds on a few thousand
+        # lines (the before-first-shop speed check on issue #128).
+        holds: dict[tuple, dict[Hold, None]] = {}
 
         def put(key, hold):
-            bucket = holds.setdefault(key, [])
-            if hold not in bucket:
-                bucket.append(hold)
+            holds.setdefault(key, {})[hold] = None
 
         for where, who, figure, hold in self.pending:
             if where == "company":
@@ -648,11 +649,7 @@ class _Builder:
             return Figure(self.amounts.get(key, ZERO), tuple(holds.get(key, ())))
 
         def derived(amount, *parts, extra=()):
-            seen = []
-            for part in parts:
-                for hold in part.holds:
-                    if hold not in seen:
-                        seen.append(hold)
+            seen = dict.fromkeys(hold for part in parts for hold in part.holds)
             return Figure(amount, tuple(seen) + tuple(extra))
 
         sales, costs = figure(("company", "sales")), figure(("company", "job_costs"))
