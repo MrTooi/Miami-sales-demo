@@ -85,9 +85,9 @@ NOT_SURE_ACCOUNT = "not sure"
 ACCOUNT_USES = (JOB_COSTS_ACCOUNT, OVERHEAD_ACCOUNT, MIXED_ACCOUNT, NOT_SURE_ACCOUNT)
 
 CROSS_CHECK_REPORT = "Sales by Customer Detail"
-NO_FILTER_YET = ("The two reports agree, but a filter QuickBooks doesn't print can't be seen in the files: confirm both "
-                 "were exported for the whole business, with no filter (all customers, all accounts), before a job's "
-                 "profit can be Complete.")
+NO_FILTER_YET = ("Sales by Customer Detail can be used as the cross-check, but a filter QuickBooks doesn't print can't be "
+                 "seen in the files: confirm both were exported for the whole business, with no filter (all customers, "
+                 "all accounts), before a job's profit can be Complete.")
 ONE_REPORT = ("One report alone can't make a job's profit Complete: a second report has to cross-check its "
               "sales first (issue #128, S3).")
 
@@ -106,6 +106,11 @@ class LineAnswer:
     outside_job: str | None = None  # the name of a job that isn't in this report (revenue, reduction or job cost)
     duplicate_of: int | None = None  # kept for DUPLICATE answers, which aren't supported yet (always refused)
     answered_at: str = ""
+    # Kept by the questions (quickbooks_questions), never used for figures: the question that gave this answer,
+    # and, for a "which job" answer, the owner's own answer about what the line is that it builds on (None when
+    # MargenX works that out by itself). Reopening the job answer puts exactly that back (PR #142 manual review).
+    asked: str = ""
+    base: "LineAnswer | None" = None
 
 
 # One entry of an account, as the owner saw it when confirming: Excel row, date, number, Name and amount.

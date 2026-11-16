@@ -19,7 +19,8 @@ import quickbooks_fixtures as fx  # noqa: E402
 import quickbooks_pnl as qp  # noqa: E402
 import quickbooks_sbcd as qs  # noqa: E402
 
-PAIRS = int(os.environ.get("QBO_CROSSCHECK_PAIRS", "300"))
+# A local run may check more, never fewer (the automated review of d05510c: a negative value skipped them all).
+PAIRS = max(300, int(os.environ.get("QBO_CROSSCHECK_PAIRS", "300")))
 
 
 class KnownAnswerTests(unittest.TestCase):
