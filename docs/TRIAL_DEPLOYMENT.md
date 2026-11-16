@@ -286,10 +286,11 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
 **If any check fails,** the copy is stopped (section 7, step 1), the problem is fixed in a PR, and the affected checks are run again.
 
 ## 7. The stop procedure (closeout, early end, emergency: always the same, in this order)
-1. **Cut the public route, then stop the copy.**
-   1. **Cloudflare first:** in the tunnel's settings (Routes), **delete its public hostname** (the app's address → `127.0.0.1:8501`). New requests can no longer reach the copy, and the address's DNS record is removed with it. Its effect on an *already-open* tab isn't measured yet (PR B's release check).
-   2. **Then Render:** the service → **Suspend**. Render shows "Suspended" at once, but the copy keeps running until Render delivers the stop signal, **about 2 minutes later** (section 5, "Suspend is not instant").
-   3. **The stop is complete only when both are seen:** the copy's log shows `margenx-trial: stopping: asked to stop by the host`, and the tunnel shows **Down** (0 connections) in Cloudflare. The launcher stops MargenX first, then the tunnel, which is what finally cuts open tabs and uploads.
+1. **Stop the copy and cut its public route. Nothing waits on Cloudflare.**
+   1. **Render, immediately:** the service → **Suspend**. Do this first, before anything else: Render shows "Suspended" at once, but the copy keeps running until Render delivers the stop signal, **about 2 minutes later** (section 5, "Suspend is not instant"), so the countdown should start as early as possible.
+   2. **Cloudflare, right after:** in the tunnel's settings (Routes), **delete its public hostname** (the app's address → `127.0.0.1:8501`). New requests can then no longer reach the copy, and the address's DNS record is removed with it. Its effect on an *already-open* tab isn't measured yet (PR B's release check).
+      - **If the route can't be deleted promptly** (Cloudflare unreachable, no access to the account, or the deletion stalls), don't wait for it: the Suspend from step i is already under way. Go on to step iii, keep trying the route, and record when it was finally deleted.
+   3. **The stop is complete only when both are seen:** the copy's log shows `margenx-trial: stopping: asked to stop by the host`, and the tunnel shows **Down** (0 connections) in Cloudflare. The launcher stops MargenX first, then the tunnel, which is what finally cuts open tabs and uploads. **Then confirm the route is deleted** (the tunnel's published routes are empty); if step ii was delayed, finish it now.
 2. **Remove the email from the Access rule.**
    - Zero Trust → Access → Applications → the app → its rule → delete the email.
    - If it was the only email, the application now lets nobody in.
@@ -316,7 +317,7 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
       - **a fresh login** with the former email.
 
       Both must be refused. Only test a copy that is running and healthy: a refusal from a stopped tunnel proves nothing.
-   8. **Delete the public hostname again, then Suspend again, whatever the result:** an ended trial's copy keeps no route. Wait for the `stopping` line and the tunnel showing Down (step 1.iii). If anything got in, treat it as an incident: the copy stays suspended, and Alex is told at once.
+   8. **Suspend again, whatever the result, then delete the public hostname again,** as in step 1: an ended trial's copy keeps no route. Wait for the `stopping` line and the tunnel showing Down, and confirm the routes are empty (step 1.iii). If anything got in, treat it as an incident: the copy stays suspended, and Alex is told at once.
 
 **Removing the email or revoking sessions without stopping the copy never ends a trial:** an already-open live connection may stay open.
 
