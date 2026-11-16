@@ -332,11 +332,32 @@ class AnsweringTests(unittest.TestCase):
         # The old job question, answered with a job or with "Not sure yet", changes nothing.
         report, entry, cost, job = self.held_cost_entry()
         overhead = qq.answer(report, cost, entry, qf.OVERHEAD, answered_at="t2")
-        for choice in (job.choices[0].value, qf.OVERHEAD, "outside job", qq.NOT_SURE):
+        self.assertNotIn("outside job", [c.value for c in job.choices])  # a vendor's line: no customer to name a job for
+        for choice in (job.choices[0].value, qf.OVERHEAD, qq.NOT_SURE):
             with self.subTest(choice):
-                self.assertEqual(overhead, qq.answer(report, overhead, job, choice, outside_job="Job Z"))
+                self.assertEqual(overhead, qq.answer(report, overhead, job, choice))
         self.assertEqual((qf.OVERHEAD, "t2"), (overhead.lines[entry.row].kind, overhead.lines[entry.row].answered_at))
         self.assertNotIn(job.key, {q.key for q in qq.open_questions(report, overhead).questions})
+
+    def test_a_job_answer_can_always_be_taken_back(self):
+        # PR #142 manual review, round 2: Job Materials is "job costs", the $900 vendor bill is given Job A (or
+        # overhead), then the account is changed to "mixed". "Not sure yet" on the job question still takes it back.
+        report = shop()
+        answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
+        materials = first(qq.open_questions(report, answers), qq.ACCOUNT, "Job Materials")
+        answers = qq.answer(report, answers, materials, qf.JOB_COSTS_ACCOUNT)
+        vendor = first(qq.open_questions(report, answers), qq.LINE, "$900.00")
+        for choice in (vendor.choices[0].value, qf.OVERHEAD):
+            with self.subTest(choice):
+                given = qq.answer(report, answers, vendor, choice)
+                mixed = qq.answer(report, given, materials, qf.MIXED_ACCOUNT)
+                self.assertIn(vendor.row, mixed.lines)
+                withdrawn = qq.answer(report, mixed, vendor, qq.NOT_SURE)
+                self.assertNotIn(vendor.row, withdrawn.lines)
+                figures = qf.figures(report, withdrawn)
+                self.assertEqual(qp.NEEDS_A_CHECK, figures.jobs[(X, "Job A")]["job_costs"].status)
+                # A new choice on the old question is still refused: the line is now an unsorted mixed entry.
+                self.assertEqual(withdrawn, qq.answer(report, withdrawn, vendor, vendor.choices[0].value))
 
     def test_reopening_a_job_answer_puts_back_the_owners_own_answer_exactly(self):
         # PR #142 manual review, blocker 1: the classification comes back with its own time, never the job answer's.

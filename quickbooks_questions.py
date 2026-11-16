@@ -372,10 +372,11 @@ def _reopen(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers, question: 
     lines = dict(answers.lines)
     if question.key.startswith("job:"):
         current = lines.get(question.row)
-        if current is None or current.asked != question.key or not _still_current(report, answers, question):
+        if current is None or current.asked != question.key:
             return answers  # nothing of this question's to reopen
-        # Only this question's own answer (the job, or its overhead) is reopened: the owner's own answer about
-        # what the line is, if any, is put back exactly as it was given.
+        # Taking back this question's own answer (the job, or its overhead) is always allowed, whatever has changed
+        # since (an account answer, say): it can only hold figures back (PR #142 manual review, round 2). The
+        # owner's own answer about what the line is, if any, is put back exactly as it was given.
         if current.base is None:
             lines.pop(question.row)
         else:
