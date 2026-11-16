@@ -61,6 +61,8 @@ class Question:
     row: int | None = None  # for LINE
     account: tuple[str, ...] | None = None  # for ACCOUNT
     amount: Decimal | None = None
+    entries: tuple = ()  # for ACCOUNT: the exact entries shown (what an "overhead" answer confirms)
+    report: str = ""  # the report it was asked about (its fingerprint): an answer for any other report changes nothing
 
     @property
     def progress(self) -> str:
@@ -165,6 +167,7 @@ def open_questions(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
         everything = [l for l in report.lines if l.account_path == path]
         total = sum((l.amount for l in everything if l.amount is not None), Decimal("0"))
         pending.append(dict(key="account:" + " › ".join(path), kind=ACCOUNT, account=path, amount=total,
+                            entries=qf.entry_keys(report, path),
                             title=f"How do you usually use the account \"{path[-1]}\"?",
                             details=(f"{len(everything)} entr{'y' if len(everything) == 1 else 'ies'}, "
                                      f"{_money(total)} in all:",
@@ -190,7 +193,9 @@ def open_questions(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
             pending.append(question)
 
     total = len(pending)
-    questions = tuple(Question(number=index + 1, total=total, **{**item, "choices": (*item["choices"], NOT_SURE_CHOICE)})
+    fingerprint = qf.report_fingerprint(report)
+    questions = tuple(Question(number=index + 1, total=total, report=fingerprint,
+                               **{**item, "choices": (*item["choices"], NOT_SURE_CHOICE)})
                       for index, item in enumerate(pending))
     problems = tuple(f"Row {p.row}: {p.text}" for p in report.problems)
     return QuestionList(questions, tuple(held), result.warnings, problems)
@@ -256,12 +261,21 @@ def _line_question(report, answers, result, resolution, line, mixed) -> dict | N
 def answer(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | None, question: Question, choice: str, *,
            outside_job: str | None = None, cross_check=None, answered_at: str = "") -> qf.OwnerAnswers:
     """New answers with one question answered (the old answers are never changed), bound to this report.
-    NOT_SURE (or any choice the question doesn't offer) changes nothing: the question stays open."""
+
+    - A question asked about another report changes nothing (the automated review of 8370349).
+    - NOT_SURE clears any earlier answer to this question, so it is open again and its figures go back to
+      "Needs a check" (going back and saying "not sure"). Skipping is simply not calling this.
+    - A choice the question doesn't offer changes nothing."""
     answers = answers or qf.OwnerAnswers()
-    if answers.report != qf.report_fingerprint(report):
+    fingerprint = qf.report_fingerprint(report)
+    if question.report != fingerprint:
+        return answers
+    if answers.report != fingerprint:
         answers = qf.OwnerAnswers()  # answers for another report are never carried over
-    answers = dataclasses.replace(answers, report=qf.report_fingerprint(report))
-    if choice == NOT_SURE or choice not in {c.value for c in question.choices}:
+    answers = dataclasses.replace(answers, report=fingerprint)
+    if choice == NOT_SURE:
+        return _reopen(report, answers, question)
+    if choice not in {c.value for c in question.choices}:
         return answers
     if question.kind == JOBS:
         return dataclasses.replace(answers, sub_customers_are_jobs=choice == "yes")
@@ -270,7 +284,7 @@ def answer(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | None, ques
             return answers
         return dataclasses.replace(answers, unfiltered_pair=cross_check.pair)
     if question.kind == ACCOUNT:
-        entries = qf.entry_keys(report, question.account) if choice == qf.OVERHEAD_ACCOUNT else ()
+        entries = tuple(question.entries) if choice == qf.OVERHEAD_ACCOUNT else ()  # exactly the entries shown
         accounts = {**answers.accounts, question.account: qf.AccountAnswer(choice, entries, answered_at)}
         return dataclasses.replace(answers, accounts=accounts)
     lines = dict(answers.lines)
@@ -293,4 +307,24 @@ def answer(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | None, ques
             lines[question.row] = qf.LineAnswer(kind, outside_job=outside_job.strip(), answered_at=answered_at)
     else:
         lines[question.row] = qf.LineAnswer(choice, answered_at=answered_at)
+    return dataclasses.replace(answers, lines=lines)
+
+
+def _reopen(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers, question: Question) -> qf.OwnerAnswers:
+    """"Not sure yet": the earlier answer to this question no longer counts."""
+    if question.kind == JOBS:
+        return dataclasses.replace(answers, sub_customers_are_jobs=None)
+    if question.kind == NO_FILTER:
+        return dataclasses.replace(answers, unfiltered_pair="")
+    if question.kind == ACCOUNT:
+        return dataclasses.replace(answers, accounts={k: v for k, v in answers.accounts.items() if k != question.account})
+    lines = dict(answers.lines)
+    previous = lines.pop(question.row, None)
+    if question.key.startswith("job:") and previous is not None:
+        # Only the job part is reopened. If the earlier answer also said what the line is (not what MargenX
+        # makes of it by itself), that part stays.
+        automatic = next(r for r in qf.figures(report, dataclasses.replace(answers, lines=lines)).resolutions
+                         if r.row == question.row)
+        if previous.kind != automatic.kind:
+            lines[question.row] = qf.LineAnswer(previous.kind, answered_at=previous.answered_at)
     return dataclasses.replace(answers, lines=lines)

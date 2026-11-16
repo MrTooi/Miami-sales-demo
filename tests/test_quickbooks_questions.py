@@ -82,7 +82,7 @@ class OrderAndShapeTests(unittest.TestCase):
 
 
 class AnsweringTests(unittest.TestCase):
-    def test_not_sure_and_skipping_leave_the_question_open(self):
+    def test_not_sure_and_skipping_leave_an_unanswered_question_open(self):
         report = shop()
         questions = qq.open_questions(report)
         same = qq.answer(report, None, questions.questions[0], qq.NOT_SURE)
@@ -105,6 +105,64 @@ class AnsweringTests(unittest.TestCase):
         self.assertTrue(any("Which job is this $700.00 for?" == q.title for q in left.questions))
         no = qq.answer(report, yes, jobs_question, "no")  # going back and changing it
         self.assertFalse(any(q.title.startswith("Which job") for q in qq.open_questions(report, no).questions))
+
+    def test_a_question_about_another_report_changes_nothing(self):
+        # The automated review of 8370349: account and line questions from report A, answered against report B.
+        report, other = shop(), read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("10"), None)])],
+                                      "Expenses": [("Office Supplies", [L(7, "Expense", "", "Office Depot (fictional)",
+                                                                          D("600"), None)])]})
+        for question in (first(qq.open_questions(report), qq.ACCOUNT, "Office Supplies"),
+                         first(qq.open_questions(report), qq.LINE, "-$200.00")):
+            with self.subTest(question.key):
+                choice = question.choices[0].value
+                start = qf.OwnerAnswers(report=qf.report_fingerprint(other))
+                self.assertEqual(start, qq.answer(other, start, question, choice))
+
+    def test_not_sure_reopens_an_answered_question(self):
+        # The automated review of 8370349: going back and choosing "Not sure yet" clears the earlier answer.
+        report = shop()
+        jobs = qq.open_questions(report).questions[0]
+        answers = qq.answer(report, None, jobs, "yes")
+        office = first(qq.open_questions(report, answers), qq.ACCOUNT, "Office Supplies")
+        memo = first(qq.open_questions(report, answers), qq.LINE, "-$200.00")
+        sale = first(qq.open_questions(report, answers), qq.LINE, "$700.00")
+        answers = qq.answer(report, answers, office, qf.OVERHEAD_ACCOUNT)
+        answers = qq.answer(report, answers, memo, qf.REDUCTION)
+        answers = qq.answer(report, answers, sale, "no job")
+        keys = {q.key for q in qq.open_questions(report, answers).questions}
+        self.assertFalse({office.key, memo.key, sale.key} & keys)
+        for question in (office, memo, sale, jobs):
+            answers = qq.answer(report, answers, question, qq.NOT_SURE)
+        keys = {q.key for q in qq.open_questions(report, answers).questions}
+        self.assertTrue({office.key, memo.key, jobs.key} <= keys)  # the job question needs "yes" to jobs again
+        self.assertEqual((None, {}, {}), (answers.sub_customers_are_jobs, dict(answers.accounts), dict(answers.lines)))
+        figures = qf.figures(report, answers)
+        self.assertEqual(qp.NEEDS_A_CHECK, figures.company["overhead"].status)
+
+    def test_not_sure_on_the_job_keeps_what_the_line_is(self):
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None),
+                                                     L(3, "Journal Entry", "JE-1", X, D("-40"), None)])]})
+        answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
+        entry = first(qq.open_questions(report, answers), qq.LINE, "-$40.00")
+        answers = qq.answer(report, answers, entry, qf.REDUCTION)
+        job = first(qq.open_questions(report, answers), qq.LINE, "Which job")
+        answers = qq.answer(report, answers, job, "no job")
+        answers = qq.answer(report, answers, job, qq.NOT_SURE)
+        row = entry.row
+        self.assertEqual((qf.REDUCTION, False), (answers.lines[row].kind, answers.lines[row].no_job))
+        self.assertIn(job.key, {q.key for q in qq.open_questions(report, answers).questions})
+
+    def test_no_filter_can_be_reopened(self):
+        report = read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None)])]})
+        sales = qs.read_sales_by_customer_detail("s.xlsx", fx.xlsx(fx.sbcd_rows(
+            [(X, [], [("Job A", [S(2, "Invoice", "1001", "Design", 1, 4000)])])])))
+        check = qc.cross_check(report, sales)
+        answers = qq.answer(report, None, qq.open_questions(report, None, check).questions[0], "yes", cross_check=check)
+        no_filter = first(qq.open_questions(report, answers, check), qq.NO_FILTER)
+        answers = qq.answer(report, answers, no_filter, "yes", cross_check=check)
+        answers = qq.answer(report, answers, no_filter, qq.NOT_SURE, cross_check=check)
+        self.assertEqual("", answers.unfiltered_pair)
+        self.assertIn(no_filter.key, {q.key for q in qq.open_questions(report, answers, check).questions})
 
     def test_answers_for_another_report_are_never_carried_over(self):
         report, other = shop(), read({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("10"), None)])]})
