@@ -694,10 +694,6 @@ class StepRuleTests(unittest.TestCase):
         self.assertEqual(D("6000"), result.company["sales"].amount)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class SpeedCheckBeforeTheFirstShopTests(unittest.TestCase):
     """The before-first-shop speed check (issue #128): a figure's holds were found by searching a list, which took
     seconds on a few thousand lines. Each hold is still listed once, in the order first met, and a big report
@@ -714,7 +710,8 @@ class SpeedCheckBeforeTheFirstShopTests(unittest.TestCase):
         return tuple(seen)
 
     def test_each_hold_is_listed_once_in_the_order_first_met(self):
-        vendors = [L(7 + i, "Bill", f"B-{3 + i}", f"Garden Supply {i} (fictional)", 100.0 + i, 0.0) for i in range(4)]
+        vendors = [L(7 + i, "Bill", f"B-{3 + i}", f"Garden Supply {i} (fictional)", D("100.00") + D(i), D("0.00"))
+                   for i in range(4)]
         report = two_jobs(extra_expenses=vendors)
         held_rows = [l.row for l in report.lines if l.name.startswith("Garden Supply")]  # vendor name only
         result = figures(report, answers(JOB_COSTS))
@@ -742,3 +739,7 @@ class SpeedCheckBeforeTheFirstShopTests(unittest.TestCase):
         held = result.customers[X]["profit_after_job_costs"]
         self.assertEqual(3000 + 2, len({h.row for h in held.holds}))  # every bill, plus Job Materials unanswered
         self.assertLess(took, 1.0, f"figures took {took:.2f}s for 3,000 held lines")
+
+
+if __name__ == "__main__":
+    unittest.main()
