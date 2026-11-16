@@ -99,6 +99,21 @@ def _money(amount: Decimal | None) -> str:
     return f"-${-amount:,.2f}" if amount < 0 else f"${amount:,.2f}"
 
 
+def _type_and_number(line: qp.LedgerLine) -> str:
+    return " ".join(part for part in (line.transaction_type.strip(), line.num.strip()) if part)
+
+
+def _account_summary(entries: list[qp.LedgerLine], total: Decimal) -> str:
+    """How many entries and their total. A total is never shown as complete when an amount can't be read (the
+    automated review of b3921fe)."""
+    count = f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'}"
+    unknown = sum(1 for l in entries if l.amount is None)
+    if unknown:
+        return (f"{count}: {_money(total)} that MargenX can read, and {unknown} with an amount it can't read, so "
+                "the account's total isn't known:")
+    return f"{count}, {_money(total)} in all:"
+
+
 def _line_details(line: qp.LedgerLine) -> tuple[str, ...]:
     return (f"{line.date.strip() or '(no date)'} · {line.transaction_type.strip() or '(no type)'} "
             f"{line.num.strip()}".rstrip(),
@@ -171,9 +186,9 @@ def open_questions(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
         pending.append(dict(key="account:" + " › ".join(path), kind=ACCOUNT, account=path, amount=total,
                             entries=qf.entry_keys(report, path),
                             title=f"How do you usually use the account \"{path[-1]}\"?",
-                            details=(f"{len(everything)} entr{'y' if len(everything) == 1 else 'ies'}, "
-                                     f"{_money(total)} in all:",
-                                     *(f"{l.date.strip()} · {l.name.strip()} · {_money(l.amount)}" for l in everything)),
+                            details=(_account_summary(everything, total),
+                                     *(f"Row {l.row} · {l.date.strip()} · {_type_and_number(l)} · {l.name.strip()} · "
+                                       f"{_money(l.amount)}" for l in everything)),
                             small_print=" › ".join(path) + " · plan rule S7",
                             choices=tuple(Choice(k, v) for k, v in ACCOUNT_LABELS.items())))
 

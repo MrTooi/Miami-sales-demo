@@ -77,6 +77,20 @@ class OrderAndShapeTests(unittest.TestCase):
         self.assertEqual(("Expenses", "Job Materials"), account.account)
         self.assertIn("2 entries, $1,900.00 in all:", account.details[0])
         self.assertEqual(3, len(account.details))
+        self.assertTrue(account.details[1].startswith("Row "), account.details[1])
+        self.assertIn("Bill B-1", account.details[1])
+
+    def test_an_account_total_with_an_unreadable_amount_is_never_shown_as_complete(self):
+        # The automated review of b3921fe. On a real file an unreadable amount keeps its whole section from being
+        # checked, so this account is never asked about; the wording is guarded all the same.
+        import dataclasses
+        report = shop()
+        bill = next(l for l in report.lines if l.num == "B-2")
+        broken = dataclasses.replace(report, lines=tuple(dataclasses.replace(l, amount=None, outcome=qp.NOT_RESOLVED) if l is bill else l
+                                                         for l in report.lines))
+        account = first(qq.open_questions(broken), qq.ACCOUNT, "Job Materials")
+        self.assertIn("$1,000.00 that MargenX can read, and 1 with an amount it can't read", account.details[0])
+        self.assertNotIn("in all", account.details[0])
         self.assertEqual([qf.JOB_COSTS_ACCOUNT, qf.OVERHEAD_ACCOUNT, qf.MIXED_ACCOUNT, qq.NOT_SURE],
                          [c.value for c in account.choices])
 
