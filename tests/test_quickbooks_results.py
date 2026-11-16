@@ -133,6 +133,9 @@ class LayerTests(unittest.TestCase):
 
     def test_whats_missing_shows_each_held_amount_beside_its_reason(self):
         # The PR #144 manual review, warning 2: the amount comes from the hold, not only from the reason's words.
+        # Reasons are written "(20.00)" by quickbooks_figures; held_lines() puts them through plain() first, which
+        # makes that "($20.00)", the form missing() leaves out when the same amount is already shown beside it.
+        self.assertEqual("Row 3 ($20.00) is held.", qr.plain("Row 3 (20.00) is held."))
         held = {"sales": qf.Figure(D("0"), (qf.Hold(3, D("20"), "Row 3 (20.00) is held."),
                                              qf.Hold(4, D("-50"), "A reason with no amount."),
                                              qf.Hold(5, None, "A line that can't be read."),
