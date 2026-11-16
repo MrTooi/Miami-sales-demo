@@ -21,7 +21,8 @@ import quickbooks_fixtures as fx  # noqa: E402
 import quickbooks_pnl as qp  # noqa: E402
 import quickbooks_sbcd as qs  # noqa: E402
 
-REPORTS = int(os.environ.get("QBO_SBCD_REPORTS", "300"))
+# A local run may check more, never fewer (the automated review of d05510c: a negative value skipped them all).
+REPORTS = max(300, int(os.environ.get("QBO_SBCD_REPORTS", "300")))
 
 
 def cents(amount) -> int:

@@ -28,7 +28,8 @@ import quickbooks_fixtures as fx  # noqa: E402
 import quickbooks_pnl as qp  # noqa: E402
 import quickbooks_rules as qr  # noqa: E402
 
-REPORTS = int(os.environ.get("QBO_PNL_REPORTS", "300"))
+# A local run may check more, never fewer (the automated review of d05510c: a negative value skipped them all).
+REPORTS = max(300, int(os.environ.get("QBO_PNL_REPORTS", "300")))
 SECTION_KEYS = {"Income": "Income", "Cost of Goods Sold": "Cost of Goods Sold", "Expenses": "Expenses",
                 "Other Income": "Other Income", "Other Expense": "Other Expenses"}
 
