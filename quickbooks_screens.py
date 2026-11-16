@@ -28,6 +28,13 @@ DONE_NOTE = ("No questions left doesn't mean every figure is final. Money Margen
              "Each figure shows its own status.")
 
 
+def _md(value) -> str:
+    """Text for any Streamlit call that reads Markdown: ui.md_text, and every "$" escaped. Streamlit reads the text
+    between two "$" as a math formula, so "$5,500.00 so far ... $3,600.00" would show garbled (found in the browser
+    in step 7)."""
+    return ui.md_text(value).replace("$", "\\$")
+
+
 @dataclasses.dataclass(frozen=True)
 class _Entry:
     """One saved answer, as the owner gave it."""
@@ -128,11 +135,11 @@ def question_screen(report: qp.ProfitAndLossDetail, cross_check=None, *, key: st
     in_use = [i for i, e in enumerate(state.history) if _in_use(e, state.answers, result, open_keys, cross_check)]
 
     for problem in listing.report_problems:
-        st.error(ui.md_text(f"A problem in the report itself: {problem}"))
+        st.error(_md(f"A problem in the report itself: {problem}"))
     for warning in listing.warnings:
-        st.warning(ui.md_text(warning))
+        st.warning(_md(warning))
     if state.message:
-        st.info(ui.md_text(state.message))
+        st.info(_md(state.message))
         state.message = ""
 
     if state.changing is not None:
@@ -170,17 +177,17 @@ def _ask(report: qp.ProfitAndLossDetail, state: _State, question: qq.Question, c
         number, total = progress or (question.number, question.total)
         st.markdown(f"**Question {number} of {total}**")
     else:
-        st.markdown(f"**Changing an earlier answer.** You said: {ui.md_text(previous)}")
-    st.subheader(ui.md_text(question.title))
+        st.markdown(f"**Changing an earlier answer.** You said: {_md(previous)}")
+    st.subheader(_md(question.title))
     if question.row is not None:
-        st.markdown(ui.md_text(f"Row {question.row} of the report"))
+        st.markdown(_md(f"Row {question.row} of the report"))
     for line in question.details:
-        st.markdown(ui.md_text(line))
+        st.markdown(_md(line))
     if question.small_print:
-        st.caption(ui.md_text(question.small_print))
+        st.caption(_md(question.small_print))
 
     values = [c.value for c in question.choices]
-    choice = st.radio("Your answer", values, index=None, format_func=lambda v: ui.md_text(_label(question, v)),
+    choice = st.radio("Your answer", values, index=None, format_func=lambda v: _md(_label(question, v)),
                       key=f"choice-{widget}")
     outside = None
     if choice == "outside job":
@@ -256,7 +263,7 @@ def _review(state: _State, listing: qq.QuestionList, in_use: list[int]) -> None:
         for index in in_use:
             entry = state.history[index]
             text, change = st.columns([4, 1])
-            text.markdown(ui.md_text(f"{entry.question.title} → {entry.shown}"))
+            text.markdown(_md(f"{entry.question.title} → {entry.shown}"))
             if change.button("Change", key=f"{state.name}-change-{index}-{state.turn}"):
                 state.changing = index
                 state.turn += 1
@@ -266,19 +273,19 @@ def _review(state: _State, listing: qq.QuestionList, in_use: list[int]) -> None:
                         "you change that answer back)")
             for index in apart:
                 entry = state.history[index]
-                st.markdown(ui.md_text(f"{entry.question.title} → {entry.shown}"))
+                st.markdown(_md(f"{entry.question.title} → {entry.shown}"))
         if listing.questions:
             st.markdown("**Still to answer**")
             for question in listing.questions:
                 skipped = " (skipped)" if _id(question) in state.skipped else ""
-                st.markdown(ui.md_text(f"{question.title}{skipped}"))
+                st.markdown(_md(f"{question.title}{skipped}"))
     if listing.held_lines:
         total = len(listing.held_lines)
         with st.expander(f"Money MargenX holds without asking ({total})"):
             st.caption("MargenX never counts these lines, so the figures they could change stay on \"Needs a "
                        "check\". Each is shown with its amount.")
             for held in listing.held_lines:
-                st.markdown(ui.md_text(held.reason))
+                st.markdown(_md(held.reason))
 
 
 def _plural(count: int, word: str) -> str:

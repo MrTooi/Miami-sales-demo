@@ -4,6 +4,7 @@ Driven through Streamlit's AppTest on a made-up report (tests/qbo_question_scree
 time with its progress, the original row and amount, nothing pre-selected, skip, "Not sure yet", go back,
 change an answer, what's left, the held money with its amount, and "no questions left" never read as final.
 """
+import re
 import unittest
 from pathlib import Path
 
@@ -21,12 +22,24 @@ def start():
     return at
 
 
+def shown(value):
+    """What the owner reads: Streamlit shows "\\$" as "$" (a bare "$" would start a math formula)."""
+    return value.replace("\\$", "$")
+
+
 def title(at):
-    return [s.value for s in at.subheader]
+    return [shown(s.value) for s in at.subheader]
 
 
 def text(at):
-    return " | ".join(m.value for m in at.markdown)
+    return " | ".join(shown(m.value) for m in at.markdown)
+
+
+def bare_dollars(at):
+    """Every element Streamlit reads as Markdown that has an unescaped "$" (it would show garbled)."""
+    elements = [*at.markdown, *at.subheader, *at.caption, *at.info, *at.warning, *at.error, *at.success]
+    labels = [o for r in at.radio for o in r.options]
+    return [v for v in [e.value for e in elements] + labels if re.search(r"(?<!\\)\$", v)]
 
 
 def button(at, label):
@@ -61,7 +74,7 @@ class QuestionScreenTests(unittest.TestCase):
     def test_held_money_is_shown_with_its_amount(self):
         at = start()
         held = next(e for e in at.expander if e.label.startswith("Money MargenX holds without asking"))
-        self.assertIn("($50.00)", " ".join(m.value for m in held.markdown))
+        self.assertIn("($50.00)", " ".join(shown(m.value) for m in held.markdown))
 
     def test_saving_moves_on_and_counts_what_is_answered(self):
         at = save(start(), "Yes, each sub-customer is a job")
@@ -123,7 +136,7 @@ class QuestionScreenTests(unittest.TestCase):
         save(at, 'Not sure yet: leave it on "Needs a check"')
         self.assertIsNone(answers(at).sub_customers_are_jobs)
         review = next(e for e in at.expander if e.label.startswith("Your answers"))
-        self.assertIn(f"{JOBS} (skipped)", [m.value for m in review.markdown])
+        self.assertIn(f"{JOBS} (skipped)", [shown(m.value) for m in review.markdown])
 
     def test_change_from_the_review_list(self):
         at = save(start(), "Yes, each sub-customer is a job")
@@ -143,9 +156,9 @@ class QuestionScreenTests(unittest.TestCase):
         save(at, "No, show profit by customer")
         review = next(e for e in at.expander if e.label.startswith("Your answers"))
         self.assertTrue(review.label.startswith("Your answers (1)"), review.label)
-        shown = [m.value for m in review.markdown]
-        self.assertIn("Which job is this $700.00 for? → Job \"Job A\"", shown[shown.index(next(
-            m for m in shown if m.startswith("**Earlier answers that don't apply now**"))) + 1:])
+        listed = [shown(m.value) for m in review.markdown]
+        self.assertIn("Which job is this $700.00 for? → Job \"Job A\"", listed[listed.index(next(
+            m for m in listed if m.startswith("**Earlier answers that don't apply now**"))) + 1:])
         self.assertEqual(1, len([b for b in at.button if b.label == "Change"]))  # only the answer in use
         self.assertIn("of 4**", text(at))  # 1 answer in use + 3 open; the answer apart isn't counted (it would be 5)
 
@@ -167,9 +180,20 @@ class QuestionScreenTests(unittest.TestCase):
         # The name is what the review list and the change screen show (the automated review of a2a7063).
         review = next(e for e in at.expander if e.label.startswith("Your answers"))
         mine = 'Which job is this $700.00 for? → A job that isn\'t in this report: "Job Z"'
-        self.assertIn(mine, [m.value for m in review.markdown])
+        self.assertIn(mine, [shown(m.value) for m in review.markdown])
         list(b for b in at.button if b.label == "Change")[-1].click().run()
         self.assertIn('You said: A job that isn\'t in this report: "Job Z"', text(at))
+
+    def test_no_dollar_sign_is_ever_read_as_a_formula(self):
+        # Found in the browser in step 7: Streamlit reads the text between two "$" as math. Walk the whole screen.
+        at = start()
+        for _ in range(12):
+            self.assertEqual([], bare_dollars(at))
+            for expander in at.expander:
+                self.assertEqual([], [m.value for m in expander.markdown if re.search(r"(?<!\\)\$", m.value)])
+            if not at.radio:
+                break
+            save(at, at.radio[0].options[0])
 
     def test_the_end_says_no_questions_left_is_not_final(self):
         at = start()
