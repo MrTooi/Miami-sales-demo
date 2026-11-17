@@ -25,8 +25,9 @@ The rules this launcher keeps:
   login, whatever Cloudflare forwards. The launcher says so in its log. Any other value of that setting,
   empty included, starts nothing: a mistyped closed mode never opens the copy.
 - **The operator's stop-now** (PR B; `deploy/trial/stop_now.py`, run from the host's shell): the
-  launcher stops MargenX, then the tunnel, at once, which cuts every open tab and upload within about a
-  second. Render's Suspend only delivers its stop about 2 minutes after it's pressed (PR #141). The
+  launcher stops MargenX, then the tunnel, at once, which should cut every open tab and upload within
+  seconds (under 3 s in the local tests with stand-ins; the time on Render is measured in PR B's release
+  run). Render's Suspend only delivers its stop about 2 minutes after it's pressed (PR #141). The
   launcher then **stays running and does nothing** until the host's own stop, so the host never sees
   the copy end by itself, and never restarts it. A stop-now that arrives while MargenX is still
   starting means the tunnel is never started, exactly like the host's stop.

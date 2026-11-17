@@ -149,6 +149,9 @@ def main(argv: list[str] | None = None, environ=os.environ) -> int:
         print(f"FAIL  live connection, no login: no answer from MargenX ({problem.__class__.__name__})")
     failures += not ok
     mode = "closed mode" if marks == {"closed"} else "open (invited person only)" if marks == {"refused"} else "mixed"
+    if mode == "mixed":
+        print("FAIL  the copy answered in both modes (or unmarked): it must be all closed or all refused")
+        failures += 1
     print(f"self-check: {'all refused by MargenX itself' if not failures else f'{failures} FAILED'}; the copy is in "
           f"{mode}. Time: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}")
     return 0 if failures == 0 else 1

@@ -276,10 +276,10 @@ DRIVER = textwrap.dedent("""
     sys.path.insert(0, sys.argv[1])
     import launch
     log, port, stand_in, app_life, tunnel_life = sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6]
-    environ, listen_delay, stop_before_tunnel = json.loads(sys.argv[7]), sys.argv[8], sys.argv[9] == "1"
+    environ, listen_delay, stop_before_tunnel = json.loads(sys.argv[7]), sys.argv[8], int(sys.argv[9])
     def before_tunnel():
-        if stop_before_tunnel:  # the host's stop arrives after the launcher's last check
-            os.kill(os.getpid(), signal.SIGTERM)
+        if stop_before_tunnel:  # a stop (this signal) arrives after the launcher's last check
+            os.kill(os.getpid(), stop_before_tunnel)
             time.sleep(0.2)  # plenty of time for a handler to run, if the stop weren't held back
     def spawn(command, **options):  # notes each program the moment the launcher creates it
         with open(log, "a") as f:
@@ -317,7 +317,8 @@ class LauncherProcessTests(unittest.TestCase):
         environ = {**SETTINGS, "PATH": os.environ.get("PATH", ""), **(extra or {})}
         return subprocess.Popen([sys.executable, str(self.driver), str(ROOT / "deploy" / "trial"), str(self.log),
                                  str(free_port()), str(self.stand_in), str(app_life), str(tunnel_life),
-                                 json.dumps(environ), str(listen_delay), "1" if stop_before_tunnel else "0"],
+                                 json.dumps(environ), str(listen_delay),
+                                 str(int(signal.SIGTERM) if stop_before_tunnel is True else int(stop_before_tunnel or 0))],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     def events(self, with_time=False):
@@ -475,6 +476,18 @@ class LauncherProcessTests(unittest.TestCase):
         self.assertEqual(launch.EXIT_STOPPED_BY_HOST, code, out)
         self.assertFalse([1 for r, t in self.events() if r == "tunnel"])  # never started
         self.assertIn("asked to stop by the operator (stop-now) before the tunnel was started", out)
+        self.assertNotIn("running", out)
+
+    def test_a_stop_now_after_the_last_check_never_starts_the_tunnel_and_waits(self):
+        proc = self.start(stop_before_tunnel=int(launch.STOP_NOW_SIGNAL))  # lands in the held-back window
+        self.wait_for("app", "stopped", seconds=10)
+        self.assertTrue(self.alive(proc, 1.0))  # waiting for the host's stop, nothing restarted
+        proc.send_signal(signal.SIGTERM)
+        code, out = self.finish(proc)
+        self.assertEqual(launch.EXIT_STOPPED_BY_HOST, code, out)
+        self.assertFalse([1 for r, t in self.events() if r == "tunnel"])  # never started
+        self.assertIn("asked to stop by the operator (stop-now) before the tunnel was started", out)
+        self.assertIn("stopped now", out)
         self.assertNotIn("running", out)
 
     def test_a_host_stop_during_the_wait_after_stop_now_ends_the_launcher(self):

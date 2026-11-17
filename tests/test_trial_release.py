@@ -456,6 +456,13 @@ class SelfCheckTests(unittest.TestCase):
         self.assertIn("this check is incomplete", out)
         self.assertNotIn("all refused by MargenX itself", out)
 
+    def test_a_copy_answering_in_both_modes_fails(self):
+        refused = [("Cache-Control", "no-store"), ("X-MargenX-Gate", "refused")]
+        closed = [("Cache-Control", "no-store"), ("X-MargenX-Gate", "closed")]
+        code, out = self.check(self.stand_in(403, refused, live=(403, closed)), t.SETTINGS)
+        self.assertEqual(1, code, out)
+        self.assertIn("answered in both modes", out)
+
     def test_without_the_trial_address_it_asks_for_it(self):
         code, out = self.check(free_port(), {})
         self.assertEqual(2, code)
