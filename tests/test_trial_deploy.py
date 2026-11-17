@@ -525,8 +525,11 @@ class StopNowTests(unittest.TestCase):
         self.process(8, "cloudflared", "tunnel", "run")
         self.process(9, "python", "/app/deploy/trial/stop_now.py")
         self.process(10, "bash", "-c", "cat /app/deploy/trial/launch.py")  # not a Python running it
+        self.process(11, "python", "-m", "pydoc", "/app/deploy/trial/launch.py")  # a Python that only names it
+        self.process(12, "python", "/tmp/other.py", "/app/deploy/trial/launch.py")
+        self.process(13, "/usr/local/bin/python3.11", "/app/deploy/trial/launch.py")  # a full path still counts
         (self.proc / "self").mkdir()
-        self.assertEqual([1], stop_now.launchers(self.proc, me=9))
+        self.assertEqual([1, 13], stop_now.launchers(self.proc, me=9))
 
     def test_it_sends_the_stop_now_signal_and_prints_nothing_private(self):
         self.process(1, "python", "/app/deploy/trial/launch.py")

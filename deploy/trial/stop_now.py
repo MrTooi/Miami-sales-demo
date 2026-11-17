@@ -28,7 +28,9 @@ STOPPED_LINE = "stopped now"
 
 
 def launchers(proc: Path = Path("/proc"), me: int | None = None) -> list[int]:
-    """The process numbers of every running launcher (a Python whose command runs launch.py)."""
+    """The process numbers of every running launcher: a Python whose script, its first argument, is launch.py
+    (the image runs exactly `python /app/deploy/trial/launch.py`). A process that merely mentions that path
+    in a later argument is never signalled."""
     me = os.getpid() if me is None else me
     found = []
     for entry in proc.iterdir() if proc.is_dir() else ():
@@ -39,7 +41,7 @@ def launchers(proc: Path = Path("/proc"), me: int | None = None) -> list[int]:
         except OSError:  # it ended meanwhile, or isn't ours to read
             continue
         words = [a.decode("utf-8", "replace") for a in args if a]
-        if len(words) >= 2 and "python" in Path(words[0]).name and any(w.endswith(LAUNCHER) for w in words[1:]):
+        if len(words) >= 2 and Path(words[0]).name.startswith("python") and words[1].endswith(LAUNCHER):
             found.append(int(entry.name))
     return sorted(found)
 
