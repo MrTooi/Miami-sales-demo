@@ -219,9 +219,13 @@ def run(environ: Mapping[str, str] = os.environ, spawn: Callable = subprocess.Po
     However the watch ends (the host's stop, a stop-now, a program stopping by itself, or an error), both
     programs are stopped, MargenX first. Then comes the last decision, with every stop signal held back:
     **a stop-now received at any point up to then wins** (manual review of PR #147, round 1), and the
-    launcher waits, doing nothing, for the host's stop instead of exiting (Render would restart it). A
-    stop-now sent after that last decision finds this launcher ending; a restarted one catches it from its
-    first line and starts nothing."""
+    launcher waits, doing nothing, for the host's stop instead of exiting (Render would restart it).
+
+    The limit, stated honestly: a stop-now that lands after that last check, in the instant before this
+    process exits (both programs already stopped), is lost with it, and a copy Render restarts doesn't
+    receive it. One process can't close that instant by itself. stop_now.py therefore checks that the
+    launcher is still running a few seconds after the signal, and if it isn't, says so: the operator runs
+    the stop-now again on any new copy, and Suspend, pressed first, still ends it."""
     found = problems(environ)
     if found:
         for problem in found:

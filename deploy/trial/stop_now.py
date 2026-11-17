@@ -29,6 +29,20 @@ LAUNCHER = "deploy/trial/launch.py"
 STOP_NOW_SIGNAL = signal.SIGUSR1
 STOPPED_LINE = "stopped now"
 READY_SECONDS = 10.0
+# After the signal, the launcher must still be running this long later: after a stop-now it waits, doing
+# nothing, for the host's stop. If it has ended instead, the stop-now may have been lost (launch.run's notes).
+STAYS_SECONDS = 5.0
+
+
+def running(proc: Path, pid: int) -> bool:
+    """Whether this process still exists and hasn't ended (a zombie, State Z, has ended)."""
+    try:
+        for line in (proc / str(pid) / "status").read_text().splitlines():
+            if line.startswith("State:"):
+                return not line.split()[1].startswith(("Z", "X"))
+    except (OSError, IndexError):
+        return False
+    return True
 
 
 def catches_stop_now(proc: Path, pid: int) -> bool:
@@ -62,14 +76,14 @@ def launchers(proc: Path = Path("/proc"), me: int | None = None) -> list[int]:
 
 
 def main(proc: Path = Path("/proc"), kill=os.kill, clock=time.time, ready_seconds: float = READY_SECONDS,
-         sleep=time.sleep) -> int:
+         sleep=time.sleep, stays_seconds: float = STAYS_SECONDS) -> int:
     found = launchers(proc)
     if not found:
         print("stop-now: no MargenX launcher is running here. Nothing was done. Go on with Suspend (section 7).")
         return 1
     if len(found) > 1:
         print(f"stop-now: {len(found)} launchers found ({', '.join(map(str, found))}); asking each to stop now.")
-    sent = 0
+    sent = []
     for pid in found:
         waited = 0.0
         while not catches_stop_now(proc, pid) and waited < ready_seconds:
@@ -81,12 +95,22 @@ def main(proc: Path = Path("/proc"), kill=os.kill, clock=time.time, ready_second
             continue
         try:
             kill(pid, STOP_NOW_SIGNAL)
-            sent += 1
+            sent.append(pid)
         except OSError as problem:
             print(f"stop-now: couldn't reach launcher {pid}: {problem.strerror}")
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock()))
     if not sent:
         print("stop-now: nothing was stopped. Go on with Suspend (section 7).")
+        return 1
+    waited = 0.0
+    while waited < stays_seconds and all(running(proc, pid) for pid in sent):
+        sleep(0.1)
+        waited += 0.1
+    ended = [pid for pid in sent if not running(proc, pid)]
+    if ended:
+        print(f"stop-now: WARNING: launcher {', '.join(map(str, ended))} ended right after the signal instead of "
+              "waiting, so the stop-now may have been lost and Render may start the copy again. Make sure Suspend is "
+              "pressed, and if a new copy starts, run this command again on it (section 7).")
         return 1
     print(f"stop-now: asked at {stamp}. The copy's log should now show '{STOPPED_LINE}' within a few seconds; "
           "open tabs lose their connection. Suspend is still pressed (section 7).")

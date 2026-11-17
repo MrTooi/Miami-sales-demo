@@ -671,7 +671,7 @@ class StopNowTests(unittest.TestCase):
         sent = []
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = stop_now.main(proc=self.proc, kill=lambda pid, sig: sent.append((pid, sig)))
+            code = stop_now.main(proc=self.proc, kill=lambda pid, sig: sent.append((pid, sig)), sleep=lambda s: None)
         self.assertEqual(0, code)
         self.assertEqual([(1, launch.STOP_NOW_SIGNAL)], sent)
         self.assertIn("Suspend is still pressed", out.getvalue())
@@ -696,10 +696,24 @@ class StopNowTests(unittest.TestCase):
             if len(naps) == 3:
                 self.catching(1, True)  # the launcher's first line has run
         with contextlib.redirect_stdout(io.StringIO()):
-            code = stop_now.main(proc=self.proc, kill=lambda pid, sig: sent.append(pid), sleep=nap)
+            code = stop_now.main(proc=self.proc, kill=lambda pid, sig: sent.append(pid), sleep=nap, stays_seconds=0)
         self.assertEqual(0, code)
         self.assertEqual([1], sent)
         self.assertEqual(3, len(naps))
+
+    def test_a_launcher_that_ends_right_after_the_signal_is_reported(self):
+        # The one instant a stop-now can still be lost: after the launcher's last check, as it exits.
+        self.process(1, "python", "/app/deploy/trial/launch.py")
+        out = io.StringIO()
+
+        def lost(pid, sig):
+            (self.proc / str(pid) / "status").write_text("Name:\tpython\nState:\tZ (zombie)\n")
+        with contextlib.redirect_stdout(out):
+            code = stop_now.main(proc=self.proc, kill=lost, sleep=lambda s: None)
+        self.assertEqual(1, code)
+        self.assertIn("may have been lost", out.getvalue())
+        self.assertIn("run this command again", out.getvalue())
+        self.assertNotIn("asked at", out.getvalue())
 
     def test_with_no_launcher_it_does_nothing_and_says_so(self):
         sent = []
@@ -720,6 +734,12 @@ class StopNowTests(unittest.TestCase):
             try:
                 self.assertEqual("ready", child.stdout.readline().strip())
                 self.assertEqual(catches == "yes", stop_now.catches_stop_now(Path("/proc"), child.pid), catches)
+                self.assertTrue(stop_now.running(Path("/proc"), child.pid))
+                child.kill()
+                deadline = time.monotonic() + 5
+                while stop_now.running(Path("/proc"), child.pid) and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                self.assertFalse(stop_now.running(Path("/proc"), child.pid))  # ended (a zombie until reaped)
             finally:
                 child.kill()
                 child.wait()
