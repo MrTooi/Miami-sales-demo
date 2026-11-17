@@ -5,8 +5,9 @@ Run it in the host's shell on the running copy (Render: the service's Shell tab)
     python /app/deploy/trial/stop_now.py
 
 It asks the copy's launcher (deploy/trial/launch.py) to stop MargenX, then the tunnel, at once. Every
-open tab and upload is cut within about a second, instead of the ~2 minutes Render's Suspend takes to
-reach the copy (measured three times in PR #141). The launcher then stays running and does nothing
+open tab and upload should be cut within seconds (under 3 s in the local tests, with stand-in programs;
+the time on Render is measured in PR B's release run), instead of the ~2 minutes Render's Suspend takes
+to reach the copy (measured three times in PR #141). The launcher then stays running and does nothing
 until the host's own stop, so the host never restarts the copy. It is part of the stop procedure
 (docs/TRIAL_DEPLOYMENT.md, section 7), never a replacement for Suspend: Suspend is still pressed.
 

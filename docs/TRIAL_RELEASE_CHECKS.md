@@ -7,7 +7,7 @@
 ## What PR B changes, in plain words
 | Change | Why | Where |
 |---|---|---|
-| **Stop-now** | Render's Suspend takes about 2 minutes to reach the copy (#141). The stop-now, run in Render's Shell, cuts open tabs in about a second | `deploy/trial/stop_now.py`, `launch.py` |
+| **Stop-now** | Render's Suspend takes about 2 minutes to reach the copy (#141). The stop-now, run in Render's Shell, should cut open tabs within seconds (under 3 s in local tests with stand-ins; Render's time is measured in check 5) | `deploy/trial/stop_now.py`, `launch.py` |
 | **Closed mode's own refusal** | B4 could show it only by a log line: with no Access rule, Cloudflare refuses first. Now MargenX's refusal says "This MargenX trial copy is closed." and carries `X-MargenX-Gate: closed` | `trial_access.py` |
 | **The self-check** | Proves, from inside a running copy, that MargenX itself refuses requests that skip Cloudflare | `deploy/trial/self_check.py` |
 | **A total deadline and a cap on login checks** (PR #137 follow-up) | A slow fetch of Cloudflare's keys could hold up other checks, a logout included. Now a check is refused after 8 s, and at most 8 run at once | `trial_access.py` (`TokenChecks`) |
