@@ -9,7 +9,10 @@ written rules (plan v7, S1, S3, S4, S8), not from MargenX's code:
 - a job's sales are Complete only when every transaction of that job matched and counts as a sale (an
   Invoice or a Sales Receipt that isn't negative), and the second report has no line without a partner
   (that one could be anyone's);
-- with no costs in these reports, a job's profit is Complete exactly when its sales are.
+- with no costs in these reports, a job's profit is Complete exactly when its sales are;
+- matching sales never stand in for the coverage confirmation (the 2026-11-17 design review on #128):
+  each pair gets one owner coverage answer (COVERAGE_CASES), and only a "yes" for this exact Profit and
+  Loss Detail and its exact words lets a job be Complete, even when both reports agree line by line.
 """
 from __future__ import annotations
 
@@ -22,6 +25,9 @@ import quickbooks_fixtures as fx
 CUSTOMERS = {"Coral Cafe (fictional)": ["Patio", "Kitchen"], "Palm Gym (fictional)": ["Lobby", "Pool", "Roof"],
              "Bay Clinic (fictional)": ["North wing"]}
 TYPES = ["Invoice"] * 6 + ["Sales Receipt"] * 3 + ["Credit Memo"]
+# The owner's coverage answer: "yes" for this file and these words, "no", none, a "yes" for another file, or a "yes"
+# to other words. Only "yes" covers the report.
+COVERAGE_CASES = ["yes"] * 4 + ["no", "none", "another file", "other words"]
 
 
 @dataclass
@@ -31,6 +37,7 @@ class Pair:
     jobs: dict = field(default_factory=dict)  # (customer, job) -> (sales in cents, sales Complete?)
     unmatched_pnl: int = 0
     unmatched_sbcd: int = 0
+    coverage: str = "yes"  # the owner's coverage answer (COVERAGE_CASES)
 
 
 def make_pair(seed: int) -> Pair:
@@ -80,7 +87,9 @@ def make_pair(seed: int) -> Pair:
                 fx.sale(t["day"], t["kind"], t["num"], "Made-up", sign, Decimal(abs(t["cents"])) / 100))
     customers = [(name, [], sorted(jobs.items())) for name, jobs in sorted(groups.items())]
     pair = Pair(fx.report_rows({"Income": [("Design income", pnl_lines)]}) if pnl_lines else None,
-                fx.sbcd_rows(customers), unmatched_pnl=len(pnl_bad), unmatched_sbcd=len(sbcd_bad))
+                fx.sbcd_rows(customers), unmatched_pnl=len(pnl_bad), unmatched_sbcd=len(sbcd_bad),
+                # Drawn from its own generator, so each seed's pair is the same as before coverage was added.
+                coverage=random.Random(f"coverage-{seed}").choice(COVERAGE_CASES))
 
     # Expected: every job named in Profit and Loss Detail, its sales and whether they can be Complete.
     any_sbcd_orphan = bool(sbcd_bad)
@@ -91,5 +100,6 @@ def make_pair(seed: int) -> Pair:
         cents, ok = pair.jobs.get(key, (0, True))
         counts = t["kind"] in ("Invoice", "Sales Receipt") and t["cents"] >= 0
         pair.jobs[key] = (cents + (t["cents"] if counts else 0), ok and counts and index not in pnl_bad)
-    pair.jobs = {key: (cents, ok and not any_sbcd_orphan) for key, (cents, ok) in pair.jobs.items()}
+    covered = pair.coverage == "yes"
+    pair.jobs = {key: (cents, ok and not any_sbcd_orphan and covered) for key, (cents, ok) in pair.jobs.items()}
     return pair

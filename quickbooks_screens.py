@@ -85,10 +85,19 @@ def _stored(entry: _Entry, answers: qf.OwnerAnswers) -> bool:
         return answers.sub_customers_are_jobs is (entry.choice == "yes")
     if question.kind == qq.NO_FILTER:
         return answers.unfiltered_pair == question.pair
+    if question.kind == qq.COVERAGE:
+        return _coverage_answered(entry, answers)
     if question.kind == qq.ACCOUNT:
         stored = answers.accounts.get(question.account)
         return stored is not None and stored.use == entry.choice
     return _own_line_answer(entry, answers) is not None
+
+
+def _coverage_answered(entry: _Entry, answers: qf.OwnerAnswers) -> bool:
+    """The coverage answer is recorded exactly as this entry gave it: same choice, same words, same file."""
+    given = answers.coverage
+    return (given is not None and given.choice == entry.choice and given.statement == entry.question.statement
+            and given.report == entry.question.report)
 
 
 def _own_line_answer(entry: _Entry, answers: qf.OwnerAnswers) -> qf.LineAnswer | None:
@@ -115,6 +124,8 @@ def _in_use(entry: _Entry, answers: qf.OwnerAnswers, result: qf.Figures, open_ke
         return (answers.unfiltered_pair == question.pair and _id(question) not in open_keys
                 and cross_check is not None and getattr(cross_check, "usable", False)
                 and cross_check.pair == question.pair)
+    if question.kind == qq.COVERAGE:
+        return _coverage_answered(entry, answers) and _id(question) not in open_keys
     if question.kind == qq.ACCOUNT:
         stored = answers.accounts.get(question.account)
         return stored is not None and stored.use == entry.choice and _id(question) not in open_keys

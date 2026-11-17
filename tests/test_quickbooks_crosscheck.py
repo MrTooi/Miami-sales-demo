@@ -52,11 +52,18 @@ COSTS = [L(5, "Bill", "B-1", f"{X}:Job A", D("1000.0"), D("1000.0")),
          L(6, "Bill", "B-2", f"{X}:Job B", D("500.0"), D("1500.0"))]
 
 
-def figures(report, check, lines=None, accounts=None, unfiltered=True):
-    """The figures with the owner's answers; unfiltered: the owner confirmed this pair was exported with no filter."""
+def yes(report) -> qf.CoverageAnswer:
+    """The owner's coverage "yes" for this Profit and Loss Detail (the 2026-11-17 coverage confirmation)."""
+    return qf.CoverageAnswer(qf.COVERAGE_YES, qf.coverage_statement(report), qf.report_fingerprint(report))
+
+
+def figures(report, check, lines=None, accounts=None, unfiltered=True, covered=True):
+    """The figures with the owner's answers; unfiltered: the owner confirmed this pair was exported with no filter;
+    covered: the owner confirmed the Profit and Loss Detail's coverage (these tests are about the cross-check)."""
     answers = qf.OwnerAnswers(report=qf.report_fingerprint(report), sub_customers_are_jobs=True,
                               accounts=accounts if accounts is not None else JOB_COSTS, lines=lines or {},
-                              unfiltered_pair=check.pair if (unfiltered and check is not None) else "")
+                              unfiltered_pair=check.pair if (unfiltered and check is not None) else "",
+                              coverage=yes(report) if covered else None)
     return qf.figures(report, answers, cross_check=check)
 
 
@@ -235,12 +242,12 @@ class ManualReviewOfCbd4c0eTests(unittest.TestCase):
         self.assertEqual([qf.NO_FILTER_YET], [h.reason for h in unconfirmed.jobs[A]["profit_after_job_costs"].holds])
         other_pair = qc.cross_check(report, sbcd(both_jobs_sales(S(8, "Invoice", "1010", "Design", 1, 5))))
         answers = qf.OwnerAnswers(report=qf.report_fingerprint(report), sub_customers_are_jobs=True, accounts=JOB_COSTS,
-                                  unfiltered_pair=other_pair.pair)
+                                  unfiltered_pair=other_pair.pair, coverage=yes(report))
         said_for_another_pair = qf.figures(report, answers, cross_check=check)
         self.assertEqual(qp.NEEDS_A_CHECK, said_for_another_pair.jobs[A]["profit_after_job_costs"].status)
         confirmed = figures(report, check)
         self.assertEqual(qp.COMPLETE, confirmed.jobs[A]["profit_after_job_costs"].status)
-        self.assertIn("beyond your word that both reports were exported with no filter", confirmed.scope)
+        self.assertIn("and your word that both reports were exported with no filter", confirmed.scope)
 
 
 class ScopeTests(unittest.TestCase):

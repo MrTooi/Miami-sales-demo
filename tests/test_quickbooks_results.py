@@ -41,8 +41,8 @@ def reports():
 
 
 def answer_everything(report, check):
-    """Sub-customers are jobs, Job Materials is job costs, Office Supplies is overhead, no filter."""
-    picks = {qq.JOBS: "yes", qq.NO_FILTER: "yes"}
+    """Sub-customers are jobs, Job Materials is job costs, Office Supplies is overhead, no filter, coverage confirmed."""
+    picks = {qq.JOBS: "yes", qq.NO_FILTER: "yes", qq.COVERAGE: qf.COVERAGE_YES}
     accounts = {"Job Materials": qf.JOB_COSTS_ACCOUNT, "Office Supplies": qf.OVERHEAD_ACCOUNT}
     answers = None
     for _ in range(10):
@@ -61,10 +61,11 @@ class LayerTests(unittest.TestCase):
         figures = qf.figures(report, None, check)
         line = qr.headline(report, figures)
         self.assertIn("so far, but this isn't final yet", line)
-        self.assertIn("3 lines are still held back ($3,600.00)", line)
+        self.assertIn("3 lines are still held back ($3,600.00), and you haven't confirmed yet that this file includes "
+                      "your whole business (missing amount unknown)", line)
         self.assertNotIn("final for this report", line)
         cells = [r["Amount and status"] for r in qr.company_rows(figures)]
-        self.assertIn("$0.00 · Needs a check ($3,600.00 held across 3 lines)", cells)
+        self.assertIn("$0.00 · Needs a check ($3,600.00 held across 3 lines; missing amount unknown)", cells)
         for text in cells:
             self.assertTrue(text.endswith("· Complete") or "· Needs a check (" in text, text)
 
@@ -152,7 +153,8 @@ class LayerTests(unittest.TestCase):
             "Expenses": [("Job Materials", [L(3, "Bill", "B-1", X, D("250"), None)])]})))
         self.assertIn("the business made $100.00 so far", qr.headline(report, qf.figures(report)))
         answers = qf.OwnerAnswers(report=qf.report_fingerprint(report), accounts={
-            ("Expenses", "Job Materials"): qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT, (), "")})
+            ("Expenses", "Job Materials"): qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT, (), "")},
+            coverage=qf.CoverageAnswer(qf.COVERAGE_YES, qf.coverage_statement(report), qf.report_fingerprint(report)))
         self.assertIn("the business lost $150.00. This figure is final for this report.",
                       qr.headline(report, qf.figures(report, answers)))
 
@@ -201,7 +203,7 @@ class ScreenTests(unittest.TestCase):
         company = at.dataframe[0].value
         self.assertEqual(["Figure", "Amount and status"], list(company.columns))
         texts = [m.value.replace("\\$", "$") for m in at.markdown]
-        self.assertIn("**What's missing** (3)", texts)
+        self.assertIn("**What's missing** (4)", texts)  # three lines, and the coverage confirmation
         self.assertIn("- $1,000.00 held · Row 16 is a cost, but whether it's a job cost or overhead isn't known yet.",
                       texts)
         details = next(e for e in at.expander if e.label.startswith("Details:"))

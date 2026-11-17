@@ -130,12 +130,13 @@ class PageTests(unittest.TestCase):
         self.assertIn("Read as QuickBooks' Profit and Loss Detail for Biscayne Landscaping (fictional) (January "
                       "1-October 26, 2026, accrual basis): your sales and costs come from it.", text)
         self.assertEqual("Do you use sub-customers in QuickBooks for jobs?", titles(at)[0])
-        self.assertIn("**Question 1 of 3**", text)
+        self.assertIn("**Question 1 of 4**", text)  # jobs, two accounts, coverage
         self.assertIsNone(answer_radio(at).value)  # nothing pre-selected
         headline = titles(at)[-1]
         self.assertTrue(headline.startswith("After job costs, Biscayne Landscaping (fictional)"), headline)
         self.assertIn("isn't final yet", headline)
-        self.assertEqual("$5,500.00 · Complete", company(at)["Sales"])
+        # Nothing is final before the owner confirms the file's coverage, not even sales.
+        self.assertEqual("$5,500.00 · Needs a check (missing amount unknown)", company(at)["Sales"])
         self.assertNotIn("This file can't be read", text)
         self.assertNotIn("Here's where your money was made", text)  # the plain-list results never show
         steps = next(m.value for m in at.markdown if m.value.startswith('<div class="mx-nav-l">'))
@@ -156,8 +157,11 @@ class PageTests(unittest.TestCase):
             radio = answer_radio(at)
             wanted = "Overhead" if "Office Supplies" in account else "Job costs"
             save(at, next(o for o in radio.options if o.startswith(wanted)))
+        self.assertEqual("Does this file include your whole business?", titles(at)[0])
+        save(at, "Yes, I checked")
         text = everything(at)
         self.assertIn("No questions left.", text)
+        self.assertIn("Coverage confirmed by you for this file.", text)
         headline = titles(at)[-1]
         self.assertTrue(headline.endswith("the business made $2,400.00. This figure is final for this report."),
                         headline)
@@ -219,7 +223,7 @@ class PageTests(unittest.TestCase):
         self.assertEqual([], titles(at))
         at = page({"a.xlsx": made_up_pnl(), "copy.xlsx": made_up_pnl()})
         self.assertIn("copy.xlsx is identical to a.xlsx", " ".join(w.value for w in at.warning))
-        self.assertEqual("$5,500.00 · Complete", company(at)["Sales"])  # counted once
+        self.assertEqual("$5,500.00 · Needs a check (missing amount unknown)", company(at)["Sales"])  # counted once
 
     def test_two_different_sales_reports_are_refused(self):
         other = fx.xlsx(fx.sbcd_rows([(X, [], [("Job A", [S(2, "Invoice", "1001", "Design work", 1, 4000)])])]))

@@ -6,6 +6,9 @@ file and read by MargenX end to end. Line counts, each section's sum, what is co
 costs, what is held and each section's status must all match exactly; so must each customer's and each
 job's sales and job costs (step 4).
 
+Each report also gets one owner coverage answer (gen.COVERAGE_CASES); only a "yes" for this exact file and
+wording lets any customer or company figure be Complete, and the hold reaches every profit.
+
 What this proves, and what it doesn't (the PR #136 review): section and customer/job sums, section and
 customer statuses (the PR #138 automated review), and row presence, for the layouts and transaction types the generator makes. It doesn't prove each row's own
 outcome, or layouts outside that family: tests/test_quickbooks_pnl.py and test_quickbooks_figures.py
@@ -40,7 +43,19 @@ def cents(amount: Decimal) -> int:
     return int(value)
 
 
+def coverage_answer(case: str, report: qp.ProfitAndLossDetail) -> qf.CoverageAnswer | None:
+    """The owner's coverage answer the generator chose (gen.COVERAGE_CASES), for this report."""
+    statement, fingerprint = qf.coverage_statement(report), qf.report_fingerprint(report)
+    return {"yes": qf.CoverageAnswer(qf.COVERAGE_YES, statement, fingerprint),
+            "no": qf.CoverageAnswer(qf.COVERAGE_NO, statement, fingerprint),
+            "none": None,
+            "another file": qf.CoverageAnswer(qf.COVERAGE_YES, statement, "0" * 64),
+            "other words": qf.CoverageAnswer(qf.COVERAGE_YES, "All my cost accounts are on the list.", fingerprint),
+            }[case]
+
+
 class KnownAnswerTests(unittest.TestCase):
+    coverage_seen: dict = {}
     jobs_seen = 0
     statuses_seen = {(True, True): 0, (True, False): 0, (False, True): 0, (False, False): 0}
 
@@ -49,7 +64,7 @@ class KnownAnswerTests(unittest.TestCase):
         accounts = {line.account_path: qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT) for line in result.lines
                     if line.section in ("Cost of Goods Sold", "Expenses")}
         got = qf.figures(result, qf.OwnerAnswers(report=qf.report_fingerprint(result), sub_customers_are_jobs=True,
-                                                 accounts=accounts))
+                                                 accounts=accounts, coverage=coverage_answer(report.coverage, result)))
         customers, jobs = gen.expected_figures(report)
         self.assertEqual(set(customers), set(got.customers))
         self.assertEqual(set(jobs), set(got.jobs))
@@ -68,8 +83,14 @@ class KnownAnswerTests(unittest.TestCase):
         self.__class__.jobs_seen += len(jobs)
         income = report.expected["Income"]
         cost_sections = [report.expected[s] for s in ("Cost of Goods Sold", "Expenses") if s in report.expected]
-        self.assertEqual(income.complete, got.company["sales"].status == qp.COMPLETE)
-        self.assertEqual(all(e.complete for e in cost_sections), got.company["job_costs"].status == qp.COMPLETE)
+        self.assertEqual(income.complete and report.covered, got.company["sales"].status == qp.COMPLETE)
+        self.assertEqual(all(e.complete for e in cost_sections) and report.covered,
+                         got.company["job_costs"].status == qp.COMPLETE)
+        # The coverage hold never changes an amount and never disappears on the way to a profit (derived figures).
+        for figure in (got.company["profit_after_job_costs"], got.company["after_overhead"],
+                       *(f["profit_after_job_costs"] for f in (*got.customers.values(), *got.jobs.values()))):
+            self.assertEqual(not report.covered, figure.coverage_open)
+        self.__class__.coverage_seen[report.coverage] = self.__class__.coverage_seen.get(report.coverage, 0) + 1
         self.assertEqual(cents(got.company["sales"].amount), income.sales)
         self.assertEqual(cents(got.company["job_costs"].amount), sum(e.costs for e in cost_sections))
 
@@ -103,6 +124,7 @@ class KnownAnswerTests(unittest.TestCase):
         # The generator really exercised what it should.
         self.assertGreater(self.jobs_seen, REPORTS)
         self.assertTrue(all(self.statuses_seen.values()), self.statuses_seen)  # every status mix came up
+        self.assertEqual(set(gen.COVERAGE_CASES), set(self.coverage_seen), self.coverage_seen)  # every coverage case
         self.assertGreater(broken, REPORTS // 8)
         self.assertGreater(noisy, REPORTS // 4)
 

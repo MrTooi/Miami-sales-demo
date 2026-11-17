@@ -41,6 +41,14 @@ The rules, from plan v7:
   until a second report cross-checks it (step 5). Complete always means complete within this
   report: its company, dates and accrual basis. A filter that QuickBooks doesn't print in the file
   can't be detected, so this is not proof that the report covers the whole business.
+- Coverage (the 2026-11-17 design review on issue #128, accepted by the owner the same day). A filter
+  can leave a whole cost account, or some transactions, out of the export, and the file can't show it:
+  Labor left out turns a company's $3,400 into $4,300 with every total still matching. So every figure
+  (company, every customer, every job) holds "missing amount unknown" until the owner confirms, for
+  this exact file and this exact wording (coverage_statement), that the report includes the whole
+  business's income and costs for its dates, with no filters. A "yes" clears only that hold: S3 and
+  every other hold stay. "No", "not sure", no answer, or an answer for another file or wording keep it.
+  This is the owner's word, not proof: a wrong "yes" on an incomplete file can give Complete figures.
 
 The upload page reads a recognised report through quickbooks_upload; job_intake still refuses QuickBooks reports.
 """
@@ -91,6 +99,34 @@ NO_FILTER_YET = ("Sales by Customer Detail can be used as the cross-check, but a
 ONE_REPORT = ("One report alone can't make a job's profit Complete: a second report has to cross-check its "
               "sales first (issue #128, S3).")
 
+# The owner's coverage confirmation (the 2026-11-17 design review on issue #128).
+COVERAGE_YES = "yes"  # "Yes, I checked"
+COVERAGE_NO = "no"  # "No, something is missing"
+COVERAGE_HOLD = "coverage"  # Hold.kind of the coverage hold
+MISSING_UNKNOWN = "missing amount unknown"
+COVERAGE_NOT_YET = ("You haven't confirmed yet that this Profit and Loss Detail includes your whole business's income "
+                    "and costs, with no filters. A filter can leave out an account or transactions without showing in "
+                    f"the file, so every figure needs a check: {MISSING_UNKNOWN}.")
+COVERAGE_SAID_MISSING = ("You said something is missing from this Profit and Loss Detail, so every figure needs a "
+                         f"check: {MISSING_UNKNOWN}. Export it again from QuickBooks for the whole business, with no "
+                         "filters, and upload that file.")
+COVERAGE_CONFIRMED = "Coverage confirmed by you for this file."
+RELIANCE = ("MargenX calculates figures from your uploaded reports and your answers. QuickBooks exports may not reveal "
+            "filters that excluded accounts or transactions. We therefore ask you to check the export settings and "
+            "confirm its coverage. Complete means our required checks and confirmations are satisfied; it does not "
+            "guarantee that nothing was omitted or incorrectly recorded in QuickBooks. If you are unsure, choose Not "
+            "sure.")
+
+
+def coverage_statement(report: qp.ProfitAndLossDetail) -> str:
+    """The exact words the owner confirms, with this report's dates and basis (the reviewer's wording). An answer is
+    used only for these exact words: a narrower question answered before can never stand in for it."""
+    layout = report.layout
+    return ("I checked the QuickBooks export settings and this account list. This Profit and Loss Detail includes the "
+            f"whole business's income and costs recorded in QuickBooks for {layout.period}, on "
+            f"{layout.basis.lower()} basis, with no filters excluding accounts or transactions. All cost accounts "
+            "with activity in this period are included.")
+
 
 @dataclass(frozen=True)
 class LineAnswer:
@@ -128,6 +164,17 @@ class AccountAnswer:
 
 
 @dataclass(frozen=True)
+class CoverageAnswer:
+    """The owner's answer to the coverage confirmation: COVERAGE_YES or COVERAGE_NO ("not sure" is no answer at
+    all), with the exact words it was given for (statement) and the exact file (report, its fingerprint). It counts
+    only for that file and those words: a new or changed file, or other wording, needs a new answer."""
+    choice: str
+    statement: str
+    report: str
+    answered_at: str = ""
+
+
+@dataclass(frozen=True)
 class OwnerAnswers:
     """The owner's answers, bound to one report (report_fingerprint): answers given for another report,
     or for an earlier version of this one, are never used (the PR #138 manual review, blocker 3)."""
@@ -139,6 +186,43 @@ class OwnerAnswers:
     unfiltered_pair: str = ""
     accounts: Mapping[tuple[str, ...], AccountAnswer] = field(default_factory=dict)  # by account path as written
     lines: Mapping[int, LineAnswer] = field(default_factory=dict)  # by Excel row
+    # "This Profit and Loss Detail includes the whole business's income and costs ... with no filters": recorded
+    # only by the owner answering that question. No other answer, upload or step ever sets it.
+    coverage: CoverageAnswer | None = None
+
+
+@dataclass(frozen=True)
+class CostAccount:
+    """One cost account with activity in the report, as the coverage question lists it: every entry, held ones
+    too, with the exact total of the amounts MargenX can read and how many it can't."""
+    path: tuple[str, ...]
+    section: str
+    entries: int
+    total: Decimal
+    unreadable: int
+
+
+def cost_accounts(report: qp.ProfitAndLossDetail) -> tuple[CostAccount, ...]:
+    """Every account in Cost of Goods Sold or Expenses with at least one entry in this report, in report order:
+    job-cost, overhead, mixed and unanswered accounts alike, negative and zero-net ones included."""
+    found: dict[tuple[str, ...], list[qp.LedgerLine]] = {}
+    for line in report.lines:
+        if line.section in COST_SECTIONS:
+            found.setdefault(line.account_path, []).append(line)
+    return tuple(CostAccount(path, lines[0].section, len(lines),
+                             sum((l.amount for l in lines if l.amount is not None), ZERO),
+                             sum(1 for l in lines if l.amount is None))
+                 for path, lines in found.items())
+
+
+def coverage_confirmed(report: qp.ProfitAndLossDetail, answers: OwnerAnswers | None) -> bool:
+    """True only for the owner's "yes" to this exact wording, for this exact file."""
+    if answers is None or answers.coverage is None:
+        return False
+    fingerprint = report_fingerprint(report)
+    given = answers.coverage
+    return (answers.report == fingerprint and given.report == fingerprint and given.choice == COVERAGE_YES
+            and given.statement == coverage_statement(report))
 
 
 def report_fingerprint(report: qp.ProfitAndLossDetail) -> str:
@@ -167,6 +251,7 @@ class Hold:
     amount: Decimal | None  # the amount being held (None when it isn't known)
     reason: str
     report: str = "Profit and Loss Detail"  # which report the row is in (step 5b: the cross-check's rows too)
+    kind: str = ""  # COVERAGE_HOLD for the coverage hold: money may be missing, amount unknown
 
 
 @dataclass(frozen=True)
@@ -177,6 +262,11 @@ class Figure:
     @property
     def status(self) -> str:
         return qp.COMPLETE if not self.holds else qp.NEEDS_A_CHECK
+
+    @property
+    def coverage_open(self) -> bool:
+        """True while the file's coverage isn't confirmed: money may be missing from this figure, amount unknown."""
+        return any(hold.kind == COVERAGE_HOLD for hold in self.holds)
 
     @property
     def held_amount(self) -> Decimal:
@@ -214,6 +304,12 @@ class Figures:
     jobs: dict[tuple[str, str], dict[str, Figure]]  # (customer, job) -> sales, job_costs, profit_after_job_costs
     resolutions: tuple[Resolution, ...]
     warnings: tuple[str, ...]  # answers that couldn't be used, in plain words
+    coverage: str = ""  # CONFIRMED, SAID_MISSING or NOT_CONFIRMED: the owner's coverage confirmation for this file
+
+
+CONFIRMED = "confirmed"
+SAID_MISSING = "said missing"
+NOT_CONFIRMED = "not confirmed"
 
 
 # --- names (S5) -----------------------------------------------------------------------------------
@@ -264,6 +360,7 @@ class _Builder:
                                  "one, so none of them is used. Answer again for this file.")
             answers = OwnerAnswers()
         self.answers = answers
+        self.coverage = self.coverage_state()
         self.jobs_on = answers.sub_customers_are_jobs is True
         self.lines = {line.row: line for line in report.lines}
         self.customers: set[str] = set()
@@ -278,6 +375,22 @@ class _Builder:
         self.holds: dict[tuple, list[Hold]] = {}
         self.pending: list[tuple] = []  # (scope, field, hold) with ALL or _JobsOf scopes, resolved at the end
         self.resolutions: list[Resolution] = []
+
+    def coverage_state(self) -> str:
+        """The owner's coverage confirmation, used only for this exact file and wording (coverage_confirmed)."""
+        given = self.answers.coverage
+        if given is None:
+            return NOT_CONFIRMED
+        if given.report != report_fingerprint(self.report) or given.statement != coverage_statement(self.report):
+            self.warnings.append("Your coverage answer was given for another file, or for other words than the "
+                                 "question asked now, so it isn't used. Answer the coverage question again.")
+            return NOT_CONFIRMED
+        if given.choice == COVERAGE_YES:
+            return CONFIRMED
+        if given.choice == COVERAGE_NO:
+            return SAID_MISSING
+        self.warnings.append(f"The coverage answer '{given.choice}' isn't one MargenX knows, so it isn't used.")
+        return NOT_CONFIRMED
 
     # -- writing --
     def add(self, key: tuple, amount: Decimal) -> None:
@@ -531,6 +644,7 @@ class _Builder:
     def build(self) -> Figures:
         resolutions = [self.place(line) for line in self.report.lines]
         self.apply_cross_check(resolutions)
+        self.apply_coverage()
         for problem in self.report.problems:
             # A total that doesn't match, or a row that can't be placed: every figure its section feeds needs
             # a check, whatever the answers (S6). It isn't tied to one line, so its amount isn't known.
@@ -555,7 +669,18 @@ class _Builder:
         for path in self.answers.accounts:
             if tuple(path) not in paths:
                 self.warn(f"There's no account '{' › '.join(path)}' in this report, so that answer wasn't used.")
-        return Figures(self.scope(), self.jobs_on, *self.assemble(), tuple(resolutions), tuple(self.warnings))
+        return Figures(self.scope(), self.jobs_on, *self.assemble(), tuple(resolutions), tuple(self.warnings),
+                       self.coverage)
+
+    def apply_coverage(self) -> None:
+        """Until the owner confirms this file's coverage, every figure of the company, of every customer and of
+        every job holds "missing amount unknown": which figures a left-out account or transaction would change
+        can't be known from the file, so all of them are held. The hold has no amount, and changes none."""
+        if self.coverage == CONFIRMED:
+            return
+        hold = Hold(None, None, COVERAGE_SAID_MISSING if self.coverage == SAID_MISSING else COVERAGE_NOT_YET,
+                    kind=COVERAGE_HOLD)
+        self.hold_everything(hold)
 
     def apply_cross_check(self, resolutions: list[Resolution]) -> None:
         """Step 5b (S3, S4): a usable cross-check by Sales by Customer Detail lifts the one-report rule on jobs.
@@ -614,11 +739,15 @@ class _Builder:
 
     def scope(self) -> str:
         layout = self.report.layout
+        words = []
+        if self.coverage == CONFIRMED:
+            words.append("your confirmation that it includes the whole business's income and costs, with no filters")
+        if not self.one_report:
+            words.append("your word that both reports were exported with no filter")
         return (f"Within QuickBooks' Profit and Loss Detail for {layout.company}, {layout.period}, "
                 f"{layout.basis.lower()} basis. A filter QuickBooks doesn't print in the file can't be seen, so "
                 "this isn't proof the report covers the whole business"
-                + (", beyond your word that both reports were exported with no filter."
-                   if not self.one_report else "."))
+                + (", beyond " + " and ".join(words) + "." if words else "."))
 
     def assemble(self):
         # Each figure's holds, once each, in the order first met. A dict keeps that order and finds a repeat at

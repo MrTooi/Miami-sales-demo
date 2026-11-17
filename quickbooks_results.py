@@ -79,15 +79,18 @@ def _held_text(figure: qf.Figure) -> str:
 
 
 def cell(figure: qf.Figure) -> str:
-    """A figure with its status beside it: "$4,000.00 · Complete" or "$3,800.00 · Needs a check ($50.00 held)"."""
+    """A figure with its status beside it: "$4,000.00 · Complete" or "$3,800.00 · Needs a check ($50.00 held)".
+    While the file's coverage isn't confirmed it also says "missing amount unknown": never an amount, never $0, and
+    the known held amount is never presented as the size of what may be missing."""
     if figure.status == qp.COMPLETE:
         return f"{money(figure.amount)} · {FINAL}"
     amounts = _held_text(figure)
+    unknown = [qf.MISSING_UNKNOWN] if figure.coverage_open else []
     if not amounts:
-        return f"{money(figure.amount)} · {NOT_FINAL} (see why below)"
+        return f"{money(figure.amount)} · {NOT_FINAL} ({'; '.join(unknown) or 'see why below'})"
     lines = sum(_held(figure))
     across = f" across {lines} lines" if lines > 1 else ""
-    return f"{money(figure.amount)} · {NOT_FINAL} ({amounts} held{across})"
+    return f"{money(figure.amount)} · {NOT_FINAL} ({'; '.join([f'{amounts} held{across}', *unknown])})"
 
 
 def _holds(figures: qf.Figures):
@@ -130,10 +133,18 @@ def headline(report: qp.ProfitAndLossDetail, figures: qf.Figures) -> str:
     # 9234135: lines holding only a job or a customer aren't the business's).
     known, unknown = _held(profit)
     lines = known + unknown
+    whys = []
     if lines:
-        why = f"{lines} line{'' if lines == 1 else 's'} {'is' if lines == 1 else 'are'} still held back ({_held_text(profit)})"
-    else:
-        why = "something that applies to the whole report is still open"
+        whys.append(f"{lines} line{'' if lines == 1 else 's'} {'is' if lines == 1 else 'are'} still held back "
+                    f"({_held_text(profit)})")
+    if profit.coverage_open:
+        whys.append("you said something is missing from this file" if figures.coverage == qf.SAID_MISSING else
+                    "you haven't confirmed yet that this file includes your whole business")
+        whys[-1] += f" ({qf.MISSING_UNKNOWN})"
+    if any(hold.row is None and hold.kind != qf.COVERAGE_HOLD for hold in profit.holds) or not whys:
+        whys.append("something else that applies to the whole report is still open" if whys
+                    else "something that applies to the whole report is still open")
+    why = ", and ".join(whys)
     return (f"After job costs, {where}: the business {made} {shown} so far, but this isn't final yet: {why}. "
             "See what's missing below.")
 
@@ -166,6 +177,9 @@ def missing(figures: qf.Figures) -> list[str]:
     for (report, row), reasons in sorted(held.items(), key=lambda item: (item[0][1] is None, item[0][0],
                                                                          item[0][1] or 0)):
         prefix = "" if row is None or report == "Profit and Loss Detail" else f"{report}: "
+        if row is None:
+            out.extend(reasons)  # each reason that applies to the whole report on its own line
+            continue
         text = " ".join(reasons)
         if row is not None:
             # The amount comes from the hold itself, beside its reason, so it's shown even when a reason's words
@@ -184,6 +198,13 @@ def results_screen(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
     st.subheader(_md(headline(report, figures)))
     for warning in figures.warnings:
         st.warning(_md(warning))
+    if figures.coverage == qf.CONFIRMED:
+        st.success(qf.COVERAGE_CONFIRMED)
+    elif figures.coverage == qf.SAID_MISSING:
+        st.warning(_md(qf.COVERAGE_SAID_MISSING))
+    else:
+        st.info(_md(qf.COVERAGE_NOT_YET))
+    st.caption(_md(qf.RELIANCE))
 
     st.markdown("**Your business**")
     st.dataframe(pd.DataFrame(company_rows(figures)), hide_index=True, width="stretch")
