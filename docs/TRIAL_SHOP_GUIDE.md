@@ -16,14 +16,16 @@
 5. **Run report** → **Export** → **Export to Excel**.
 6. **To see job profit as Complete,** also export **Sales by Customer Detail** for **the same dates**, the same way. MargenX uses it to double-check your sales.
 
-**3. Upload it.** Tick the box to say you agree to MargenX reading the file, then drag in the file (or both files). MargenX reads them in memory only and doesn't save them. It may ask a few questions, for example whether an account is a job cost or overhead, and whether you exported both reports with no filter.
+**3. Upload it.** Tick the box to say you agree to MargenX reading the file, then drag in the file (or both files). MargenX reads them in memory only and doesn't save them. It may ask a few questions, for example whether an account is a job cost or overhead, and whether you exported both reports with no filter. **Last, it lists the cost accounts it found in your file, with their totals, and asks you to confirm that the file includes your whole business, with no filters.** Check that list against QuickBooks and your export settings first. Choose **Yes, I checked** only if you did; otherwise choose **No, something is missing** or **Not sure**.
 
 **What to leave out.** Upload only the two QuickBooks reports above: Profit and Loss Detail, and optionally Sales by Customer Detail. Never upload or type bank or card details, tax ID numbers, or individual payroll records.
 
 **4. Read the results.**
 - Each figure says **Complete** or **Needs a check**. "Needs a check" means MargenX couldn't prove it from your file, and it says why and how much money is involved.
 - **Expect many figures to say Needs a check,** even when you follow the steps exactly. MargenX would rather say so than guess.
+- **Until you answer "Yes, I checked", every figure says Needs a check (missing amount unknown).** A filter can leave something out without showing in the file, so MargenX can't know how much.
 - Profit by **job** needs both reports and your "no filter" answer before it can be Complete.
+- **What Complete relies on** (MargenX shows this with your results): "MargenX calculates figures from your uploaded reports and your answers. QuickBooks exports may not reveal filters that excluded accounts or transactions. We therefore ask you to check the export settings and confirm its coverage. Complete means our required checks and confirmations are satisfied; it does not guarantee that nothing was omitted or incorrectly recorded in QuickBooks. If you are unsure, choose Not sure."
 
 **5. When you're done for the day.**
 - **End session** clears your files and results from MargenX.

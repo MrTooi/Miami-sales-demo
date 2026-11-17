@@ -5,7 +5,7 @@
 ## A. Before anything starts (all must be true)
 - [ ] **Every release check passed** on the operator-only copy, on the exact commit this shop's copy will run, uploads included (`docs/TRIAL_RELEASE_CHECKS.md`).
 - [ ] **Render's written answer** on retention and builds is in, and leaves no file-content capture unresolved (plan section 3.4).
-- [ ] **The open money decision is settled** (customer figures and the overall total from one report: PR B and #131).
+- [ ] **The money decision is in this copy:** D-010 (decided Nov 17; built in PR #148 and #149). On this copy's commit, a made-up export with no coverage answer shows every figure as Needs a check (missing amount unknown).
 - [ ] **The fit check passed** at a meeting: the owner exported the report on their own computer, following the guide; on their screen you saw the right report and settings, the customer and job on sales and job-cost lines, and the job costs they record. Nothing copied, photographed or written down. Recorded privately as "fit".
 - [ ] **You told the owner** that many figures may show "Needs a check", even when the steps are followed exactly.
 - [ ] **The trial terms** (final text, approved by you in writing) were accepted by the named person.
