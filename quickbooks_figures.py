@@ -229,12 +229,21 @@ def cost_accounts(report: qp.ProfitAndLossDetail) -> tuple[CostAccount, ...]:
                  for path, lines in found.items())
 
 
+def made_for(report: qp.ProfitAndLossDetail, cross_check) -> bool:
+    """True when the cross-check was made for this very uploaded Profit and Loss workbook, from an uploaded Sales by
+    Customer Detail workbook: both have a file fingerprint. The one rule for the figures, the questions and the
+    contradiction (the PR #148 manual review, round 3, follow-up: they had drifted apart)."""
+    return bool(cross_check is not None and report.file_digest
+                and getattr(cross_check, "pnl_fingerprint", None) == report_fingerprint(report)
+                and getattr(cross_check, "pnl_file", None) == report.file_digest
+                and getattr(cross_check, "sbcd_file", ""))
+
+
 def contradicts(report: qp.ProfitAndLossDetail, cross_check) -> bool:
     """True when a usable cross-check made for this very file shows sales the file doesn't have: evidence that it may
     leave out other activity too."""
-    return bool(cross_check is not None and getattr(cross_check, "usable", False) and report.file_digest
-                and cross_check.pnl_fingerprint == report_fingerprint(report)
-                and cross_check.pnl_file == report.file_digest and cross_check.sbcd_unmatched)
+    return bool(made_for(report, cross_check) and getattr(cross_check, "usable", False)
+                and cross_check.sbcd_unmatched)
 
 
 def record_contradiction(report: qp.ProfitAndLossDetail, answers: OwnerAnswers, cross_check) -> OwnerAnswers:
@@ -734,8 +743,7 @@ class _Builder:
         check = self.cross_check
         if check is None:
             return
-        if (check.pnl_fingerprint != report_fingerprint(self.report) or check.pnl_file != self.report.file_digest
-                or not self.report.file_digest or not check.sbcd_file):
+        if not made_for(self.report, check):
             # Made for another workbook, even one that reads the same: its pair, and any no-filter answer bound to
             # it, are about other files (the automated review of 8d19d7b).
             self.warn("The cross-check was made for another Profit and Loss Detail, so it wasn't used.")

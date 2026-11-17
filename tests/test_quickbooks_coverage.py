@@ -762,6 +762,63 @@ class NoFileTests(unittest.TestCase):
         self.assertIn("The cross-check was made for another Profit and Loss Detail", " ".join(result.warnings))
         self.assertNotIn(qq.NO_FILTER, [q.kind for q in qq.open_questions(report, base(report), check).questions])
 
+    def test_a_sales_report_without_a_file_fingerprint_never_creates_a_remembered_contradiction(self):
+        # The PR #148 manual review, round 3, follow-up: the figures refused such a cross-check, but its missing sales
+        # could still be remembered as a contradiction. Now neither uses it.
+        report = pnl({"Income": [("Design income", income(y_too=False))],
+                      "Expenses": [("Job Materials", materials(y_too=False)), ("Labor", labor())]})
+        check = qc.cross_check(report, dataclasses.replace(sales_report(), file_digest=""))
+        self.assertTrue(check.usable and check.sbcd_unmatched, check.reasons)
+        self.assertFalse(qf.contradicts(report, check))
+        self.assertEqual(base(report), qf.record_contradiction(report, base(report), check))
+        result = qf.figures(report, say(report, base(report), qf.COVERAGE_YES), cross_check=check)
+        self.assertIn("The cross-check was made for another Profit and Loss Detail", " ".join(result.warnings))
+        self.assertEqual(qf.CONFIRMED, result.coverage)  # the cross-check isn't used at all; jobs keep S3
+        self.assertIn(qf.ONE_REPORT, [h.reason for h in result.jobs[KITCHEN]["profit_after_job_costs"].holds])
+
+    def test_the_figures_the_questions_and_the_contradiction_use_the_same_cross_checks(self):
+        # One rule (qf.made_for) decides whether a cross-check belongs to this upload, wherever it's used.
+        def filtered(saved_at=fx.SAVED_AT):
+            return pnl({"Income": [("Design income", income(y_too=False))],
+                        "Expenses": [("Job Materials", materials(y_too=False)), ("Labor", labor())]},
+                       saved_at=saved_at)
+        report = filtered()
+        cases = {
+            "this upload": (report, qc.cross_check(report, sales_report())),
+            "another workbook that reads the same": (report, qc.cross_check(filtered("2026-11-17T09:00:00Z"),
+                                                                            sales_report())),
+            "another report": (report, qc.cross_check(
+                pnl({"Income": [("Design income", income(y_too=False))],
+                     "Expenses": [("Job Materials", materials(y_too=False))]}), sales_report())),
+            "no sales file fingerprint": (report, qc.cross_check(report, dataclasses.replace(sales_report(),
+                                                                                             file_digest=""))),
+            # The PR #149 review warning: the same uploaded workbook (same file fingerprint) with other content, so
+            # only the content fingerprint tells them apart.
+            "another report's content, this upload's file fingerprint": (report, dataclasses.replace(
+                qc.cross_check(pnl({"Income": [("Design income", income(y_too=False))],
+                                    "Expenses": [("Job Materials", materials(y_too=False))]}), sales_report()),
+                pnl_file=report.file_digest)),
+            "no Profit and Loss file fingerprint": (dataclasses.replace(report, file_digest=""),
+                                                    qc.cross_check(dataclasses.replace(report, file_digest=""),
+                                                                   sales_report())),
+        }
+        for name, (pnl_report, check) in cases.items():
+            with self.subTest(name):
+                self.assertTrue(check.usable and check.sbcd_unmatched, check.reasons)
+                result = qf.figures(pnl_report, say(pnl_report, base(pnl_report), qf.COVERAGE_YES),
+                                    cross_check=check)
+                used_by_figures = "The cross-check was made for another" not in " ".join(result.warnings)
+                # Not only the warning: what the figures do with it. A used one contradicts the yes (its sales are
+                # missing from the report); a refused one leaves the yes as it was.
+                expected = qf.CONTRADICTED if used_by_figures else (
+                    qf.CONFIRMED if pnl_report.file_digest else qf.NOT_CONFIRMED)
+                self.assertEqual(expected, result.coverage)
+                used_by_questions = qq._cross_check_for(pnl_report, check)
+                contradiction = qf.contradicts(pnl_report, check)
+                self.assertEqual(name == "this upload", used_by_figures)
+                self.assertEqual(used_by_figures, used_by_questions)
+                self.assertEqual(used_by_figures, contradiction)
+
 
 class LimitationTests(unittest.TestCase):
     """The limitation the owner accepted on 2026-11-17: MargenX can't detect an account filtered out of the file.

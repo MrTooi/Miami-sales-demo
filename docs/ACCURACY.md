@@ -284,13 +284,15 @@ the company or a job be Complete, and every profit must carry the hold otherwise
 "yes" with a sale only the second report has keeps the hold on every figure, costs included. Every
 change: 300 reports and 300 pairs.
 
-- Planted mistakes, each caught (2026-11-17, 28 of 28): the hold dropped; an answer to other words
+- Planted mistakes, each caught (2026-11-17, 30 of 30): the hold dropped; an answer to other words
   accepted; an answer for another file accepted; an answer for a different workbook that reads the
-  same accepted, for coverage and for S3; a cross-check made for another workbook used by the figures,
-  or by the questions; "not sure" for another workbook withdrawing this one's answer; another
-  workbook's answer shown in use; a contradiction never remembered, or remembered but ignored; a
-  report without a file fingerprint confirmed; a sales report without a file fingerprint used by the
-  figures, or by the questions; the headline saying "final" again; the second report's missing sales ignored after a yes;
+  same accepted, for coverage and for S3; the one rule for "a cross-check made for this upload"
+  (`made_for`) ignoring which workbook, the report's content, or the sales report's file
+  fingerprint, or skipped by the
+  figures, by the questions, or by the contradiction (so a sales report with no file fingerprint
+  could still be remembered as a contradiction); "not sure" for another workbook withdrawing this
+  one's answer; another workbook's answer shown in use; a contradiction never remembered, or
+  remembered but ignored; a report without a file fingerprint confirmed; the headline saying "final" again; the second report's missing sales ignored after a yes;
   "nothing is missing" said again; a question for another workbook recorded; "no" counted as yes; sales never held (costs and
   profits only); jobs never held; the no-filter answer also recording yes; "not sure" keeping the old
   answer; a question with other words recorded; the account list leaving out lines MargenX doesn't
