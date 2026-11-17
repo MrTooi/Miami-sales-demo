@@ -41,8 +41,8 @@ def reports():
 
 
 def answer_everything(report, check):
-    """Sub-customers are jobs, Job Materials is job costs, Office Supplies is overhead, no filter."""
-    picks = {qq.JOBS: "yes", qq.NO_FILTER: "yes"}
+    """Sub-customers are jobs, Job Materials is job costs, Office Supplies is overhead, no filter, coverage confirmed."""
+    picks = {qq.JOBS: "yes", qq.NO_FILTER: "yes", qq.COVERAGE: qf.COVERAGE_YES}
     accounts = {"Job Materials": qf.JOB_COSTS_ACCOUNT, "Office Supplies": qf.OVERHEAD_ACCOUNT}
     answers = None
     for _ in range(10):
@@ -61,10 +61,11 @@ class LayerTests(unittest.TestCase):
         figures = qf.figures(report, None, check)
         line = qr.headline(report, figures)
         self.assertIn("so far, but this isn't final yet", line)
-        self.assertIn("3 lines are still held back ($3,600.00)", line)
-        self.assertNotIn("final for this report", line)
+        self.assertIn("3 lines are still held back ($3,600.00), and you haven't confirmed yet that this file includes "
+                      "your whole business (missing amount unknown)", line)
+        self.assertNotIn("Complete for this report", line)
         cells = [r["Amount and status"] for r in qr.company_rows(figures)]
-        self.assertIn("$0.00 · Needs a check ($3,600.00 held across 3 lines)", cells)
+        self.assertIn("$0.00 · Needs a check ($3,600.00 held across 3 lines; missing amount unknown)", cells)
         for text in cells:
             self.assertTrue(text.endswith("· Complete") or "· Needs a check (" in text, text)
 
@@ -74,7 +75,7 @@ class LayerTests(unittest.TestCase):
         figures = qf.figures(report, answers, check)
         self.assertEqual((), figures.warnings)
         self.assertEqual("After job costs, Biscayne Landscaping (fictional), January 1-October 26, 2026: the business "
-                         "made $2,400.00. This figure is final for this report.", qr.headline(report, figures))
+                         "made $2,400.00. This figure is Complete for this report.", qr.headline(report, figures))
         self.assertEqual([], qr.missing(figures))
         jobs = qr.group_rows(figures.jobs, "Customer › Job")
         self.assertEqual(f"{Y} › Job B", jobs[0]["Customer › Job"])  # losing money first
@@ -92,7 +93,7 @@ class LayerTests(unittest.TestCase):
                       "sales first.", qr.missing(figures))  # the rule code is left out
         cell = qr.group_rows(figures.jobs, "Customer › Job")[0]["Profit after job costs"]
         self.assertEqual("-$600.00 · Needs a check (see why below)", cell)
-        self.assertIn("This figure is final for this report.", qr.headline(report, figures))  # the business's own
+        self.assertIn("This figure is Complete for this report.", qr.headline(report, figures))  # the business's own
 
     def test_the_headline_counts_only_the_lines_holding_its_own_figure(self):
         # The automated review of 9234135: the $700 sale with no job holds only Customer X's jobs, never the business.
@@ -152,8 +153,10 @@ class LayerTests(unittest.TestCase):
             "Expenses": [("Job Materials", [L(3, "Bill", "B-1", X, D("250"), None)])]})))
         self.assertIn("the business made $100.00 so far", qr.headline(report, qf.figures(report)))
         answers = qf.OwnerAnswers(report=qf.report_fingerprint(report), accounts={
-            ("Expenses", "Job Materials"): qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT, (), "")})
-        self.assertIn("the business lost $150.00. This figure is final for this report.",
+            ("Expenses", "Job Materials"): qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT, (), "")},
+            coverage=qf.CoverageAnswer(qf.COVERAGE_YES, qf.coverage_statement(report), qf.report_fingerprint(report),
+                                       report.file_digest))
+        self.assertIn("the business lost $150.00. This figure is Complete for this report.",
                       qr.headline(report, qf.figures(report, answers)))
 
     def test_reasons_are_plain_words_with_dollar_amounts(self):
@@ -201,12 +204,12 @@ class ScreenTests(unittest.TestCase):
         company = at.dataframe[0].value
         self.assertEqual(["Figure", "Amount and status"], list(company.columns))
         texts = [m.value.replace("\\$", "$") for m in at.markdown]
-        self.assertIn("**What's missing** (3)", texts)
+        self.assertIn("**What's missing** (4)", texts)  # three lines, and the coverage confirmation
         self.assertIn("- $1,000.00 held · Row 16 is a cost, but whether it's a job cost or overhead isn't known yet.",
                       texts)
         details = next(e for e in at.expander if e.label.startswith("Details:"))
         self.assertTrue(details.caption[0].value.startswith("Within QuickBooks' Profit and Loss Detail"))
-        self.assertEqual([], [s for s in at.success if "Nothing is missing" in s.value])
+        self.assertEqual([], [s for s in at.success if s.value == qr.CHECKS_DONE])
 
     def test_everything_answered_shows_jobs_and_says_nothing_is_missing(self):
         # The automated review of 8a41156 (warning): the fully answered screen, rendered.
@@ -224,11 +227,11 @@ class ScreenTests(unittest.TestCase):
         at.run()
         self.assertFalse(at.exception, at.exception)
         headline = at.subheader[0].value.replace("\\$", "$")
-        self.assertTrue(headline.endswith("made $2,400.00. This figure is final for this report."), headline)
+        self.assertTrue(headline.endswith("made $2,400.00. This figure is Complete for this report."), headline)
         self.assertIn("**By job** (losing money first)", [m.value for m in at.markdown])
         jobs = next(d.value for d in at.dataframe if "Customer › Job" in d.value.columns)
         self.assertEqual("-$600.00 · Complete", jobs.iloc[0]["Profit after job costs"])
-        self.assertIn("Nothing is missing: every figure above is final for this report.", [s.value for s in at.success])
+        self.assertIn(qr.CHECKS_DONE, [s.value for s in at.success])
         self.assertNotIn("**What's missing**", " ".join(m.value for m in at.markdown))
 
     def test_the_company_name_is_never_read_as_markdown(self):
@@ -282,7 +285,7 @@ class ScreenTests(unittest.TestCase):
         self.assertIn("1 line of unknown amount held", company["Profit after job costs"])
         missing = [m.value.replace("\\$", "$") for m in at.markdown if m.value.startswith("- ")]
         self.assertTrue(any(m.startswith("- amount unknown held · Row ") for m in missing), missing)
-        self.assertEqual([], [s for s in at.success if "Nothing is missing" in s.value])
+        self.assertEqual([], [s for s in at.success if s.value == qr.CHECKS_DONE])
 
     def test_the_upload_page_shows_the_results_only_through_the_quickbooks_flow(self):
         root = Path(__file__).resolve().parents[1]

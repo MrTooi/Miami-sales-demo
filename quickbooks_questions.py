@@ -10,7 +10,9 @@ upload page for a recognised Profit and Loss Detail: quickbooks_upload).
 - open_questions(...) works out every question still open from the checked report(s) and the answers
   so far, in a fixed order: whether sub-customers are jobs; the no-filter confirmation (only when a
   usable cross-check exists); each cost account's usual use (S7, one question per account, grouped);
-  then each line that still needs the owner's word (S9; mixed-account entries one by one).
+  the coverage confirmation (every cost account found, with its total, then the reviewer's words: asked
+  with one report or two, bound to the exact file and wording); then each line that still needs the
+  owner's word (S9; mixed-account entries one by one).
 - Every question carries its own progress ("2 of 5"), plain words, the line's original row, date,
   Name and amount where it has one, and exactly the choices the rules allow: no choice is
   pre-selected, and "not sure" is always allowed (the question just stays open).
@@ -34,6 +36,7 @@ JOBS = "jobs"  # "Do you use sub-customers in QuickBooks for jobs?"
 NO_FILTER = "no filter"  # "Were both reports exported with no filter?"
 ACCOUNT = "account"  # S7: how a cost account is usually used
 LINE = "line"  # S9: what one line is, or which job it is for
+COVERAGE = "coverage"  # the whole file's coverage, confirmed by the owner (the 2026-11-17 design review, #128)
 
 NOT_SURE = "not sure"  # always a choice; it leaves the question open
 SEPARATOR = "\x1f"  # between a customer and a job in a "job:" choice value
@@ -65,6 +68,8 @@ class Question:
     report: str = ""  # the report it was asked about (its fingerprint): an answer for any other report changes nothing
     pair: str = ""  # for NO_FILTER: the exact pair of reports it was asked about (CrossCheck.pair)
     line_kind: str = ""  # for "which job": what the line is, as the question shows it (a job answer keeps exactly this)
+    statement: str = ""  # for COVERAGE: the exact words confirmed (a "yes" counts only for these words)
+    file: str = ""  # for COVERAGE: the uploaded file it was asked about (ProfitAndLossDetail.file_digest)
 
     @property
     def progress(self) -> str:
@@ -132,6 +137,10 @@ KIND_LABELS = {
     qf.OTHER_EXPENSE: "Other expense (not a cost of the work, like a penalty)",
     qf.OUTSIDE_PERIOD: "It belongs to another period, so leave it out",
 }
+COVERAGE_CHOICES = (Choice(qf.COVERAGE_YES, "Yes, I checked"), Choice(qf.COVERAGE_NO, "No, something is missing"),
+                    Choice(NOT_SURE, "Not sure"))
+USE_WORDS = {qf.JOB_COSTS_ACCOUNT: "you said: job costs", qf.OVERHEAD_ACCOUNT: "you said: overhead",
+             qf.MIXED_ACCOUNT: "you said: mixed", qf.NOT_SURE_ACCOUNT: "you said: not sure"}
 ACCOUNT_LABELS = {
     qf.JOB_COSTS_ACCOUNT: "Job costs: what's in it is spent on specific jobs",
     qf.OVERHEAD_ACCOUNT: "Overhead: what's in it is a cost of running the business (I've checked every entry below)",
@@ -193,6 +202,11 @@ def open_questions(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
                             small_print=" › ".join(path) + " · plan rule S7",
                             choices=tuple(Choice(k, v) for k, v in ACCOUNT_LABELS.items())))
 
+    if not (bound and answers.coverage is not None and answers.coverage.choice in (qf.COVERAGE_YES, qf.COVERAGE_NO)
+            and qf.coverage_statement(report) == answers.coverage.statement
+            and answers.coverage.report == qf.report_fingerprint(report) and answers.coverage.file == report.file_digest):
+        pending.append(_coverage_question(report, answers if bound else qf.OwnerAnswers()))
+
     for row in sorted(resolutions):
         resolution, line = resolutions[row], lines[row]
         when = qp._date(line.date)
@@ -213,7 +227,8 @@ def open_questions(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
     total = len(pending)
     fingerprint = qf.report_fingerprint(report)
     questions = tuple(Question(number=index + 1, total=total, report=fingerprint,
-                               **{**item, "choices": (*item["choices"], NOT_SURE_CHOICE)})
+                               **{**item, "choices": item["choices"] if item["kind"] == COVERAGE
+                                  else (*item["choices"], NOT_SURE_CHOICE)})
                       for index, item in enumerate(pending))
     problems = tuple(f"Row {p.row}: {p.text}" for p in report.problems)
     return QuestionList(questions, tuple(held), result.warnings, problems)
@@ -221,6 +236,40 @@ def open_questions(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
 
 def _type(line: qp.LedgerLine) -> str:
     return " ".join(line.transaction_type.split()).casefold()
+
+
+def _coverage_question(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers) -> dict:
+    """Every cost account with activity, with its exact total and how the owner said it's used, then the words to
+    confirm. The list is an aid for checking, not proof: the words cover the whole report, income too."""
+    accounts = qf.cost_accounts(report)
+    listed = []
+    for account in accounts:
+        given = answers.accounts.get(account.path)
+        use = USE_WORDS.get(given.use, "not answered yet") if given is not None else "not answered yet"
+        count = f"{account.entries} entr{'y' if account.entries == 1 else 'ies'}"
+        total = f"{_money(account.total)} in all"
+        if account.unreadable:
+            total = (f"{_money(account.total)} that MargenX can read, plus {account.unreadable} with an amount it "
+                     "can't read")
+        listed.append(f"{' › '.join(account.path)} ({account.section}): {count}, {total} · {use}")
+    statement = qf.coverage_statement(report)
+    return dict(key="coverage", kind=COVERAGE, statement=statement, file=report.file_digest,
+                title="Does this file include your whole business?",
+                details=("A filter in QuickBooks can leave out an account, a customer or some transactions without "
+                         "showing in the file. MargenX can't see that, so until you confirm, every figure stays on "
+                         f"\"Needs a check\" ({qf.MISSING_UNKNOWN}).",
+                         (f"The cost accounts in this file's Cost of Goods Sold and Expenses sections ({len(accounts)}):"
+                          if accounts else "This file has no cost accounts with activity in its Cost of Goods Sold "
+                                           "and Expenses sections."),
+                         *listed,
+                         "Accounts with no activity in these dates don't appear in the report, and don't need to. "
+                         "Other income and other expense accounts aren't listed here, but the words below cover them "
+                         "too.",
+                         "Check your export settings in QuickBooks and this list, then say whether this is true:",
+                         f"\"{statement}\""),
+                small_print="Your answer counts only for this exact file. MargenX doesn't check it against "
+                            "QuickBooks: Complete relies on it.",
+                choices=COVERAGE_CHOICES)
 
 
 def _line_question(report, answers, result, resolution, line, mixed) -> dict | None:
@@ -302,6 +351,12 @@ def answer(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | None, ques
         if not _cross_check_for(report, cross_check) or cross_check.pair != question.pair:
             return answers  # only the pair of reports the question was asked about, made for this report
         return dataclasses.replace(answers, unfiltered_pair=cross_check.pair)
+    if question.kind == COVERAGE:
+        if (question.statement != qf.coverage_statement(report) or question.file != report.file_digest
+                or not report.file_digest):
+            return answers  # only the exact words and the exact file asked about now
+        return dataclasses.replace(answers, coverage=qf.CoverageAnswer(choice, question.statement, fingerprint,
+                                                                       report.file_digest, answered_at))
     if question.kind == ACCOUNT:
         entries = tuple(question.entries) if choice == qf.OVERHEAD_ACCOUNT else ()  # exactly the entries shown
         accounts = {**answers.accounts, question.account: qf.AccountAnswer(choice, entries, answered_at)}
@@ -335,7 +390,9 @@ def answer(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | None, ques
 def _cross_check_for(report: qp.ProfitAndLossDetail, cross_check) -> bool:
     """A usable cross-check made for this very Profit and Loss report (PR #142 manual review, blocker 2)."""
     return (cross_check is not None and getattr(cross_check, "usable", False)
-            and getattr(cross_check, "pnl_fingerprint", None) == qf.report_fingerprint(report))
+            and getattr(cross_check, "pnl_fingerprint", None) == qf.report_fingerprint(report)
+            and getattr(cross_check, "pnl_file", None) == report.file_digest  # this very workbook (review of 8d19d7b)
+            and bool(report.file_digest) and bool(getattr(cross_check, "sbcd_file", "")))
 
 
 def _classification(answers: qf.OwnerAnswers, row: int) -> qf.LineAnswer | None:
@@ -367,6 +424,14 @@ def _reopen(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers, question: 
         if answers.unfiltered_pair != question.pair:
             return answers  # a confirmation of another pair of reports is never cleared by this question
         return dataclasses.replace(answers, unfiltered_pair="")
+    if question.kind == COVERAGE:
+        # "Not sure" withdraws the earlier answer, but only this file's: never an answer given for another workbook
+        # (the PR #148 manual review, round 2, blocker 1).
+        given = answers.coverage
+        if (not report.file_digest or question.file != report.file_digest or given is None
+                or given.file != question.file):
+            return answers
+        return dataclasses.replace(answers, coverage=None)
     if question.kind == ACCOUNT:
         return dataclasses.replace(answers, accounts={k: v for k, v in answers.accounts.items() if k != question.account})
     lines = dict(answers.lines)

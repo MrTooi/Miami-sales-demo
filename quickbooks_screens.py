@@ -71,7 +71,11 @@ def _id(question: qq.Question) -> str:
     """What the screen tracks a question by. The no-filter question is about one exact pair of reports, so its
     widgets, skips and saved answer belong to that pair: replacing only the second report asks afresh (the PR #143
     manual review, blocker)."""
-    return f"{question.key}@{question.pair}" if question.kind == qq.NO_FILTER else question.key
+    if question.kind == qq.NO_FILTER:
+        return f"{question.key}@{question.pair}"
+    if question.kind == qq.COVERAGE:
+        return f"{question.key}@{question.file}"  # about one exact uploaded file (the PR #148 manual review)
+    return question.key
 
 
 def _label(question: qq.Question, value: str) -> str:
@@ -85,10 +89,19 @@ def _stored(entry: _Entry, answers: qf.OwnerAnswers) -> bool:
         return answers.sub_customers_are_jobs is (entry.choice == "yes")
     if question.kind == qq.NO_FILTER:
         return answers.unfiltered_pair == question.pair
+    if question.kind == qq.COVERAGE:
+        return _coverage_answered(entry, answers)
     if question.kind == qq.ACCOUNT:
         stored = answers.accounts.get(question.account)
         return stored is not None and stored.use == entry.choice
     return _own_line_answer(entry, answers) is not None
+
+
+def _coverage_answered(entry: _Entry, answers: qf.OwnerAnswers) -> bool:
+    """The coverage answer is recorded exactly as this entry gave it: same choice, same words, same file."""
+    given = answers.coverage
+    return (given is not None and given.choice == entry.choice and given.statement == entry.question.statement
+            and given.report == entry.question.report and given.file == entry.question.file)
 
 
 def _own_line_answer(entry: _Entry, answers: qf.OwnerAnswers) -> qf.LineAnswer | None:
@@ -103,7 +116,8 @@ def _own_line_answer(entry: _Entry, answers: qf.OwnerAnswers) -> qf.LineAnswer |
     return None
 
 
-def _in_use(entry: _Entry, answers: qf.OwnerAnswers, result: qf.Figures, open_keys: set[str], cross_check) -> bool:
+def _in_use(entry: _Entry, answers: qf.OwnerAnswers, result: qf.Figures, open_keys: set[str], cross_check,
+            file: str = "") -> bool:
     """Whether a saved answer still counts. A later answer can make an earlier one not apply (sub-customers no
     longer jobs, a line answered as something else): it's then kept but shown apart, never counted as done (the
     automated review of a2a7063)."""
@@ -115,6 +129,10 @@ def _in_use(entry: _Entry, answers: qf.OwnerAnswers, result: qf.Figures, open_ke
         return (answers.unfiltered_pair == question.pair and _id(question) not in open_keys
                 and cross_check is not None and getattr(cross_check, "usable", False)
                 and cross_check.pair == question.pair)
+    if question.kind == qq.COVERAGE:
+        # Counts only for the workbook in use: another workbook's answer is never shown as in use or offered to
+        # change (the PR #148 manual review, round 2, blocker 1).
+        return _coverage_answered(entry, answers) and _id(question) not in open_keys and question.file == file
     if question.kind == qq.ACCOUNT:
         stored = answers.accounts.get(question.account)
         return stored is not None and stored.use == entry.choice and _id(question) not in open_keys
@@ -126,9 +144,11 @@ def _in_use(entry: _Entry, answers: qf.OwnerAnswers, result: qf.Figures, open_ke
     return not question.key.startswith("job:") or entry.choice == qf.OVERHEAD or result.jobs_on
 
 
-def _still_editable(entry: _Entry, cross_check) -> bool:
+def _still_editable(entry: _Entry, cross_check, file: str = "") -> bool:
     """Whether a saved answer the owner opened to change is still about the files in use. A no-filter answer is
     about one exact pair of reports: once that pair isn't the one in use, there's nothing left to change."""
+    if entry.question.kind == qq.COVERAGE:
+        return entry.question.file == file  # about one exact workbook
     if entry.question.kind != qq.NO_FILTER:
         return True
     return cross_check is not None and cross_check.pair == entry.question.pair
@@ -137,10 +157,14 @@ def _still_editable(entry: _Entry, cross_check) -> bool:
 def question_screen(report: qp.ProfitAndLossDetail, cross_check=None, *, key: str = "qbo") -> qf.OwnerAnswers:
     """Show the open questions about this report and return the owner's answers so far (bound to the report)."""
     state = _state(report, key)
+    # Sales the second report has and this file doesn't stay evidence for this file all session, even once the second
+    # report is removed (the PR #148 manual review, round 2, blocker 2).
+    state.answers = qf.record_contradiction(report, state.answers, cross_check)
     listing = qq.open_questions(report, state.answers, cross_check)
     result = qf.figures(report, state.answers, cross_check=cross_check)
     open_keys = {_id(q) for q in listing.questions}
-    in_use = [i for i, e in enumerate(state.history) if _in_use(e, state.answers, result, open_keys, cross_check)]
+    in_use = [i for i, e in enumerate(state.history)
+              if _in_use(e, state.answers, result, open_keys, cross_check, report.file_digest)]
 
     for problem in listing.report_problems:
         st.error(_md(f"A problem in the report itself: {problem}"))
@@ -150,7 +174,8 @@ def question_screen(report: qp.ProfitAndLossDetail, cross_check=None, *, key: st
         st.info(_md(state.message))
         state.message = ""
 
-    if state.changing is not None and not _still_editable(state.history[state.changing], cross_check):
+    if state.changing is not None and not _still_editable(state.history[state.changing], cross_check,
+                                                          report.file_digest):
         # The owner was changing a no-filter answer for a pair of reports that is no longer the one in use (the
         # second report was replaced): that edit is dropped, so the old pair's question is never shown or saved as
         # if it were about these files (the PR #143 automated review of 8763ef2, carried to the switch-on PR).

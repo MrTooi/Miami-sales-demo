@@ -87,13 +87,20 @@ def pnl_rows(*, company=COMPANY, title="Profit and Loss Detail", period=PERIOD, 
     return [*head, *(BODY if body is None else body), *tail]
 
 
+SAVED_AT = "2026-10-26T19:04:00Z"  # every made-up workbook's save time, so the same rows always give the same bytes
+
+
 def xlsx(rows, *, formulas: dict[str, str] | None = None, stored: dict[str, str] | None = None,
-         sheets: int = 1) -> bytes:
+         sheets: int = 1, saved_at: str = SAVED_AT) -> bytes:
     """An Excel file of the rows. formulas: cell -> formula, written with the cell's value as its saved
     result, as QuickBooks' export does (openpyxl alone would save a formula with no result). stored:
     cell -> the exact number text to store for that cell. A Decimal value is always stored exactly as written,
     as the real export stores amounts ("870.56"): openpyxl alone would turn it into a 16-digit float
-    ("870.5599999999999"), which MargenX rightly refuses as not exact cents."""
+    ("870.5599999999999"), which MargenX rightly refuses as not exact cents.
+
+    The bytes depend only on the arguments: openpyxl stamps the save time in the file and in every zip entry, so
+    both are fixed (saved_at). Another saved_at gives a different workbook that reads exactly the same, like a
+    second export of the same report (the PR #148 manual review, blocker 1)."""
     from openpyxl.utils import get_column_letter
 
     exact = {}
@@ -110,12 +117,13 @@ def xlsx(rows, *, formulas: dict[str, str] | None = None, stored: dict[str, str]
     out = io.BytesIO()
     book.save(out)
     data = out.getvalue()
-    if not (formulas or stored):
-        return data
     source, result = zipfile.ZipFile(io.BytesIO(data)), io.BytesIO()
     with zipfile.ZipFile(result, "w", zipfile.ZIP_DEFLATED) as target:
         for item in source.infolist():
             content = source.read(item.filename)
+            if item.filename == "docProps/core.xml":
+                content = re.sub(r"(<dcterms:(?:created|modified)[^>]*>)[^<]*", rf"\g<1>{saved_at}",
+                                 content.decode()).encode()
             if item.filename == "xl/worksheets/sheet1.xml":
                 text = content.decode()
                 for ref, number in (stored or {}).items():
@@ -125,7 +133,9 @@ def xlsx(rows, *, formulas: dict[str, str] | None = None, stored: dict[str, str]
                     text, count = re.subn(rf'(<c r="{ref}"[^>]*>)(<v>)', rf"\1<f>{formula}</f>\2", text)
                     assert count == 1, f"cell {ref} not found"
                 content = text.encode()
-            target.writestr(item, content)
+            fixed = zipfile.ZipInfo(item.filename, date_time=(2026, 10, 26, 19, 4, 0))
+            fixed.compress_type = zipfile.ZIP_DEFLATED
+            target.writestr(fixed, content)
     return result.getvalue()
 
 

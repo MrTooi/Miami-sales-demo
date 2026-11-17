@@ -21,6 +21,11 @@ the text, not copied from the code:
 - If any total in a section doesn't match its lines to the cent, nothing in that section is
   counted: every line in it is not resolved.
 - A section is Complete only when it matched and every line in it was counted.
+- Coverage (the 2026-11-17 design review on issue #128): every customer and company figure is Complete
+  only once the owner has said "yes" to the coverage confirmation for this exact file and its exact
+  words. Each report gets one owner answer (COVERAGE_CASES): "yes", "no", none at all, a "yes" given
+  for another file, a "yes" for a different workbook that reads the same, or a "yes" to other words.
+  Only the first lifts the coverage hold.
 """
 from __future__ import annotations
 
@@ -46,6 +51,10 @@ ACCOUNTS = {
 }
 TIDY_NAMES = ["Coral Cafe (fictional):Patio", "Coral Cafe (fictional):Kitchen", "Palm Gym (fictional):Lobby"]
 SUB_ACCOUNTS = ["Job Materials", "Plants and Soil", "Fuel", "Labor", "Gas and Electric", "Telephone", "Decks"]
+# The owner's coverage answer for a report: "yes" for this file and these words, "no", no answer, a "yes" for another
+# file, or a "yes" to other words (an older, narrower question). Only "yes" covers the report.
+COVERAGE_CASES = ["yes"] * 5 + ["no", "none", "another file", "another workbook", "other words"]
+
 NAMES = ["Coral Cafe (fictional):Patio", "Coral Cafe (fictional):Kitchen", "Palm Gym (fictional):Lobby",
          "Bay Clinic (fictional)", "Garden Supply (fictional)", "Bayside Fuel (fictional)", "Landlord (fictional)",
          "Doral Realty (fictional):North:Lobby", "Kendall School (fictional):"]
@@ -77,6 +86,11 @@ class Report:
     total_rows: int  # closing totals plus summary rows
     line_rows: list = field(default_factory=list)
     lines: list = field(default_factory=list)  # [section, type, name, cents, "sale" | "cost" | None] per line
+    coverage: str = "yes"  # the owner's coverage answer (COVERAGE_CASES)
+
+    @property
+    def covered(self) -> bool:
+        return self.coverage == "yes"
 
 
 def _excel_total(cents_list: list[int]) -> str:
@@ -235,7 +249,9 @@ def make_report(seed: int) -> Report:
     for line in lines:  # a held section counts nothing
         if expected[line[0]].broken:
             line[4] = None
-    return Report(rows, stored, expected, totals, line_rows, lines)
+    # Drawn from its own generator, so each seed's report is the same as before coverage was added.
+    coverage = random.Random(f"coverage-{seed}").choice(COVERAGE_CASES)
+    return Report(rows, stored, expected, totals, line_rows, lines, coverage)
 
 
 def who(section: str, kind: str, name: str) -> tuple[str | None, str | None]:
@@ -275,7 +291,7 @@ def expected_customer_status(report: Report) -> dict[str, tuple[bool, bool]]:
     """Whether each customer's sales and job costs can be Complete, from the written rule S8, with every cost
     account answered "job costs" and no line answered: a figure is held by its section's broken totals, by
     any line in it that isn't counted and is this customer's or nobody's, and by any counted line that is
-    nobody's (its customer isn't known)."""
+    nobody's (its customer isn't known); and every figure is held while the report's coverage isn't confirmed."""
     customers, _ = expected_figures(report)
     sections = {"sales": ("Income",), "costs": ("Cost of Goods Sold", "Expenses")}
     status = {}
@@ -289,6 +305,6 @@ def expected_customer_status(report: Report) -> dict[str, tuple[bool, bool]]:
                 owner, _ = who(section, kind, name)
                 if (not counts and owner in (None, customer)) or (counts and owner is None):
                     held = True
-            complete.append(not held)
+            complete.append(not held and report.covered)
         status[customer] = tuple(complete)
     return status
