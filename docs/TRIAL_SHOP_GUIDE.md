@@ -18,7 +18,7 @@
 
 **3. Upload it.** Tick the box to say you agree to MargenX reading the file, then drag in the file (or both files). MargenX reads them in memory only and doesn't save them. It may ask a few questions, for example whether an account is a job cost or overhead, and whether you exported both reports with no filter.
 
-**What to leave out.** Only the report above. Never upload or type bank or card details, tax ID numbers, or individual payroll records.
+**What to leave out.** Upload only the two QuickBooks reports above: Profit and Loss Detail, and optionally Sales by Customer Detail. Never upload or type bank or card details, tax ID numbers, or individual payroll records.
 
 **4. Read the results.**
 - Each figure says **Complete** or **Needs a check**. "Needs a check" means MargenX couldn't prove it from your file, and it says why and how much money is involved.
@@ -30,6 +30,6 @@
 - **Log out** ends your login. It may take a short moment to end everywhere.
 - Anything you save, download or screenshot stays on your own device.
 
-**6. The end of your trial.** Your trial ends at `[CLOSEOUT DATE AND TIME, MIAMI]`. Then we stop your copy of MargenX: open tabs lose their connection, and nothing you uploaded is kept. If you'd like to go over your results with Alex, book the follow-up meeting **before** that time.
+**6. The end of your trial.** Your trial ends at `[CLOSEOUT DATE AND TIME, MIAMI]`. Then we stop your copy of MargenX: open tabs lose their connection, and MargenX keeps nothing you uploaded. (Our login and hosting services, Cloudflare and Render, keep their own records of logins and connections, and anything your own browser or computer saved stays with you; the trial terms say more.) If you'd like to go over your results with Alex, book the follow-up meeting **before** that time.
 
 **Help.** Contact `[SUPPORT CONTACT]`; we aim to reply within `[REPLY TIME]`. **Please never email us a financial file**: describe the problem, and we'll help without it.

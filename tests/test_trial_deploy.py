@@ -533,6 +533,111 @@ class LauncherProcessTests(unittest.TestCase):
             self.assertNotIn(str(int(launch.STOP_NOW_SIGNAL)), held[role].split(","), role)
 
 
+FAKE_DRIVER = textwrap.dedent("""
+    import json, os, signal, sys, time
+    sys.path.insert(0, sys.argv[1])
+    import launch
+    log, case, environ = sys.argv[2], sys.argv[3], json.loads(sys.argv[4])
+    def note(text):
+        with open(log, "a") as f:
+            f.write(text + "\\n")
+    def stop_now_arrives():
+        os.kill(os.getpid(), launch.STOP_NOW_SIGNAL)
+    class Fake:  # stands in for a program, so the exact moment of each step can be chosen
+        def __init__(self, role):
+            self.role, self.code, self.polls = role, None, 0
+            note(role + " started")
+        def poll(self):
+            if self.role == "tunnel" and case in ("detect", "cleanup", "decision", "plain") and self.code is None:
+                self.polls += 1
+                if self.polls >= 3:  # the tunnel ends by itself
+                    if case == "detect":
+                        stop_now_arrives()  # at the very moment the watch sees the failure
+                    self.code = 1
+            return self.code
+        def terminate(self):
+            note(self.role + " stopped")
+            if case == "cleanup" and self.role == "app":
+                stop_now_arrives()  # while the launcher is stopping the programs
+            self.code = 0
+        def wait(self, timeout=None):
+            return self.code
+        def kill(self):
+            self.code = -9
+    def spawn(command, **options):
+        if command[0] == "tunnel" and case == "error":
+            stop_now_arrives()
+            raise OSError("no tunnel program here")  # an error while the stop signals are held back
+        return Fake(command[0])
+    def before_decision():
+        if case == "decision":
+            stop_now_arrives()  # held back: only the last decision's own check can see it
+            time.sleep(0.2)
+    code = launch.run(environ=environ, spawn=spawn, ready=lambda proc, should_stop: True,
+                      streamlit=["app"], tunnel=["tunnel"], poll_seconds=0.02, before_decision=before_decision)
+    sys.exit(code)
+""")
+
+
+class StopNowPrecedenceTests(unittest.TestCase):
+    """A stop-now that arrives while the launcher is already ending for another reason still wins: it never
+    exits by itself, so Render never restarts the copy (manual review of PR #147, round 1)."""
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.log = Path(self.folder.name) / "events.log"
+        self.driver = Path(self.folder.name) / "fake_driver.py"
+        self.driver.write_text(FAKE_DRIVER)
+
+    def start(self, case):
+        import json
+        environ = {**SETTINGS, "PATH": os.environ.get("PATH", "")}
+        return subprocess.Popen([sys.executable, str(self.driver), str(ROOT / "deploy" / "trial"), str(self.log), case,
+                                 json.dumps(environ)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    def events(self):
+        return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def waits_then_ends_on_the_host_stop(self, case):
+        proc = self.start(case)
+        try:
+            proc.wait(timeout=1.5)
+            self.fail(f"{case}: the launcher exited by itself: {proc.stdout.read()}")
+        except subprocess.TimeoutExpired:
+            pass
+        proc.send_signal(signal.SIGTERM)
+        out, _ = proc.communicate(timeout=20)
+        self.assertEqual(launch.EXIT_STOPPED_BY_HOST, proc.returncode, out)
+        self.assertIn("stopped now: MargenX and the tunnel are stopped", out)
+        events = self.events()
+        self.assertEqual(1, events.count("app started"), events)  # nothing started again
+        self.assertLessEqual(events.count("tunnel started"), 1, events)
+        self.assertIn("app stopped", events)
+        return out
+
+    def test_a_stop_now_at_the_moment_a_program_fails_still_wins(self):
+        out = self.waits_then_ends_on_the_host_stop("detect")
+        self.assertIn("the tunnel stopped, so MargenX is stopped too", out)
+
+    def test_a_stop_now_during_the_cleanup_after_a_failure_still_wins(self):
+        self.waits_then_ends_on_the_host_stop("cleanup")
+
+    def test_a_stop_now_during_the_last_decision_itself_still_wins(self):
+        self.waits_then_ends_on_the_host_stop("decision")
+
+    def test_a_stop_now_with_an_error_while_starting_the_tunnel_still_wins(self):
+        out = self.waits_then_ends_on_the_host_stop("error")
+        self.assertIn("the launcher hit an error (OSError)", out)
+
+    def test_without_a_stop_now_a_failure_still_ends_the_whole_copy(self):
+        proc = self.start("plain")
+        out, _ = proc.communicate(timeout=20)
+        self.assertEqual(launch.EXIT_PROGRAM_STOPPED, proc.returncode, out)
+        self.assertNotIn("stopped now", out)
+        self.assertIn("app stopped", self.events())
+
+
 class StopNowTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()

@@ -39,7 +39,12 @@
 ---
 
 ## Notes for Alex (not part of the terms)
-- **Every promise above matches the code and the plan**: in-memory only and no file writes (plan section 3.4); one supported format, refused otherwise (section 3.1); the simple logout promise (D-009, Alex 2026-11-04); the stop procedure (section 3.5). Section 2's "Needs a check" wording follows the review's warning that shops may see mostly Needs a check.
+- **Several promises above are still conditional.** They follow the plan, but each must be shown true before the terms are used:
+  - section 5's "in memory only", "no backups" and "not in logs": the uploads PR's cleanup and marker tests (release checks 2 and 6), and Render's written answer on what it keeps (plan section 3.4);
+  - section 3's "can only check what the file shows": the open money decision below;
+  - section 7's stop: the release run's check 5 on Render (the stop-now's timing and the Shell after Suspend), and the slow-upload part in the uploads PR.
+
+  What already matches the plan: one supported format, refused otherwise (section 3.1); the simple logout promise (D-009, Alex 2026-11-04); the stop procedure's order (section 3.5). Section 2's "Needs a check" wording follows the review's warning that shops may see mostly Needs a check.
 - **Before it's used, it depends on the open money decision** recorded on PR B and #131: today a Profit and Loss Detail alone can make customer figures and the overall total Complete, even though a filter can't be seen in the file. Section 3 must match whatever Alex decides.
 - **Section 5 must match Render's written answer** (retention, builds) and the privacy wording on margenx.org.
 - **No figures, results, customers or savings are promised.**
