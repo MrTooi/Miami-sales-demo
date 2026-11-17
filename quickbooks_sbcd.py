@@ -115,6 +115,7 @@ class SalesByCustomerDetail:
     problems: tuple[qp.Problem, ...]  # Problem.section holds the customer it touches, or None for the report
     customers: dict[str, CustomerCoverage]
     grand_total: Decimal | None  # the stored TOTAL under the float rule
+    file_digest: str = ""  # the uploaded file itself (sha256 of its bytes): the no-filter answer is about exact files
 
     @property
     def reconciled(self) -> bool:
@@ -500,4 +501,6 @@ def read_sales_by_customer_detail(name: str, data: bytes) -> SalesByCustomerDeta
     if found.layout is None:
         raise ji.IntakeError(qlayouts.quickbooks_refusal(table, ji.MAX_TITLE_LINES, is_xlsx=True)
                              or "This isn't QuickBooks' Sales by Customer Detail report.")
-    return reconcile(found.layout, name, sheet)
+    import dataclasses
+    import hashlib
+    return dataclasses.replace(reconcile(found.layout, name, sheet), file_digest=hashlib.sha256(data).hexdigest())

@@ -52,11 +52,15 @@ class CrossCheck:
     sbcd_unmatched: tuple[int, ...]  # rows of Sales by Customer Detail with no match
     sbcd_unmatched_amounts: tuple[tuple[int, Decimal | None], ...]  # those rows with their amounts
     sbcd_jobs: dict  # Profit and Loss row -> (customer heading, sub-customer heading or None) of its match
+    pnl_file: str = ""  # the two uploaded files themselves (sha256 of their bytes)
+    sbcd_file: str = ""
 
     @property
     def pair(self) -> str:
-        """The two files this cross-check is about: what the owner's "no filter" confirmation is bound to."""
-        return f"{self.pnl_fingerprint}:{self.sbcd_fingerprint}"
+        """The two files this cross-check is about: what the owner's "no filter" confirmation is bound to. The files
+        themselves, not only what they read as: a different workbook that reads the same is asked again (the PR #148
+        manual review, blocker 1)."""
+        return f"{self.pnl_fingerprint}:{self.sbcd_fingerprint}:{self.pnl_file}:{self.sbcd_file}"
 
 
 # The sales forms Sales by Customer Detail lists (seen in its export): only these are expected in both reports.
@@ -135,4 +139,4 @@ def cross_check(pnl: qp.ProfitAndLossDetail, sbcd: qs.SalesByCustomerDetail) -> 
     return CrossCheck(qf.report_fingerprint(pnl), sales_fingerprint(sbcd), not reasons, tuple(reasons),
                       tuple(sorted(matched)),
                       tuple(sorted(pnl_unmatched)),
-                      tuple(row for row, _ in left), tuple(left), jobs)
+                      tuple(row for row, _ in left), tuple(left), jobs, pnl.file_digest, sbcd.file_digest)

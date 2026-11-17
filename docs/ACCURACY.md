@@ -196,7 +196,9 @@ Sales come only from Profit and Loss Detail. Sales by Customer Detail only confi
 line by line. One report alone never makes a job Complete. A job can be Complete only when:
 - the second report confirms every line counted in its sales (owner-resolved ones too);
 - the owner has confirmed that both files were exported for the whole business, with no filter. A
-  filter QuickBooks doesn't print can't be seen in the files, and could leave out a cost account.
+  filter QuickBooks doesn't print can't be seen in the files, and could leave out a cost account;
+- and, since 2026-11-17, the owner has confirmed the Profit and Loss Detail's coverage (section 8).
+  Matching sales never stand in for it: the second report checks sales, not costs.
 
 **Worked by hand** (`tests/test_quickbooks_crosscheck.py`):
 - **The plan's $900 example, with both reports matching:** both jobs are held until the $900 vendor
@@ -222,6 +224,80 @@ be Complete without any MargenX code.
   MargenX says to export both for the same date range. Ignoring dates, all 70 sales lines match one to
   one, with the same customer and job. Their dates differ by two days only because Intuit's practice
   company moves them in every session.
+
+## 8. Coverage confirmed by the owner (issue #128, the 2026-11-17 design review, D-010)
+
+A filter in QuickBooks can leave a whole cost account, or some transactions, out of an export, and
+nothing in the file shows it. MargenX can't detect that. The rule (D-010, the reviewer's accepted
+wording):
+
+> MargenX checks the evidence available in the uploaded reports. Where whole-business coverage
+> cannot be established from the files, it may accept the owner's explicit confirmation that the
+> exact Profit and Loss Detail includes all income and cost activity recorded in QuickBooks for the
+> stated dates and accrual basis, without filters excluding accounts or transactions. Until that
+> confirmation is given, or when it is withdrawn or contradicted, every potentially affected figure
+> must show Needs a check. If the affected scope is unknown, this includes all potentially affected
+> jobs, customers and the overall total. Confirmation resolves only the coverage uncertainty; all
+> other checks remain required, including S3 for jobs. Complete means the required report checks and
+> owner confirmations are satisfied. It does not independently verify export completeness or the
+> underlying bookkeeping.
+
+So **Complete means "every check passed and the owner confirmed coverage"**, not "proven complete".
+
+**Worked by hand** (`tests/test_quickbooks_coverage.py`, made up): Customer X's Kitchen job ($4,500
+sales, $600 materials, $900 labor) and Customer Y's Patio job ($1,200 sales, $800 materials).
+
+| The file, and the owner's answer | Company profit after job costs | Customer X | Customer Y | Jobs |
+|---|---|---|---|---|
+| Full export, no answer, "no" or "not sure" | $3,400, Needs a check (missing amount unknown) | $3,000, Needs a check | $400, Needs a check | Needs a check |
+| Full export, "Yes, I checked" | **$3,400, Complete** | **$3,000, Complete** | **$400, Complete** | Needs a check until Sales by Customer Detail and the no-filter answer (S3) |
+| Full export, yes, with the second report and the no-filter answer | $3,400, Complete | $3,000, Complete | $400, Complete | **Complete** |
+| Labor filtered out, no answer, "no" or "not sure" | $4,300, Needs a check (missing amount unknown) | $3,900, Needs a check | $400, Needs a check | Needs a check, even with matching sales and S3 |
+| **Labor filtered out, and a wrong "yes"** | **$4,300, Complete** | **$3,900, Complete** | $400, Complete | (S3 as above) |
+
+The last row is the limitation the owner accepted (D-010): a wrong confirmation of an incomplete
+export can give Complete figures, exact to the cent and still missing money. The test shows this; it
+proves nothing about detecting a missing account.
+
+The tests also check, one row of the reviewer's table each: every account name present but some
+transactions filtered out, and an income account left out (held until "yes": the account list is an
+aid, not evidence); a contradiction the file shows (totals that don't match) still holds after "yes";
+changing "yes" to "no", "not sure" or no answer updates every status at once, with no amount changed
+and the other holds kept; a changed file (same name, same account names), a different workbook that
+reads exactly the same (a second export), or an answer to other words needs a new answer, while
+replacing only the second report (even with a workbook that reads the same) keeps the coverage answer
+and asks S3's no-filter question again, on the real upload page too; a "yes" contradicted by the
+second report (sales the Profit and Loss Detail doesn't have: a file filtered to Customer X shows
+$1,500 of job costs, never Complete) keeps every figure held, and keeps holding once the sales report
+is removed, until another Profit and Loss file is used; "Not sure" for one workbook never withdraws
+another's answer (workbook A, then B, then A again on screen); answering every other question, or adding the second report, never records
+a "yes"; the screen never says "nothing is missing", only that the required checks and
+confirmations are complete; the account list shows overhead, mixed, unanswered, negative and zero-net accounts with exact
+Decimal totals; "missing amount unknown" is shown, never $900 and never $0, beside any known held
+amount; and the hold reaches every profit without changing its arithmetic.
+
+**Random reports.** `tests/qbo_pnl_reports.py` and `tests/qbo_crosscheck_reports.py` give each report
+or pair one owner coverage answer (from a separate random draw, so the reports themselves are as
+before): "yes" for this file and words (half), "no", none, a "yes" for another file, a "yes" for a
+different workbook that reads the same, or a "yes" to other words. Only the first lets a customer,
+the company or a job be Complete, and every profit must carry the hold otherwise. In the pairs, a
+"yes" with a sale only the second report has keeps the hold on every figure, costs included. Every
+change: 300 reports and 300 pairs.
+
+- Planted mistakes, each caught (2026-11-17, 30 of 30): the hold dropped; an answer to other words
+  accepted; an answer for another file accepted; an answer for a different workbook that reads the
+  same accepted, for coverage and for S3; the one rule for "a cross-check made for this upload"
+  (`made_for`) ignoring which workbook, the report's content, or the sales report's file
+  fingerprint, or skipped by the
+  figures, by the questions, or by the contradiction (so a sales report with no file fingerprint
+  could still be remembered as a contradiction); "not sure" for another workbook withdrawing this
+  one's answer; another workbook's answer shown in use; a contradiction never remembered, or
+  remembered but ignored; a report without a file fingerprint confirmed; the headline saying "final" again; the second report's missing sales ignored after a yes;
+  "nothing is missing" said again; a question for another workbook recorded; "no" counted as yes; sales never held (costs and
+  profits only); jobs never held; the no-filter answer also recording yes; "not sure" keeping the old
+  answer; a question with other words recorded; the account list leaving out lines MargenX doesn't
+  count; "missing amount unknown" not shown; the hold shown as $0; the question no longer asked once
+  other questions are answered.
 
 ## What this doesn't prove
 

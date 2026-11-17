@@ -48,9 +48,9 @@ class OrderAndShapeTests(unittest.TestCase):
     def test_questions_come_in_order_with_their_progress(self):
         questions = qq.open_questions(shop())
         kinds = [q.kind for q in questions.questions]
-        self.assertEqual([qq.JOBS, qq.ACCOUNT, qq.ACCOUNT, qq.LINE], kinds)
-        self.assertEqual(["Question 1 of 4", "Question 2 of 4", "Question 3 of 4", "Question 4 of 4"],
-                         [q.progress for q in questions.questions])
+        # The coverage confirmation comes right after the account questions (the 2026-11-17 design review).
+        self.assertEqual([qq.JOBS, qq.ACCOUNT, qq.ACCOUNT, qq.COVERAGE, qq.LINE], kinds)
+        self.assertEqual([f"Question {n} of 5" for n in range(1, 6)], [q.progress for q in questions.questions])
         self.assertEqual("Do you use sub-customers in QuickBooks for jobs?", questions.questions[0].title)
         self.assertFalse(questions.done)
 
@@ -102,7 +102,7 @@ class AnsweringTests(unittest.TestCase):
         same = qq.answer(report, None, questions.questions[0], qq.NOT_SURE)
         self.assertEqual([q.key for q in questions.questions], [q.key for q in qq.open_questions(report, same).questions])
         offered = qq.answer(report, None, questions.questions[0], "something not offered")
-        self.assertEqual(4, len(qq.open_questions(report, offered).questions))
+        self.assertEqual(5, len(qq.open_questions(report, offered).questions))
 
     def test_answering_never_changes_the_old_answers(self):
         report = shop()
@@ -401,7 +401,8 @@ class AnsweringTests(unittest.TestCase):
                                                      L(4, "Invoice", "1003", Y, D("300"), None)])]})
         answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
         titles = [q.title for q in qq.open_questions(report, answers).questions]
-        self.assertEqual(["Which job is this $700.00 for?"], titles)
+        self.assertEqual(["Does this file include your whole business?", "Which job is this $700.00 for?"], titles)
+        answers = qq.answer(report, answers, first(qq.open_questions(report, answers), qq.COVERAGE), qf.COVERAGE_YES)
         self.assertEqual(qp.COMPLETE, qf.figures(report, answers).customers[Y]["sales"].status)
 
     def test_an_outside_job_must_be_named(self):
@@ -473,6 +474,11 @@ class CrossCheckAndProblemTests(unittest.TestCase):
         answers = qq.answer(report, None, qq.open_questions(report, None, check).questions[0], "yes", cross_check=check)
         question = first(qq.open_questions(report, answers, check), qq.NO_FILTER)
         answers = qq.answer(report, answers, question, "yes", cross_check=check)
+        self.assertEqual([qq.COVERAGE], [q.kind for q in qq.open_questions(report, answers, check).questions])
+        self.assertEqual(qp.NEEDS_A_CHECK,  # S3's answer never stands in for the coverage confirmation
+                         qf.figures(report, answers, cross_check=check).jobs[(X, "Job A")]["profit_after_job_costs"].status)
+        answers = qq.answer(report, answers, first(qq.open_questions(report, answers, check), qq.COVERAGE),
+                            qf.COVERAGE_YES, cross_check=check)
         self.assertTrue(qq.open_questions(report, answers, check).done)
         self.assertEqual(qf.figures(report, answers, cross_check=check).jobs[(X, "Job A")]["profit_after_job_costs"].status,
                          qp.COMPLETE)
@@ -490,7 +496,7 @@ class WalkThroughTests(unittest.TestCase):
     def test_answering_every_question_leaves_only_what_can_never_be_counted(self):
         report = shop()
         answers = None
-        script = {qq.JOBS: "yes", "Job Materials": qf.JOB_COSTS_ACCOUNT, "Office Supplies": qf.OVERHEAD_ACCOUNT,
+        script = {qq.JOBS: "yes", qq.COVERAGE: qf.COVERAGE_YES, "Job Materials": qf.JOB_COSTS_ACCOUNT, "Office Supplies": qf.OVERHEAD_ACCOUNT,
                   "-$200.00": qf.REDUCTION, "$700.00": "no job", "$900.00": f"job:{X}{qq.SEPARATOR}Job A"}
         for _ in range(20):
             questions = qq.open_questions(report, answers)

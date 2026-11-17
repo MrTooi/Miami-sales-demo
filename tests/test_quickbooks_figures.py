@@ -51,9 +51,19 @@ def answers(accounts=None, lines=None, **kw) -> qf.OwnerAnswers:
     return qf.OwnerAnswers(**{**JOBS_ON, **kw}, accounts=accounts or {}, lines=lines or {})
 
 
+def covered(report, owner_answers: qf.OwnerAnswers) -> qf.OwnerAnswers:
+    """The answers bound to this report, with the owner's coverage "yes" for it (the 2026-11-17 coverage
+    confirmation), unless the answers already carry a coverage answer of their own."""
+    fingerprint = qf.report_fingerprint(report)
+    coverage = owner_answers.coverage or qf.CoverageAnswer(qf.COVERAGE_YES, qf.coverage_statement(report), fingerprint,
+                                                           report.file_digest)
+    return dataclasses.replace(owner_answers, report=fingerprint, coverage=coverage)
+
+
 def figures(report, owner_answers: qf.OwnerAnswers) -> qf.Figures:
-    """The figures, with the answers bound to this report (as the question screens will bind them)."""
-    return qf.figures(report, dataclasses.replace(owner_answers, report=qf.report_fingerprint(report)))
+    """The figures, with the answers bound to this report (as the question screens will bind them). The tests in
+    this file are about the other rules, so the file's coverage is confirmed; CoverageTests covers that hold."""
+    return qf.figures(report, covered(report, owner_answers))
 
 
 def two_jobs(*extra_income, extra_expenses=(), extra_cogs=(), office=()):
