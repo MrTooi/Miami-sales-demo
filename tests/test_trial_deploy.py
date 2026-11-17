@@ -277,6 +277,9 @@ DRIVER = textwrap.dedent("""
     import launch
     log, port, stand_in, app_life, tunnel_life = sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6]
     environ, listen_delay, stop_before_tunnel = json.loads(sys.argv[7]), sys.argv[8], int(sys.argv[9])
+    if sys.argv[10] == "early":  # a stop-now while the launcher is still starting, before run() exists
+        launch.catch_early_stop_now()
+        os.kill(os.getpid(), launch.STOP_NOW_SIGNAL)
     def before_tunnel():
         if stop_before_tunnel:  # a stop (this signal) arrives after the launcher's last check
             os.kill(os.getpid(), stop_before_tunnel)
@@ -312,13 +315,14 @@ class LauncherProcessTests(unittest.TestCase):
         self.driver = Path(self.folder.name) / "driver.py"
         self.driver.write_text(DRIVER)
 
-    def start(self, app_life=60, tunnel_life=60, listen_delay=0, extra=None, stop_before_tunnel=False):
+    def start(self, app_life=60, tunnel_life=60, listen_delay=0, extra=None, stop_before_tunnel=False, early=False):
         import json
         environ = {**SETTINGS, "PATH": os.environ.get("PATH", ""), **(extra or {})}
         return subprocess.Popen([sys.executable, str(self.driver), str(ROOT / "deploy" / "trial"), str(self.log),
                                  str(free_port()), str(self.stand_in), str(app_life), str(tunnel_life),
                                  json.dumps(environ), str(listen_delay),
-                                 str(int(signal.SIGTERM) if stop_before_tunnel is True else int(stop_before_tunnel or 0))],
+                                 str(int(signal.SIGTERM) if stop_before_tunnel is True else int(stop_before_tunnel or 0)),
+                                 "early" if early else "-"],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     def events(self, with_time=False):
@@ -439,6 +443,8 @@ class LauncherProcessTests(unittest.TestCase):
         proc = Path(self.folder.name) / "proc"
         (proc / str(pid)).mkdir(parents=True)
         (proc / str(pid) / "cmdline").write_bytes(b"python\0/app/deploy/trial/launch.py\0")
+        # The driver really catches SIGUSR1 by now; Linux would show it in SigCgt (bit 10 for signal 10).
+        (proc / str(pid) / "status").write_text(f"Name:\tpython\nSigCgt:\t{1 << (int(launch.STOP_NOW_SIGNAL) - 1):016x}\n")
         (proc / "self").mkdir()
         return proc
 
@@ -490,6 +496,24 @@ class LauncherProcessTests(unittest.TestCase):
         self.assertIn("stopped now", out)
         self.assertNotIn("running", out)
 
+    def test_a_stop_now_before_run_starts_nothing_and_never_ends_the_launcher(self):
+        proc = self.start(early=True)
+        self.assertTrue(self.alive(proc, 1.5))  # not ended by SIGUSR1's default action: no host restart
+        proc.send_signal(signal.SIGTERM)
+        code, out = self.finish(proc)
+        self.assertEqual(launch.EXIT_STOPPED_BY_HOST, code, out)
+        self.assertEqual([], self.events())  # neither MargenX nor the tunnel was ever started
+        self.assertIn("before anything was started", out)
+        self.assertIn("stopped now", out)
+
+    def test_the_launcher_catches_stop_now_before_any_other_import(self):
+        tree = ast.parse((ROOT / "deploy" / "trial" / "launch.py").read_text())
+        body = [n for n in tree.body if not isinstance(n, ast.Expr)]  # the docstring
+        first_guard = next(i for i, n in enumerate(body) if isinstance(n, ast.If))
+        self.assertIn("catch_early_stop_now()", ast.unparse(body[first_guard]))
+        before = [ast.unparse(n) for n in body[:first_guard] if isinstance(n, (ast.Import, ast.ImportFrom))]
+        self.assertEqual(["from __future__ import annotations", "import signal"], before)
+
     def test_a_host_stop_during_the_wait_after_stop_now_ends_the_launcher(self):
         proc = self.start()
         self.wait_for("tunnel", "started")
@@ -515,9 +539,15 @@ class StopNowTests(unittest.TestCase):
         self.addCleanup(self.folder.cleanup)
         self.proc = Path(self.folder.name)
 
-    def process(self, pid, *words):
+    def process(self, pid, *words, catches=True):
         (self.proc / str(pid)).mkdir()
         (self.proc / str(pid) / "cmdline").write_bytes(b"\0".join(w.encode() for w in words) + b"\0")
+        self.catching(pid, catches)
+
+    def catching(self, pid, yes):
+        caught = (1 << (int(launch.STOP_NOW_SIGNAL) - 1)) | (1 << (int(signal.SIGTERM) - 1)) if yes else \
+            (1 << (int(signal.SIGTERM) - 1))
+        (self.proc / str(pid) / "status").write_text(f"Name:\tpython\nSigBlk:\t{0:016x}\nSigCgt:\t{caught:016x}\n")
 
     def test_it_finds_only_the_launcher(self):
         self.process(1, "python", "/app/deploy/trial/launch.py")
@@ -541,6 +571,31 @@ class StopNowTests(unittest.TestCase):
         self.assertEqual([(1, launch.STOP_NOW_SIGNAL)], sent)
         self.assertIn("Suspend is still pressed", out.getvalue())
 
+    def test_a_launcher_not_yet_catching_stop_now_is_never_signalled(self):
+        self.process(1, "python", "/app/deploy/trial/launch.py", catches=False)
+        sent = []
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = stop_now.main(proc=self.proc, kill=lambda pid, sig: sent.append(pid), ready_seconds=0.3,
+                                 sleep=lambda s: None)
+        self.assertEqual(1, code)
+        self.assertEqual([], sent)  # SIGUSR1's default action would have ended it, and Render would restart it
+        self.assertIn("isn't ready to take a stop-now yet", out.getvalue())
+
+    def test_it_waits_for_a_starting_launcher_to_catch_stop_now(self):
+        self.process(1, "python", "/app/deploy/trial/launch.py", catches=False)
+        sent, naps = [], []
+
+        def nap(seconds):
+            naps.append(seconds)
+            if len(naps) == 3:
+                self.catching(1, True)  # the launcher's first line has run
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = stop_now.main(proc=self.proc, kill=lambda pid, sig: sent.append(pid), sleep=nap)
+        self.assertEqual(0, code)
+        self.assertEqual([1], sent)
+        self.assertEqual(3, len(naps))
+
     def test_with_no_launcher_it_does_nothing_and_says_so(self):
         sent = []
         out = io.StringIO()
@@ -549,6 +604,20 @@ class StopNowTests(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertEqual([], sent)
         self.assertIn("Go on with Suspend", out.getvalue())
+
+    @unittest.skipUnless(Path("/proc/self/status").exists(), "needs Linux's /proc (CI runs on Ubuntu)")
+    def test_the_real_kernel_shows_whether_a_process_catches_stop_now(self):
+        code = ("import signal, sys, time\n"
+                "if sys.argv[1] == 'yes':\n    signal.signal(signal.SIGUSR1, lambda *a: None)\n"
+                "print('ready', flush=True)\ntime.sleep(30)\n")
+        for catches in ("yes", "no"):
+            child = subprocess.Popen([sys.executable, "-c", code, catches], stdout=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual("ready", child.stdout.readline().strip())
+                self.assertEqual(catches == "yes", stop_now.catches_stop_now(Path("/proc"), child.pid), catches)
+            finally:
+                child.kill()
+                child.wait()
 
     def test_the_launcher_and_stop_now_agree_on_the_signal(self):
         self.assertEqual(launch.STOP_NOW_SIGNAL, stop_now.STOP_NOW_SIGNAL)

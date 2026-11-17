@@ -30,19 +30,37 @@ The rules this launcher keeps:
   run). Render's Suspend only delivers its stop about 2 minutes after it's pressed (PR #141). The
   launcher then **stays running and does nothing** until the host's own stop, so the host never sees
   the copy end by itself, and never restarts it. A stop-now that arrives while MargenX is still
-  starting means the tunnel is never started, exactly like the host's stop.
+  starting means the tunnel is never started, exactly like the host's stop. **A stop-now is caught from
+  the launcher's very first line** (`catch_early_stop_now`, before any import): one that arrives before
+  `run()` is honoured by starting nothing at all, so it can never kill the launcher (SIGUSR1's default
+  action) and make the host restart the copy. `stop_now.py` also never signals a launcher that isn't
+  catching it yet.
 - **Never prints a setting's value or the token,** only which setting is missing or invalid.
 """
 from __future__ import annotations
 
-import os
 import signal
-import socket
-import subprocess
-import sys
-import time
-from collections.abc import Callable, Mapping
-from pathlib import Path
+
+# A stop-now that arrives before run() installs its handlers (stop_now.py, while the launcher is still
+# importing): noted here, and honoured by run() by starting nothing. Without this, SIGUSR1's default
+# action would end the launcher, and Render would restart the copy.
+EARLY_STOP_NOW: list[int] = []
+
+
+def catch_early_stop_now() -> None:
+    signal.signal(signal.SIGUSR1, lambda signum, frame: EARLY_STOP_NOW.append(signum))
+
+
+if __name__ == "__main__":
+    catch_early_stop_now()  # first, before any other import: see EARLY_STOP_NOW
+
+import os  # noqa: E402
+import socket  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+from collections.abc import Callable, Mapping  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 APP_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(APP_DIR))
@@ -209,6 +227,8 @@ def run(environ: Mapping[str, str] = os.environ, spawn: Callable = subprocess.Po
         else:
             asked_to_stop["host"] = True
     previous = {sig: signal.signal(sig, on_stop) for sig in HELD_SIGNALS}
+    if EARLY_STOP_NOW:  # a stop-now that came before these handlers: start nothing (checked after installing them)
+        asked_to_stop["yes"] = asked_to_stop["now"] = True
     app = tunnel_proc = None
     try:
         result = _run(environ, spawn, ready, streamlit, tunnel, poll_seconds, before_tunnel, asked_to_stop)
@@ -237,6 +257,9 @@ def _run(environ, spawn, ready, streamlit, tunnel, poll_seconds, before_tunnel, 
     """The launcher's start and watch. Returns (exit code, MargenX, tunnel); the caller stops both programs."""
     app = tunnel_proc = None
     try:
+        if asked_to_stop["yes"]:  # a stop that came before anything started: nothing is started
+            say(f"stopping: asked to stop by {_who(asked_to_stop)} before anything was started")
+            return EXIT_STOPPED_BY_HOST, None, None
         if closed(environ):
             say("closed: this copy refuses every login (the invited email is replaced by nobody's address)")
         app = spawn(streamlit or streamlit_command(), cwd=str(APP_DIR), env=streamlit_env(environ))

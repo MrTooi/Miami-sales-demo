@@ -11,8 +11,11 @@ to reach the copy (measured three times in PR #141). The launcher then stays run
 until the host's own stop, so the host never restarts the copy. It is part of the stop procedure
 (docs/TRIAL_DEPLOYMENT.md, section 7), never a replacement for Suspend: Suspend is still pressed.
 
-It finds the launcher by its command line in /proc and sends it SIGUSR1. It prints only process
-numbers and what happened: no setting, token or email. It changes nothing else.
+It finds the launcher by its command line in /proc and sends it SIGUSR1, but only once the launcher is
+catching that signal (its SigCgt in /proc/<pid>/status): SIGUSR1's default action would end a launcher
+that is still starting, and Render would then restart the copy. It waits up to READY_SECONDS for that,
+then says so and sends nothing. It prints only process numbers and what happened: no setting, token or
+email. It changes nothing else.
 """
 from __future__ import annotations
 
@@ -25,6 +28,18 @@ from pathlib import Path
 LAUNCHER = "deploy/trial/launch.py"
 STOP_NOW_SIGNAL = signal.SIGUSR1
 STOPPED_LINE = "stopped now"
+READY_SECONDS = 10.0
+
+
+def catches_stop_now(proc: Path, pid: int) -> bool:
+    """Whether this process has its own handler for the stop-now signal (SigCgt in /proc/<pid>/status)."""
+    try:
+        for line in (proc / str(pid) / "status").read_text().splitlines():
+            if line.startswith("SigCgt:"):
+                return bool(int(line.split()[1], 16) & (1 << (int(STOP_NOW_SIGNAL) - 1)))
+    except (OSError, ValueError, IndexError):
+        pass
+    return False
 
 
 def launchers(proc: Path = Path("/proc"), me: int | None = None) -> list[int]:
@@ -46,7 +61,8 @@ def launchers(proc: Path = Path("/proc"), me: int | None = None) -> list[int]:
     return sorted(found)
 
 
-def main(proc: Path = Path("/proc"), kill=os.kill, clock=time.time) -> int:
+def main(proc: Path = Path("/proc"), kill=os.kill, clock=time.time, ready_seconds: float = READY_SECONDS,
+         sleep=time.sleep) -> int:
     found = launchers(proc)
     if not found:
         print("stop-now: no MargenX launcher is running here. Nothing was done. Go on with Suspend (section 7).")
@@ -55,6 +71,14 @@ def main(proc: Path = Path("/proc"), kill=os.kill, clock=time.time) -> int:
         print(f"stop-now: {len(found)} launchers found ({', '.join(map(str, found))}); asking each to stop now.")
     sent = 0
     for pid in found:
+        waited = 0.0
+        while not catches_stop_now(proc, pid) and waited < ready_seconds:
+            sleep(0.1)
+            waited += 0.1
+        if not catches_stop_now(proc, pid):
+            print(f"stop-now: launcher {pid} isn't ready to take a stop-now yet, so nothing was sent to it "
+                  "(that could end it, and Render would restart the copy).")
+            continue
         try:
             kill(pid, STOP_NOW_SIGNAL)
             sent += 1
