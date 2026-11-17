@@ -392,7 +392,7 @@ def _cross_check_for(report: qp.ProfitAndLossDetail, cross_check) -> bool:
     return (cross_check is not None and getattr(cross_check, "usable", False)
             and getattr(cross_check, "pnl_fingerprint", None) == qf.report_fingerprint(report)
             and getattr(cross_check, "pnl_file", None) == report.file_digest  # this very workbook (review of 8d19d7b)
-            and bool(report.file_digest))
+            and bool(report.file_digest) and bool(getattr(cross_check, "sbcd_file", "")))
 
 
 def _classification(answers: qf.OwnerAnswers, row: int) -> qf.LineAnswer | None:

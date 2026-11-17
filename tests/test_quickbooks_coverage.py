@@ -743,6 +743,17 @@ class NoFileTests(unittest.TestCase):
         self.assertTrue(coverage_held(result))
         self.assertIn("can't tell which uploaded file", " ".join(result.warnings))
 
+    def test_a_cross_check_with_a_sales_report_without_a_file_fingerprint_is_never_used(self):
+        # The automated review of f3861fd: the no-filter answer is bound to both uploaded workbooks.
+        report = full_export()
+        sales = dataclasses.replace(sales_report(), file_digest="")
+        check = qc.cross_check(report, sales)
+        self.assertTrue(check.usable, check.reasons)
+        self.assertNotIn(qq.NO_FILTER, [q.kind for q in qq.open_questions(report, base(report), check).questions])
+        answers = say(report, dataclasses.replace(base(report), unfiltered_pair=check.pair), qf.COVERAGE_YES)
+        result = qf.figures(report, answers, cross_check=check)
+        self.assertEqual([qf.ONE_REPORT], [h.reason for h in result.jobs[KITCHEN]["profit_after_job_costs"].holds])
+
     def test_a_cross_check_for_a_report_without_a_file_fingerprint_is_never_used(self):
         report = dataclasses.replace(full_export(), file_digest="")
         check = qc.cross_check(report, sales_report())

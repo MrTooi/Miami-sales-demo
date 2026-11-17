@@ -735,7 +735,7 @@ class _Builder:
         if check is None:
             return
         if (check.pnl_fingerprint != report_fingerprint(self.report) or check.pnl_file != self.report.file_digest
-                or not self.report.file_digest):
+                or not self.report.file_digest or not check.sbcd_file):
             # Made for another workbook, even one that reads the same: its pair, and any no-filter answer bound to
             # it, are about other files (the automated review of 8d19d7b).
             self.warn("The cross-check was made for another Profit and Loss Detail, so it wasn't used.")
