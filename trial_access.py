@@ -1,4 +1,4 @@
-"""The website trial's safety checks (issue #131, lean v1.2; decisions D-008 and D-009). PR A1.
+"""The website trial's safety checks (issue #131, lean v1.2; decisions D-008 and D-009). PR A1, PR B.
 
 The trial runs MargenX online for one invited person at a time, behind Cloudflare Access.
 Cloudflare puts a signed token on every request it lets through. This module checks that token,
@@ -29,21 +29,33 @@ Limits, stated honestly:
   The register never forgets which person a session belongs to while the process runs, so no
   session Streamlit could still resume escapes a logout. A restart forgets all that, but a
   restart also ends every session.
-- Checking a token can mean fetching Cloudflare's keys over the network. That runs off Streamlit's
-  event loop, in a worker thread, so a slow fetch never freezes the app: page files already allowed,
-  open live connections and their once-a-second checks keep running. It does hold up other token
-  checks, a logout included: PyJWT lets one key lookup run at a time (a shared lock), and the worker
-  threads are a shared, limited pool. The login is checked again on the loop afterwards. Each network
-  wait in a fetch gives up after KEY_FETCH_TIMEOUT_SECONDS, which is not a total deadline (a server
-  trickling data slowly could take longer). Cloudflare's key address is normally fast; a total
-  deadline and a cap on parallel checks are a follow-up for PR B.
+- Checking a token can mean fetching Cloudflare's keys over the network. Every check (the gate's and
+  the page's) runs in TokenChecks' own small pool of threads, off Streamlit's event loop, so a slow
+  fetch never freezes the app. Since PR B it has a total deadline and a cap (the PR #137 follow-up):
+  a check that hasn't finished within TOKEN_CHECK_SECONDS is refused, and while MAX_PARALLEL_CHECKS
+  checks are already running, a new one is refused at once instead of queueing. Refusing is the safe
+  side: the browser can simply try again. A thread stuck in a slow fetch keeps its place in the cap
+  until the fetch itself gives up (each network wait gives up after KEY_FETCH_TIMEOUT_SECONDS), so
+  stuck fetches can never pile up threads. PyJWT still lets one key lookup run at a time, so other
+  checks wait behind a slow fetch, a logout included; with the deadline, that wait ends in a refusal
+  within TOKEN_CHECK_SECONDS. A refused logout changes nothing, and the person can press it again.
 - A live connection is checked about once a second and on every message: it is closed once the
-  login has expired or been logged out, and nothing more is sent on it. Figures already on screen
-  stay visible (behind Streamlit's "Connection error" box) until the tab is closed.
+  login has expired or been logged out, and nothing more is sent on it. Since PR B its token is also
+  checked again against Cloudflare's current keys every KEY_RECHECK_SECONDS (the other PR #137
+  follow-up): if Cloudflare has removed the key that signed it, or the check can't finish (deadline or
+  cap), the connection is closed. The browser then reconnects, which needs a fresh, valid token.
+  Figures already on screen stay visible (behind Streamlit's "Connection error" box) until the tab is
+  closed.
+- Closed mode (deploy/trial/launch.py, MARGINX_TRIAL_CLOSED=1) gives MargenX CLOSED_INVITE, nobody's
+  address, as the invited email. The gate then refuses every request before any token check, with
+  "This MargenX trial copy is closed." Every refusal carries the X-MargenX-Gate header, so a refusal
+  seen through Cloudflare can be told apart from Cloudflare's own: that is how the stop procedure's
+  restart check shows that the copy itself refuses (PR B).
 """
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import re
 import threading
 import time
@@ -74,6 +86,17 @@ KEY_SET_SECONDS = 300
 # deadline for the whole fetch; see the module notes.
 KEY_FETCH_TIMEOUT_SECONDS = 5
 CHECK_EVERY_SECONDS = 1.0
+# A token check (which may fetch Cloudflare's keys) must finish within this, or the request is refused.
+TOKEN_CHECK_SECONDS = 8.0
+# At most this many token checks run at once; a new one beyond that is refused at once, never queued.
+MAX_PARALLEL_CHECKS = 8
+# An open live connection's token is checked again against Cloudflare's current keys this often.
+KEY_RECHECK_SECONDS = 60.0
+# Closed mode's invited email (deploy/trial/launch.py): ".invalid" can never be a real email domain (RFC 2606).
+CLOSED_INVITE = "closed@margenx.invalid"
+# On every refusal, so it can be told apart from Cloudflare's own pages: "refused", or "closed" in closed mode.
+GATE_HEADER = b"x-margenx-gate"
+CLOSED_MESSAGE = "This MargenX trial copy is closed."
 SAMPLES_ONLY_NOTE = (
     "This trial shows MargenX with made-up sample files for now. Reading your own QuickBooks report isn't "
     "finished yet, so there's no upload box: you'll be told when it's ready."
@@ -101,6 +124,11 @@ class TrialConfig:
     @property
     def origin(self) -> str:
         return f"https://{self.host}"
+
+    @property
+    def closed(self) -> bool:
+        """Closed mode: the invited email is nobody's address, so this copy refuses everyone."""
+        return self.invited_email == CLOSED_INVITE
 
     @staticmethod
     def requested(environ: Mapping[str, str]) -> bool:
@@ -221,7 +249,54 @@ class SessionRegister:
             return ended is None or issued_at > ended
 
 
+class TokenChecks:
+    """Runs token checks with a total deadline and a cap on how many run at once (the PR #137 follow-up).
+
+    Each check runs in this pool's own threads, never on Streamlit's event loop. A check that hasn't
+    finished within `deadline` seconds is refused (None). While `limit` checks are still running, a new
+    one is refused at once: it is never queued. A check stuck in a slow fetch keeps its place until its
+    thread really finishes, so stuck checks can never add up to more than `limit` threads."""
+
+    def __init__(self, limit: int = MAX_PARALLEL_CHECKS, deadline: float = TOKEN_CHECK_SECONDS):
+        self.limit = limit
+        self.deadline = deadline
+        self._places = threading.BoundedSemaphore(limit)
+        self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=limit, thread_name_prefix="margenx-token")
+
+    def _start(self, checker: TokenChecker, token: str | None) -> concurrent.futures.Future | None:
+        if not self._places.acquire(blocking=False):
+            return None  # the cap is reached: refused at once
+        try:
+            future = self._pool.submit(checker.claims, token)
+        except RuntimeError:  # the pool is shutting down: the process is ending
+            self._places.release()
+            return None
+        future.add_done_callback(lambda _: self._places.release())  # the place is freed only when it really ends
+        return future
+
+    async def claims(self, checker: TokenChecker, token: str | None) -> dict | None:
+        """From the event loop: the token's claims, or None if refused, too slow or over the cap."""
+        future = self._start(checker, token)
+        if future is None:
+            return None
+        try:
+            return await asyncio.wait_for(asyncio.wrap_future(future), self.deadline)
+        except Exception:  # the deadline passed (or anything else): refused
+            return None
+
+    def claims_now(self, checker: TokenChecker, token: str | None) -> dict | None:
+        """From a script thread (the page): the same, waiting at most the deadline."""
+        future = self._start(checker, token)
+        if future is None:
+            return None
+        try:
+            return future.result(timeout=self.deadline)
+        except Exception:
+            return None
+
+
 REGISTER = SessionRegister()
+CHECKS = TokenChecks()
 _CHECKERS: dict[TrialConfig, TokenChecker] = {}
 
 
@@ -302,7 +377,8 @@ class TrialGate:
 
     def __init__(self, app, config: TrialConfig | None = None, checker: TokenChecker | None = None,
                  register: SessionRegister = REGISTER, clock=time.time,
-                 check_every: float = CHECK_EVERY_SECONDS, runtime=_streamlit_runtime):
+                 check_every: float = CHECK_EVERY_SECONDS, runtime=_streamlit_runtime,
+                 checks: TokenChecks | None = None, recheck_every: float = KEY_RECHECK_SECONDS):
         self.app = app
         self.config = config
         self.checker = checker if checker is not None else checker_for(config)
@@ -310,6 +386,8 @@ class TrialGate:
         self.clock = clock
         self.check_every = check_every
         self.runtime = runtime
+        self.checks = checks if checks is not None else CHECKS
+        self.recheck_every = recheck_every
 
     async def __call__(self, scope, receive, send):
         kind = scope.get("type")
@@ -317,18 +395,22 @@ class TrialGate:
             await self.app(scope, receive, send)  # lifespan events carry no request
             return
         self.register.loop = asyncio.get_running_loop()
+        if self.config is not None and self.config.closed:
+            await self._refuse(scope, send, closed=True)  # closed mode: everyone, before any token check
+            return
         headers = self._before_token(scope)
         claims = None
+        token = None
         if headers is not None:
             token = headers.get(TOKEN_HEADER.encode())
-            # Off the event loop: checking a token may fetch Cloudflare's keys over the network.
-            found = await asyncio.to_thread(self.checker.claims, token) if token else None
+            # Off the event loop, with a deadline and a cap: checking a token may fetch Cloudflare's keys.
+            found = await self.checks.claims(self.checker, token) if token else None
             claims = self._after_token(scope, headers, found)  # on the loop again: the latest logouts count
         if claims is None:
             await self._refuse(scope, send)
             return
         if kind == "websocket":
-            await self._serve_live(scope, receive, send, claims)
+            await self._serve_live(scope, receive, send, claims, token)
             return
         if scope.get("path") == LOGOUT_PATH:
             await self._log_out(scope, send, claims)
@@ -380,13 +462,14 @@ class TrialGate:
                 return None  # a session a logout ended, or someone else's
         return claims
 
-    async def _refuse(self, scope, send):
+    async def _refuse(self, scope, send, closed: bool = False):
         if scope["type"] == "websocket":
             await send({"type": "websocket.close", "code": 1008})
             return
         await send({"type": "http.response.start", "status": 403,
-                    "headers": [(b"content-type", b"text/plain; charset=utf-8"), *SECURITY_HEADERS]})
-        await send({"type": "http.response.body", "body": b"Not allowed."})
+                    "headers": [(b"content-type", b"text/plain; charset=utf-8"),
+                                (GATE_HEADER, b"closed" if closed else b"refused"), *SECURITY_HEADERS]})
+        await send({"type": "http.response.body", "body": (CLOSED_MESSAGE if closed else "Not allowed.").encode()})
 
     def _with_security_headers(self, send):
         forced = {name for name, _ in FORCED_HEADERS}
@@ -402,12 +485,14 @@ class TrialGate:
         return self.clock() >= float(claims["exp"]) or not self.register.login_allowed(claims["email"],
                                                                                         float(claims["iat"]))
 
-    async def _serve_live(self, scope, receive, send, claims):
+    async def _serve_live(self, scope, receive, send, claims, token=None):
         """Run a live connection, closing it from the server side once its login has expired or been
         logged out: checked about once a second even when nothing is sent, and on every message either
-        way. After that, nothing more reaches the browser and nothing more from it reaches Streamlit."""
+        way. Its token is also checked again against Cloudflare's current keys every recheck_every
+        seconds; a refusal, a check that misses its deadline or the cap, all close it. After that,
+        nothing more reaches the browser and nothing more from it reaches Streamlit."""
         lock = asyncio.Lock()
-        state = {"ended": False, "watch": None}
+        state = {"ended": False, "watch": None, "rekey": None}
 
         async def end():
             async with lock:
@@ -425,6 +510,15 @@ class TrialGate:
                 if self._ended(claims):
                     await end()
 
+        async def rekey():
+            # Its own task, so a slow key fetch never delays the once-a-second expiry and logout checks.
+            while not state["ended"]:
+                await asyncio.sleep(self.recheck_every)
+                if state["ended"]:
+                    return
+                if await self.checks.claims(self.checker, token) is None:
+                    await end()  # a removed key, or a check that couldn't finish: closed (fail closed)
+
         async def guarded_send(message):
             if message["type"] == "websocket.send" and self._ended(claims):
                 await end()
@@ -434,6 +528,7 @@ class TrialGate:
                 await send(message)
             if message["type"] == "websocket.accept" and state["watch"] is None:
                 state["watch"] = asyncio.create_task(watch())
+                state["rekey"] = asyncio.create_task(rekey())
 
         async def guarded_receive():
             if state["ended"]:
@@ -448,8 +543,9 @@ class TrialGate:
         try:
             await self.app(scope, guarded_receive, guarded_send)
         finally:
-            if state["watch"] is not None:
-                state["watch"].cancel()
+            for task in (state["watch"], state["rekey"]):
+                if task is not None:
+                    task.cancel()
 
 
 def login_from_headers(headers: Mapping[str, str] | None, checker: TokenChecker | None) -> tuple[str, float] | None:
@@ -459,7 +555,7 @@ def login_from_headers(headers: Mapping[str, str] | None, checker: TokenChecker 
     if headers is None or checker is None:
         return None
     lowered = {k.lower(): v for k, v in headers.items()}
-    claims = checker.claims(lowered.get(TOKEN_HEADER))
+    claims = CHECKS.claims_now(checker, lowered.get(TOKEN_HEADER))  # the same deadline and cap as the gate
     if claims is None or not REGISTER.login_allowed(claims["email"], float(claims["iat"])):
         return None
     return claims["email"], float(claims["iat"])

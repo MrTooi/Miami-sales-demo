@@ -1,10 +1,12 @@
-# The website trial: setup, operator-only test copy and stop procedure (PR A2, issue #131)
+# The website trial: setup, operator-only test copy and stop procedure (PR A2 and PR B, issue #131)
 
 **Status:** this is the recipe. **Nothing is deployed, bought or switched on by this document or its PR.** Trial uploads are off in the code (PR #137): a copy shows MargenX's made-up samples only, until the PR that switches uploads on.
 
 **What the operator-only test copy is (D-009, part 1):** MargenX online behind Cloudflare Access, with **only Alex invited** (his exact email) and **made-up files only**. No shop can reach it. **What a shop's copy needs:** D-009 part 2 and D-008, in their order, with the invite added last. This document doesn't cover shop copies beyond the stop procedure.
 
 Sources: the plan (#131, lean v1.2), the hosting research (`docs/research/TRIAL_HOSTING_AND_LOGIN.md`), D-008 and D-009 (`docs/DECISIONS.md`), and the in-app checks (`trial_access.py`, PR #137).
+
+**PR B adds** (details in `docs/TRIAL_RELEASE_CHECKS.md`): the operator's **stop-now** (section 7, step 1.ii), the **self-check** run inside a copy (`deploy/trial/self_check.py`), **closed mode's own refusal**, marked so it can be told apart from Cloudflare's (section 7, step 4.vii), and the release checks that work while uploads are off.
 
 ## 0. Before anything goes online (prerequisites, all recorded on #131)
 1. **Two-step login (MFA)** is on for all four administrator accounts: Cloudflare, the host, Porkbun and GitHub (D-009, item 1).
@@ -23,6 +25,7 @@ Sources: the plan (#131, lean v1.2), the hosting research (`docs/research/TRIAL_
 - **If the PR's head changes after the run** (a fix, or bringing the branch up to date with `main` for the merge):
   - a change to any file the image is built from (the Dockerfile, `.dockerignore`, the lock, `fetch_cloudflared.py`, `launch.py`, or any file in the Dockerfile's `COPY` list) means the run is repeated on the new head, approved the same way, before the merge;
   - a change to none of them (docs or tests only) is recorded on #141 with its file list, and the results stand.
+- **For PR B's release run** (`docs/TRIAL_RELEASE_CHECKS.md`): the exact head commit of PR B, **unmerged**, approved the same way on PR B's own pull request, with the service's branch set to PR B's branch. The same rule applies if its head changes.
 - **For a shop's copy:** a commit on `main`, approved by Alex for that copy and recorded on #131, after PR B's release checks.
 
 ## 1. What runs
@@ -62,7 +65,10 @@ It holds no setting, token or secret, and the Dockerfile declares **no build arg
 - **never restarts anything:** if either program stops, it stops the other and exits, so the whole copy stops;
 - on the host's stop, stops MargenX first (no request is handled any more), then the tunnel, which has a 1-second grace period;
 - never prints a setting's value or the token;
-- **closed mode** (`MARGINX_TRIAL_CLOSED=1`): MargenX is given nobody's address (`closed@margenx.invalid`) instead of the invited email, so the copy itself refuses every login. The log says `closed: this copy refuses every login`. Used by the restart check (section 7).
+- **closed mode** (`MARGINX_TRIAL_CLOSED=1`): MargenX is given nobody's address (`closed@margenx.invalid`) instead of the invited email, so the copy itself refuses every login. The log says `closed: this copy refuses every login`. Since PR B, MargenX's gate then refuses **every** request before any login check, with the page text "This MargenX trial copy is closed." and the response header `X-MargenX-Gate: closed`. Used by the restart check (section 7);
+- **the operator's stop-now** (PR B): `python /app/deploy/trial/stop_now.py`, run in Render's **Shell** on the running copy, makes the launcher stop MargenX, then the tunnel, **at once**. Every open tab and upload is cut within about a second. The launcher then **stays running and does nothing** (log: `stopped now: MargenX and the tunnel are stopped; waiting for the host's stop`), so Render never sees the copy end by itself and never restarts it. Suspend is still pressed (section 7).
+
+**Every refusal by MargenX's gate** carries the header `X-MargenX-Gate`: `refused`, or `closed` in closed mode. A refusal without it came from something else, such as Cloudflare.
 
 **The tunnel runs with:**
 - `--protocol http2` (TCP only);
@@ -150,7 +156,7 @@ Render's creation flow starts a first build at once, from the branch's latest co
    - **Dockerfile path:** `deploy/trial/Dockerfile`.
    - **Docker build context:** `.` (the repository root).
    - **Region:** a US region (Virginia, Ohio or Oregon). It can't be changed later.
-   - **Instance size:** within Alex's budget. The final size comes from measuring the real copy (section 6, check 9, and PR B).
+   - **Instance size:** within Alex's budget. The final size comes from measuring the real copy (section 6, check 9, and the uploads PR).
    - **Branch:** for the operator-only copy, the PR's branch `margenx/trial-a2-deploy` (section 0, "The approved commit"); for a shop's copy, `main`.
    - **Auto-Deploy: Off.**
    - **Environment:** the trial settings from section 2, **without `TUNNEL_TOKEN`** and without `MARGINX_TRIAL_CLOSED`. **No Secret Files** (Render copies them into the build folder), no disk, no cron job, no other service.
@@ -175,7 +181,7 @@ Render's creation flow starts a first build at once, from the branch's latest co
 
 **Restarts:** Render restarts a *running* copy that stops by itself. That's a running copy, not an ended trial. **A Suspended service stays stopped** until someone presses Resume (section 8).
 
-**Suspend is not instant (measured three times in the B4 run, #141: 121 s, 120 s, 121 s):** Render shows "Suspended" at once, and stops billing, but it delivers the stop signal to the copy **about 2 minutes later**. Until then the copy keeps running and serving open tabs. Once the signal arrives, the launcher stops MargenX and then the tunnel within the same second. This is why the stop procedure (section 7) **presses Suspend first**, so the countdown starts at once, and then deletes the tunnel's public hostname. That stops new requests, but not a tab that is already open.
+**Suspend is not instant (measured three times in the B4 run, #141: 121 s, 120 s, 121 s):** Render shows "Suspended" at once, and stops billing, but it delivers the stop signal to the copy **about 2 minutes later**. Until then the copy keeps running and serving open tabs. Once the signal arrives, the launcher stops MargenX and then the tunnel within the same second. This is why the stop procedure (section 7) **presses Suspend first**, so the countdown starts at once, then runs the **stop-now** in Render's Shell (PR B), which cuts open tabs within seconds, and then deletes the tunnel's public hostname, which stops new requests. **Whether Render's Shell still opens on a copy after Suspend is pressed is measured in PR B's release run;** until then, for a planned closeout, open the Shell before pressing Suspend.
 
 ## 6. The operator-only test copy's checks (made-up files only; results on PR #141, against the approved commit, before merge)
 The plan checks PR A by "a run against the operator-only copy, with results on the PR". These checks come from the PR #137 round-1 review (test requirements for A2) and the PR #141 round-1 review. Each is recorded on #141 **in words only**: no email, token, cookie, or screenshot showing them.
@@ -273,7 +279,7 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
    - A second tab is cut off.
    - Logging back in needs a new code.
    - Note how long Cloudflare's logout takes.
-7. **The stop procedure (section 7) on this copy,** including its restart check. With a results tab open, **record when the open tab is cut**, and the times of Suspend, the copy's `stopping` log line and the tunnel going down. The B4 run measured Render's Suspend alone: the tab was cut about **2 minutes** after Suspend (#141). The B4 follow-up measured the revised order: deleting the route stops new requests but leaves an open tab working until Render's stop (121 s after Suspend). A faster cut for open tabs and uploads is PR B's release check ("a demonstrated stop that cuts an open tab and a slow upload"). **Afterwards,** re-add Alex's email and the public hostname, and remove `MARGINX_TRIAL_CLOSED`, only if the copy is to be used again.
+7. **The stop procedure (section 7) on this copy,** including its restart check. With a results tab open, **record when the open tab is cut**, and the times of Suspend, the stop-now, the copy's `stopped now` and `stopping` log lines and the tunnel going down. The B4 run measured Render's Suspend alone: the tab was cut about **2 minutes** after Suspend (#141). The B4 follow-up measured the revised order: deleting the route stops new requests but leaves an open tab working until Render's stop (121 s after Suspend). PR B adds the stop-now and measures it (`docs/TRIAL_RELEASE_CHECKS.md`, check 5). **Afterwards,** re-add Alex's email and the public hostname, and remove `MARGINX_TRIAL_CLOSED`, only if the copy is to be used again.
 8. **Logs hold no secrets.** Search Render's logs, cloudflared's lines included, for:
    - the token;
    - `CF_Authorization` and the assertion header's value;
@@ -281,23 +287,31 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
    - the sample file names;
    - any file contents.
    - Uploads are off, so the file-bytes and marker searches belong to the uploads PR and release check 6.
-9. **Memory.** Note the copy's memory in Render's metrics, idle and with two tabs on the samples. This is for sizing; the worst-case measurement is in PR B.
+9. **Memory.** Note the copy's memory in Render's metrics, idle and with two tabs on the samples. This is for sizing; the worst-case measurement (large uploads) is in the uploads PR.
 
 **If any check fails,** the copy is stopped (section 7, step 1), the problem is fixed in a PR, and the affected checks are run again.
 
 ## 7. The stop procedure (closeout, early end, emergency: always the same, in this order)
-1. **Stop the copy and cut its public route. Nothing waits on Cloudflare.**
+**Before a planned closeout** (a few minutes before the time): open the copy's **Shell** in Render (the service → Shell), so step 1.ii takes seconds. Abrey, as the backup, does the same.
+
+1. **Stop the copy and cut its public route. Nothing waits on Cloudflare, and nothing waits on the Shell.**
    1. **Render, immediately:** the service → **Suspend**. Do this first, before anything else: Render shows "Suspended" at once, but the copy keeps running until Render delivers the stop signal, **about 2 minutes later** (section 5, "Suspend is not instant"), so the countdown should start as early as possible.
-   2. **Cloudflare, right after:** in the tunnel's settings (Routes), **delete its public hostname** (the app's address → `127.0.0.1:8501`). New requests can then no longer reach the copy, and the address's DNS record is removed with it. **It does not cut a tab that is already open:** in the B4 follow-up, an open tab kept working after the route was deleted, until Render's stop arrived 121 s after Suspend (#141). A faster cut for open tabs and uploads is PR B's release check.
-      - **If the route can't be deleted promptly** (Cloudflare unreachable, no access to the account, or the deletion stalls), don't wait for it: the Suspend from step i is already under way. Go on to step iii, keep trying the route, and record when it was finally deleted.
-   3. **The stop is complete only when both are seen:** the copy's log shows `margenx-trial: stopping: asked to stop by the host`, and the tunnel shows **Down** (0 connections) in Cloudflare. The launcher stops MargenX first, then the tunnel, which is what finally cuts open tabs and uploads. **Then confirm the route is deleted** (the tunnel's published routes are empty); if step ii was delayed, finish it now.
+   2. **Render's Shell, right after: the stop-now.** In the copy's Shell, run:
+      ```
+      python /app/deploy/trial/stop_now.py
+      ```
+      It prints `stop-now: asked at …`, and within seconds the copy's log shows `stopping now: asked by the operator` and `stopped now: MargenX and the tunnel are stopped`. **This is what cuts an open tab and an upload in seconds** instead of 2 minutes (PR B; the times are measured in its release run). The copy then waits, doing nothing, for Render's own stop.
+      - **If the Shell isn't open, won't open, or the command says no launcher is running,** don't wait: Suspend is already under way. Go on to step iii, and note it in the record.
+   3. **Cloudflare, right after:** in the tunnel's settings (Routes), **delete its public hostname** (the app's address → `127.0.0.1:8501`). New requests can then no longer reach the copy, and the address's DNS record is removed with it. Deleting the route alone **does not cut a tab that is already open** (the B4 follow-up, #141); the stop-now in step ii, or Render's own stop, does.
+      - **If the route can't be deleted promptly** (Cloudflare unreachable, no access to the account, or the deletion stalls), don't wait for it: the Suspend from step i is already under way. Go on to step iv, keep trying the route, and record when it was finally deleted.
+   4. **The stop is complete only when all of these are seen:** the tunnel shows **Down** (0 connections) in Cloudflare; the copy's log shows `stopped now` (from step ii) **or** `margenx-trial: stopping: asked to stop by the host`; and, in every case, Render shows the service **Suspended**. The launcher stops MargenX first, then the tunnel, which is what cuts open tabs and uploads. **Then confirm the route is deleted** (the tunnel's published routes are empty); if step iii was delayed, finish it now.
 2. **Remove the email from the Access rule.**
    - Zero Trust → Access → Applications → the app → its rule → delete the email.
    - If it was the only email, the application now lets nobody in.
 3. **Revoke its Access sessions.**
    - Zero Trust → Team & Resources → Users → the email → **Revoke session**.
 4. **Verify the cutoff.**
-   1. An open tab has lost its connection: leave it open, unreloaded, for step vi.
+   1. An open tab has lost its connection: leave it open, unreloaded, for step vii.
    2. A slow upload didn't finish being processed. That applies once uploads are on; release check 5.
    3. **The restart check: the copy itself refuses the former invite.** First, with the copy still suspended:
       - set `MARGINX_TRIAL_CLOSED=1` on the copy. A suspended service offers only a plain **"Save"**, which starts no deploy;
@@ -310,13 +324,17 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
       - **the route is really off:** the tunnel's published routes are **empty**, and the running connector's latest `Updated to new configuration` log line shows **no ingress rule for the app's address**, only the catch-all `http_status:404`. A Cloudflare login page appearing at the address isn't proof by itself;
       - **public requests can't reach MargenX:** the app's address doesn't resolve, or shows only a Cloudflare page (its login or an error), never MargenX's page.
 
-      **If the `closed` line doesn't appear,** the setting didn't reach the copy: Suspend at once and leave the route disconnected. Then **Manual Deploy → the approved commit**, which starts it with the current settings, and confirm again. The route is never reconnected to a copy whose log doesn't show the `closed` line.
+      - **MargenX itself refuses, from inside the copy:** in the copy's Shell, run `python /app/deploy/trial/self_check.py`. It must end with `all refused by MargenX itself; the copy is in closed mode` (PR B).
+
+      **If the `closed` line doesn't appear, or the self-check doesn't say closed mode,** the setting didn't reach the copy: Suspend at once and leave the route disconnected. Then **Manual Deploy → the approved commit**, which starts it with the current settings, and confirm again. The route is never reconnected to a copy whose log doesn't show the `closed` line.
    6. **Only then reconnect the public route:** add back exactly the one public hostname, as in step 4.5 (HTTP → `127.0.0.1:8501`, the host header setting empty, **Protect with Access** on with the same team name and AUD tag).
    7. **Test both ways back in:**
       - the **original signed-in browser**: reload the tab left open in step i (it reconnects with its old login);
       - **a fresh login** with the former email.
 
       Both must be refused. Only test a copy that is running and healthy: a refusal from a stopped tunnel proves nothing.
+
+      **With no Access rule left, Cloudflare refuses before MargenX is reached** (the B4 run, #141). MargenX's own refusal, through Cloudflare, is shown once on the operator-only copy in PR B's release run: with Alex's exact-email rule in place and closed mode on, Alex logs in, and the page says **"This MargenX trial copy is closed."** with the header `X-MargenX-Gate: closed` (`docs/TRIAL_RELEASE_CHECKS.md`, check 5). For a shop's copy, the `closed` line and the self-check in step v are the per-copy proof, on a build where that was shown.
    8. **Suspend again, whatever the result, then delete the public hostname again,** as in step 1: an ended trial's copy keeps no route. Wait for the `stopping` line and the tunnel showing Down, and confirm the routes are empty (step 1.iii). If anything got in, treat it as an incident: the copy stays suspended, and Alex is told at once.
 
 **Removing the email or revoking sessions without stopping the copy never ends a trial:** an already-open live connection may stay open.
@@ -327,6 +345,7 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
   - Auto-Deploy is off, so a push to GitHub doesn't deploy.
   - There is no cron job or scheduled job.
 - **The launcher:** never restarts a program. If one stops, the whole copy stops.
+- **After a stop-now** (section 7, step 1.ii), the launcher keeps both programs stopped and waits only for Render's stop. Nothing in the copy starts them again.
 - **The tunnel:** with the copy stopped, nothing connects to it, and after the stop procedure it has no public hostname either. Cloudflare shows its own error page, and MargenX is unreachable.
 
 ## 9. Changing anything
@@ -343,12 +362,8 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
   - a consent withdrawal that is safe against an upload in flight;
   - file, unpacked-size, time and concurrency limits;
   - no upload bytes left on disk or in Streamlit's storage after cleanup;
-  - making sure no error log quotes a file's contents (logs can't be switched off on the hosts).
-- **PR B:**
-  - the six release checks on this exact setup;
-  - the trial terms;
-  - the one-page guide;
-  - Alex's checklist;
-  - the two follow-ups from PR #137: a total deadline for fetching Cloudflare's keys, with bounded parallel checks; and cutting open live connections when Cloudflare retires a key.
+  - making sure no error log quotes a file's contents (logs can't be switched off on the hosts);
+  - **the upload parts of the release checks** (Alex, 2026-11-17: PR B without uploads): check 2, check 3's hosted run, the slow upload in check 5, upload markers in check 6, and the worst-case memory (`docs/TRIAL_RELEASE_CHECKS.md`).
+- **PR B** (this guide's PR B additions are listed at the top): the release checks that work with the made-up samples, the stop-now, the self-check, closed mode's own refusal, the two PR #137 follow-ups (a total deadline and a cap on token checks; open live connections checked again against Cloudflare's current keys), and drafts of the trial terms (`docs/TRIAL_TERMS_DRAFT.md`), the one-page guide (`docs/TRIAL_SHOP_GUIDE.md`) and Alex's checklist (`docs/TRIAL_OPERATOR_CHECKLIST.md`).
 - **The provider retention evidence** (plan section 3.4). Real files stay off until it's complete for the exact host and data path.
 - **The website:** its Log in link set to the app's address with no password form, and its Privacy Policy matching the emailed-code login (issue #131 comment of 2026-11-04). This needs fixing before any shop is invited.

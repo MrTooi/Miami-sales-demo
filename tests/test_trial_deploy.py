@@ -5,7 +5,9 @@ The launcher is run for real in a separate process, with two small stand-in prog
 Streamlit and cloudflared (no network, no Cloudflare). Settings are made up.
 """
 import ast
+import contextlib
 import hashlib
+import io
 import os
 import re
 import signal
@@ -23,6 +25,7 @@ sys.path.insert(0, str(ROOT / "deploy" / "trial"))
 
 import fetch_cloudflared  # noqa: E402
 import launch  # noqa: E402
+import stop_now  # noqa: E402
 
 DOCKERFILE = (ROOT / "deploy" / "trial" / "Dockerfile").read_text()
 DOCKERIGNORE = (ROOT / ".dockerignore").read_text()
@@ -65,7 +68,8 @@ def copied_sources() -> set[str]:
 
 class ImageContentsTests(unittest.TestCase):
     DATA = {"assets/margenx-logo.png", "sample_data/marginx/*.csv", ".streamlit/config.toml"}
-    BUILD = {"deploy/trial/fetch_cloudflared.py", "deploy/trial/requirements.lock", "deploy/trial/launch.py"}
+    BUILD = {"deploy/trial/fetch_cloudflared.py", "deploy/trial/requirements.lock", "deploy/trial/launch.py",
+             "deploy/trial/stop_now.py", "deploy/trial/self_check.py"}
 
     def test_the_image_copies_exactly_what_the_trial_page_needs(self):
         self.assertEqual(page_files() | self.DATA | self.BUILD, copied_sources())
@@ -418,6 +422,121 @@ class LauncherProcessTests(unittest.TestCase):
         self.assertFalse([name for name in envs["tunnel"] if name.startswith("MARGINX")])
         for value in ("token-marker", "owner-marker", "test-aud-tag", "margenx-test"):
             self.assertNotIn(value, out)  # the launcher's own output never shows a setting or the token
+
+    # --- PR B: the operator's stop-now (stop_now.py sends SIGUSR1) ---------------------------------------
+
+    def alive(self, proc, seconds=1.0):
+        """True if the launcher is still running after `seconds`."""
+        try:
+            proc.wait(timeout=seconds)
+        except subprocess.TimeoutExpired:
+            return True
+        return False
+
+    def fake_proc(self, pid):
+        """A stand-in for /proc listing the driver as the copy's launcher, as it runs in the image."""
+        proc = Path(self.folder.name) / "proc"
+        (proc / str(pid)).mkdir(parents=True)
+        (proc / str(pid) / "cmdline").write_bytes(b"python\0/app/deploy/trial/launch.py\0")
+        (proc / "self").mkdir()
+        return proc
+
+    def test_stop_now_cuts_margenx_then_the_tunnel_at_once_and_nothing_restarts(self):
+        proc = self.start()
+        self.wait_for("tunnel", "started")
+        asked = time.monotonic()
+        self.assertEqual(0, stop_now.main(proc=self.fake_proc(proc.pid)))  # the real stop_now, a real SIGUSR1
+        self.wait_for("tunnel", "stopped", seconds=10)
+        timed = {(r, t): at for at, r, t in self.events(with_time=True)}
+        self.assertLess(timed[("tunnel", "stopped")] - asked, 3)  # within seconds, not Render's ~2 minutes
+        stops = [role for role, text in self.events() if text == "stopped"]
+        self.assertEqual(["app", "tunnel"], stops)  # MargenX first: no request is handled any more
+        # The launcher stays up, doing nothing, so the host never sees the copy end by itself and restart it.
+        self.assertTrue(self.alive(proc, 1.5))
+        self.assertEqual(1, sum(1 for r, t in self.events() if r == "app" and t.startswith("started")))
+        self.assertEqual(1, sum(1 for r, t in self.events() if r == "tunnel" and t.startswith("started")))
+        proc.send_signal(signal.SIGTERM)  # then the host's stop (Suspend) ends it normally
+        code, out = self.finish(proc)
+        self.assertEqual(launch.EXIT_STOPPED_BY_HOST, code, out)
+        self.assertIn("stopping now: asked by the operator", out)
+        self.assertIn("stopped now: MargenX and the tunnel are stopped", out)
+        self.assertIn("stopping: asked to stop by the host", out)
+        for value in ("token-marker", "owner-marker", "test-aud-tag", "margenx-test"):
+            self.assertNotIn(value, out)
+
+    def test_stop_now_while_margenx_is_starting_never_starts_the_tunnel(self):
+        proc = self.start(listen_delay=30)
+        self.wait_for("app", "started")
+        proc.send_signal(launch.STOP_NOW_SIGNAL)
+        self.wait_for("app", "stopped", seconds=10)
+        self.assertTrue(self.alive(proc, 1.0))
+        proc.send_signal(signal.SIGTERM)
+        code, out = self.finish(proc)
+        self.assertEqual(launch.EXIT_STOPPED_BY_HOST, code, out)
+        self.assertFalse([1 for r, t in self.events() if r == "tunnel"])  # never started
+        self.assertIn("asked to stop by the operator (stop-now) before the tunnel was started", out)
+        self.assertNotIn("running", out)
+
+    def test_a_host_stop_during_the_wait_after_stop_now_ends_the_launcher(self):
+        proc = self.start()
+        self.wait_for("tunnel", "started")
+        proc.send_signal(launch.STOP_NOW_SIGNAL)
+        self.wait_for("tunnel", "stopped", seconds=10)
+        proc.send_signal(signal.SIGTERM)
+        code, _ = self.finish(proc)
+        self.assertEqual(launch.EXIT_STOPPED_BY_HOST, code)
+
+    def test_the_programs_never_inherit_a_held_back_stop_now_either(self):
+        proc = self.start()
+        self.wait_for("tunnel", "held back")
+        proc.send_signal(signal.SIGTERM)
+        self.finish(proc)
+        held = {r: t.split("=", 1)[1] for r, t in self.events() if t.startswith("held back")}
+        for role in ("app", "tunnel"):
+            self.assertNotIn(str(int(launch.STOP_NOW_SIGNAL)), held[role].split(","), role)
+
+
+class StopNowTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.proc = Path(self.folder.name)
+
+    def process(self, pid, *words):
+        (self.proc / str(pid)).mkdir()
+        (self.proc / str(pid) / "cmdline").write_bytes(b"\0".join(w.encode() for w in words) + b"\0")
+
+    def test_it_finds_only_the_launcher(self):
+        self.process(1, "python", "/app/deploy/trial/launch.py")
+        self.process(7, "python", "-m", "streamlit", "run", "trial_app.py")
+        self.process(8, "cloudflared", "tunnel", "run")
+        self.process(9, "python", "/app/deploy/trial/stop_now.py")
+        self.process(10, "bash", "-c", "cat /app/deploy/trial/launch.py")  # not a Python running it
+        (self.proc / "self").mkdir()
+        self.assertEqual([1], stop_now.launchers(self.proc, me=9))
+
+    def test_it_sends_the_stop_now_signal_and_prints_nothing_private(self):
+        self.process(1, "python", "/app/deploy/trial/launch.py")
+        sent = []
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = stop_now.main(proc=self.proc, kill=lambda pid, sig: sent.append((pid, sig)))
+        self.assertEqual(0, code)
+        self.assertEqual([(1, launch.STOP_NOW_SIGNAL)], sent)
+        self.assertIn("Suspend is still pressed", out.getvalue())
+
+    def test_with_no_launcher_it_does_nothing_and_says_so(self):
+        sent = []
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = stop_now.main(proc=self.proc, kill=lambda pid, sig: sent.append(pid))
+        self.assertEqual(1, code)
+        self.assertEqual([], sent)
+        self.assertIn("Go on with Suspend", out.getvalue())
+
+    def test_the_launcher_and_stop_now_agree_on_the_signal(self):
+        self.assertEqual(launch.STOP_NOW_SIGNAL, stop_now.STOP_NOW_SIGNAL)
+        self.assertNotIn(launch.STOP_NOW_SIGNAL, launch.STOP_SIGNALS)  # Render never sends it
 
 
 if __name__ == "__main__":

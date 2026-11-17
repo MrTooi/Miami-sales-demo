@@ -28,5 +28,7 @@
 !sample_data/marginx/*.csv
 !.streamlit/config.toml
 !deploy/trial/launch.py
+!deploy/trial/stop_now.py
+!deploy/trial/self_check.py
 !deploy/trial/fetch_cloudflared.py
 !deploy/trial/requirements.lock
