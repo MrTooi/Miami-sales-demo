@@ -11,7 +11,10 @@ with the X-MargenX-Gate header: "refused", or "closed" when the copy runs in clo
 
 The probes: no login; a forged login for the invited email (signed with a made-up key); another host
 name; the upload address; another request that sends data; Log out by GET and from another site; media;
-and the live connection. It prints only each probe's name and result: never a setting's value, a token
+and the live connection, which must get the same marked 403. Every probe must run: if one can't (for
+example the forged login, without PyJWT), the check fails as incomplete. The probes carry no valid
+login, so they show the gate refuses requests that skip Cloudflare; they don't test the cross-site
+checks for a person who IS logged in (those are unit tests, and release check 1). It prints only each probe's name and result: never a setting's value, a token
 or an email. It sends nothing anywhere but the copy itself, except that the forged login makes MargenX
 fetch Cloudflare's public signing keys, which is expected (release check 6).
 """
@@ -55,17 +58,30 @@ def http_probe(port: int, method: str, path: str, headers: dict[str, str], body:
         conn.close()
 
 
-def live_probe(port: int, host: str, timeout: float = 20) -> int:
-    """The HTTP status of a live-connection (WebSocket) handshake with no login: 101 would mean it opened."""
+def live_probe(port: int, host: str, timeout: float = 20) -> tuple[int, str]:
+    """(HTTP status, the gate's mark) for a live-connection (WebSocket) handshake with no login: 101 would mean
+    it opened; MargenX's gate answers 403 with its mark."""
     key = base64.b64encode(os.urandom(16)).decode()
     request = (f"GET /_stcore/stream HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nOrigin: https://{host}\r\n"
                "Sec-WebSocket-Protocol: streamlit\r\n\r\n")
+    head = b""
     with socket.create_connection(("127.0.0.1", port), timeout=timeout) as s:
         s.sendall(request.encode())
-        first = s.recv(1024).split(b"\r\n", 1)[0].decode("latin-1")
-    parts = first.split()
-    return int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
+        while b"\r\n\r\n" not in head and len(head) < 65536:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            head += chunk
+    lines = head.split(b"\r\n\r\n", 1)[0].decode("latin-1").split("\r\n")
+    parts = lines[0].split()
+    status = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
+    mark = ""
+    for line in lines[1:]:
+        name, _, value = line.partition(":")
+        if name.strip().lower() == GATE_HEADER:
+            mark = value.strip()
+    return status, mark
 
 
 def probes(host: str, token: str | None) -> list[tuple[str, str, str, dict[str, str], bytes | None]]:
@@ -80,7 +96,7 @@ def probes(host: str, token: str | None) -> list[tuple[str, str, str, dict[str, 
         ("upload address, no login", "PUT", "/_stcore/upload_file/self-check/self-check", base, b"self-check"),
         ("data sent to the page, no login", "POST", "/", base, b"self-check"),
         ("Log out by GET", "GET", "/_trial/logout", base, None),
-        ("Log out from another site", "POST", "/_trial/logout",
+        ("Log out from another site, no login", "POST", "/_trial/logout",
          {**base, "Origin": "https://other.invalid", "Sec-Fetch-Site": "cross-site"}, b""),
     ]
     if forged:
@@ -103,12 +119,13 @@ def main(argv: list[str] | None = None, environ=os.environ) -> int:
         return 2
     team = environ.get("MARGINX_TRIAL_TEAM_DOMAIN", "").strip().rstrip("/") or "https://margenx.cloudflareaccess.com"
     token = None
+    failures = 0
     try:
         token = forged_token(environ.get("MARGINX_TRIAL_INVITED_EMAIL", "").strip().lower() or "nobody@example.com",
                              environ.get("MARGINX_TRIAL_AUDIENCE", "").strip() or "self-check", team)
     except ImportError:
-        print("self-check: the forged-login probes were skipped (no PyJWT here)")
-    failures = 0
+        print("FAIL  forged-login probes: couldn't run here (no PyJWT), so this check is incomplete")
+        failures += 1
     marks = set()
     for name, method, path, headers, body in probes(args.host, token):
         try:
@@ -122,9 +139,11 @@ def main(argv: list[str] | None = None, environ=os.environ) -> int:
         failures += not ok
         print(f"{'PASS' if ok else 'FAIL'}  {name}: {status}, gate {mark or 'not seen'}, Cache-Control {cache or 'none'}")
     try:
-        status = live_probe(args.port, args.host)
-        ok = status != 101
-        print(f"{'PASS' if ok else 'FAIL'}  live connection, no login: {'opened' if status == 101 else f'refused ({status})'}")
+        status, mark = live_probe(args.port, args.host)
+        ok = status == 403 and mark in ("refused", "closed")
+        marks.add(mark)
+        shown = "opened" if status == 101 else f"{status or 'no valid answer'}, gate {mark or 'not seen'}"
+        print(f"{'PASS' if ok else 'FAIL'}  live connection, no login: {shown}")
     except OSError as problem:
         ok = False
         print(f"FAIL  live connection, no login: no answer from MargenX ({problem.__class__.__name__})")

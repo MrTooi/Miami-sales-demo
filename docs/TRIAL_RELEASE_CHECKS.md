@@ -11,7 +11,7 @@
 | **Closed mode's own refusal** | B4 could show it only by a log line: with no Access rule, Cloudflare refuses first. Now MargenX's refusal says "This MargenX trial copy is closed." and carries `X-MargenX-Gate: closed` | `trial_access.py` |
 | **The self-check** | Proves, from inside a running copy, that MargenX itself refuses requests that skip Cloudflare | `deploy/trial/self_check.py` |
 | **A total deadline and a cap on login checks** (PR #137 follow-up) | A slow fetch of Cloudflare's keys could hold up other checks, a logout included. Now a check is refused after 8 s, and at most 8 run at once | `trial_access.py` (`TokenChecks`) |
-| **Open tabs checked against Cloudflare's current keys** (PR #137 follow-up) | A key Cloudflare removed didn't cut an already-open tab. Now each open tab's login is checked again every 60 s, and closed if refused or if the check can't finish | `trial_access.py` |
+| **Open tabs checked against Cloudflare's current keys** (PR #137 follow-up) | A key Cloudflare removed didn't cut an already-open tab. Now each open tab's login is checked again every 60 s, and closed if refused or if the check can't finish. A removed key cuts an open tab within about 6 minutes at most (the 5-minute cached key set, then the next re-check) | `trial_access.py` |
 
 The unit tests are in `tests/test_trial_release.py` and `tests/test_trial_deploy.py`. Each change was undone on purpose, one at a time, and the tests failed every time (list on PR B).
 
@@ -26,7 +26,7 @@ The unit tests are in `tests/test_trial_release.py` and `tests/test_trial_deploy
 ### 1. Access and bypass
 **Now (PR B):**
 - Signed out, the app's address, `/_stcore/health`, `/media/...`, `/_stcore/upload_file/...` and the live connection all go to Cloudflare's login (B4 part 3 for the page and health; repeat for each).
-- **Around the gate, from inside the copy:** in Render's Shell, `python /app/deploy/trial/self_check.py` must end with `all refused by MargenX itself; the copy is in open (invited person only)`. It covers: no login, a forged login for the invited email, another host name, the upload address, data sent to the page, Log out by GET and from another site, media, and the live connection.
+- **Around the gate, from inside the copy:** in Render's Shell, `python /app/deploy/trial/self_check.py` must end with `all refused by MargenX itself; the copy is in open (invited person only)`. It covers: no login, a forged login for the invited email, another host name, the upload address, data sent to the page, Log out by GET and from another site, media, and the live connection. Each must get MargenX's own marked 403 (`X-MargenX-Gate`), the live connection included; a probe that can't run fails the check. These probes carry no valid login: the cross-site checks for a logged-in person are covered by the unit tests and the next bullets.
 - An uninvited email gets no working code (B4 part 7 (b): a plus-alias of Alex's address got none); repeat once on this build.
 - **A pending invite** (plan test requirement 1): with the allow rule not yet added (section 5, item 5), Alex's own email gets no working code.
 - **Other host names:** only `app.margenx.org` reaches the copy. `margenx.org` and `www` still go to Netlify; any other name under the domain has no route.

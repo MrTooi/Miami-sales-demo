@@ -44,13 +44,17 @@ Limits, stated honestly:
   checked again against Cloudflare's current keys every KEY_RECHECK_SECONDS (the other PR #137
   follow-up): if Cloudflare has removed the key that signed it, or the check can't finish (deadline or
   cap), the connection is closed. The browser then reconnects, which needs a fresh, valid token.
+  So a key Cloudflare removes cuts an open tab within about KEY_SET_SECONDS + KEY_RECHECK_SECONDS
+  (the cached key set's life, then the next re-check): about 6 minutes at most.
   Figures already on screen stay visible (behind Streamlit's "Connection error" box) until the tab is
   closed.
 - Closed mode (deploy/trial/launch.py, MARGINX_TRIAL_CLOSED=1) gives MargenX CLOSED_INVITE, nobody's
   address, as the invited email. The gate then refuses every request before any token check, with
   "This MargenX trial copy is closed." Every refusal carries the X-MargenX-Gate header, so a refusal
   seen through Cloudflare can be told apart from Cloudflare's own: that is how the stop procedure's
-  restart check shows that the copy itself refuses (PR B).
+  restart check shows that the copy itself refuses (PR B). A refused live connection gets the same
+  marked 403 instead of a bare close, when the server supports it (the ASGI WebSocket Denial Response
+  extension, which uvicorn, Streamlit's server, does).
 """
 from __future__ import annotations
 
@@ -463,13 +467,19 @@ class TrialGate:
         return claims
 
     async def _refuse(self, scope, send, closed: bool = False):
+        headers = [(b"content-type", b"text/plain; charset=utf-8"), (GATE_HEADER, b"closed" if closed else b"refused"),
+                   *SECURITY_HEADERS]
+        body = (CLOSED_MESSAGE if closed else "Not allowed.").encode()
         if scope["type"] == "websocket":
-            await send({"type": "websocket.close", "code": 1008})
+            if "websocket.http.response" in (scope.get("extensions") or {}):
+                # The live connection is refused with the same marked 403, so it too can be told apart.
+                await send({"type": "websocket.http.response.start", "status": 403, "headers": headers})
+                await send({"type": "websocket.http.response.body", "body": body})
+            else:
+                await send({"type": "websocket.close", "code": 1008})
             return
-        await send({"type": "http.response.start", "status": 403,
-                    "headers": [(b"content-type", b"text/plain; charset=utf-8"),
-                                (GATE_HEADER, b"closed" if closed else b"refused"), *SECURITY_HEADERS]})
-        await send({"type": "http.response.body", "body": (CLOSED_MESSAGE if closed else "Not allowed.").encode()})
+        await send({"type": "http.response.start", "status": 403, "headers": headers})
+        await send({"type": "http.response.body", "body": body})
 
     def _with_security_headers(self, send):
         forced = {name for name, _ in FORCED_HEADERS}

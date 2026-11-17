@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import http.server
 import io
+import json
 import os
 import socket
 import subprocess
@@ -205,6 +206,52 @@ class LiveKeyRecheckTests(unittest.TestCase):
         self.assertNotIn("websocket.close", [m["type"] for m in sent])
         self.assertGreater(checker.calls, 2)  # the first check, then several rechecks
 
+    def test_with_the_real_checker_a_key_cloudflare_removed_closes_an_open_tab(self):
+        """The real TokenChecker and PyJWKClient, with only the network replaced: Cloudflare rotates its keys
+        while a tab is open. Once the cached key set expires, the next re-check refuses the old key and closes
+        the tab. In the trial that takes at most KEY_SET_SECONDS + KEY_RECHECK_SECONDS (about 6 minutes)."""
+        served = {"set": t.key_set(("old", t.KEY))}
+
+        class Network:
+            def open(self, request, timeout):
+                return io.BytesIO(json.dumps(served["set"]).encode())
+        with mock.patch.object(ta, "KEY_SET_SECONDS", 0.2), \
+                mock.patch("urllib.request.build_opener", return_value=Network()):
+            real = ta.TokenChecker(t.CONFIG)
+            self.assertEqual(t.INVITED, real.claims(t.token(kid="old"))["email"])
+            sent = []
+
+            async def app(scope, receive, send):
+                await send({"type": "websocket.accept"})
+                await receive()
+
+            async def scenario():
+                closed = asyncio.Event()
+
+                async def browser_receive():
+                    try:
+                        await asyncio.wait_for(closed.wait(), 3)
+                    except asyncio.TimeoutError:
+                        pass
+                    return {"type": "websocket.disconnect", "code": 1000}
+
+                async def browser_send(message):
+                    sent.append(message["type"])
+                    if message["type"] == "websocket.close":
+                        closed.set()
+                gate = ta.TrialGate(app, config=t.CONFIG, checker=real, register=ta.SessionRegister(),
+                                    check_every=0.01, recheck_every=0.05, checks=ta.TokenChecks(limit=4, deadline=2))
+                task = asyncio.create_task(gate(t.ws_scope(tok=t.token(kid="old")), browser_receive, browser_send))
+                await asyncio.sleep(0.15)
+                self.assertNotIn("websocket.close", sent)  # still the same keys: the tab stays open
+                served["set"] = t.key_set(("new", t.OTHER_KEY))  # Cloudflare removed the old key
+                began = time.monotonic()
+                await asyncio.wait_for(task, 3)
+                return time.monotonic() - began
+            took = asyncio.run(scenario())
+        self.assertIn("websocket.close", sent)
+        self.assertLess(took, 1.5)  # the set's 0.2 s life plus a 0.05 s re-check, with room to spare
+
     def test_the_expiry_check_keeps_running_while_a_recheck_is_slow(self):
         checker = Switchable()
         now = {"t": time.time()}
@@ -278,6 +325,22 @@ class ClosedModeTests(unittest.TestCase):
         ok = t.run({"register": ta.SessionRegister()}, t.http_scope(tok=t.token()))
         self.assertNotIn(ta.GATE_HEADER, [k for k, _ in ok.sent[0]["headers"]])  # only on refusals
 
+    def test_a_refused_live_connection_gets_the_marked_403_when_the_server_supports_it(self):
+        for config, mark, body in ((t.CONFIG, b"refused", b"Not allowed."),
+                                   (self.CLOSED, b"closed", ta.CLOSED_MESSAGE.encode())):
+            scope = t.ws_scope()  # no login
+            scope["extensions"] = {"websocket.http.response": {}}
+            rec = t.Recorder()
+            asyncio.run(ta.TrialGate(rec.app, config=config, checker=t.checker(),
+                                     register=ta.SessionRegister())(scope, rec.receive, rec.send))
+            self.assertEqual(["websocket.http.response.start", "websocket.http.response.body"],
+                             [m["type"] for m in rec.sent])
+            self.assertEqual(403, rec.sent[0]["status"])
+            self.assertIn((ta.GATE_HEADER, mark), rec.sent[0]["headers"])
+            self.assertIn((b"cache-control", b"no-store"), rec.sent[0]["headers"])
+            self.assertEqual(body, rec.sent[1]["body"])
+            self.assertFalse(rec.app_called)
+
     def test_the_launcher_and_the_gate_agree_on_nobodys_address(self):
         import launch
         self.assertEqual(ta.CLOSED_INVITE, launch.CLOSED_INVITE)
@@ -339,12 +402,14 @@ class SelfCheckTests(unittest.TestCase):
         self.assertIn("the copy is in closed mode", out)
         self.assertNotIn("gate refused", out)
 
-    def stand_in(self, status, headers=()):
-        """A server that answers every request with `status`: not MargenX's gate."""
+    def stand_in(self, status, headers=(), live=None):
+        """A server that answers every request with `status` (and the live connection with `live`, when
+        given): not MargenX's gate."""
         class Answer(http.server.BaseHTTPRequestHandler):
             def answer(self):
-                self.send_response(status)
-                for name, value in headers:
+                code, extra = (live if live is not None and self.path == "/_stcore/stream" else (status, headers))
+                self.send_response(code)
+                for name, value in extra:
                     self.send_header(name, value)
                 self.send_header("Content-Length", "2")
                 self.end_headers()
@@ -369,6 +434,27 @@ class SelfCheckTests(unittest.TestCase):
         code, out = self.check(self.stand_in(403, [("Cache-Control", "no-store")]), t.SETTINGS)
         self.assertEqual(1, code)
         self.assertIn("FAIL  page, no login: 403, gate not seen", out)
+
+    def test_a_live_connection_answered_wrongly_fails_even_when_every_other_probe_passes(self):
+        marked = [("Cache-Control", "no-store"), ("X-MargenX-Gate", "refused")]
+        for live, seen in (((200, []), "200, gate not seen"), ((404, []), "404, gate not seen"),
+                           ((500, []), "500, gate not seen"), ((403, []), "403, gate not seen")):
+            code, out = self.check(self.stand_in(403, marked, live=live), t.SETTINGS)
+            self.assertEqual(1, code, out)
+            self.assertEqual(10, out.count("PASS"), out)  # every HTTP probe passed
+            self.assertIn(f"FAIL  live connection, no login: {seen}", out)
+
+    def test_a_probe_that_cant_run_makes_the_check_fail_as_incomplete(self):
+        marked = [("Cache-Control", "no-store"), ("X-MargenX-Gate", "refused")]
+        port = self.stand_in(403, marked, live=(403, marked))
+
+        def no_pyjwt(*args):
+            raise ImportError("jwt")
+        with mock.patch.object(self_check, "forged_token", no_pyjwt):
+            code, out = self.check(port, t.SETTINGS)
+        self.assertEqual(1, code, out)
+        self.assertIn("this check is incomplete", out)
+        self.assertNotIn("all refused by MargenX itself", out)
 
     def test_without_the_trial_address_it_asks_for_it(self):
         code, out = self.check(free_port(), {})
