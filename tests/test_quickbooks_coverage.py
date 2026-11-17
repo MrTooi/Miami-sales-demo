@@ -792,6 +792,12 @@ class NoFileTests(unittest.TestCase):
                      "Expenses": [("Job Materials", materials(y_too=False))]}), sales_report())),
             "no sales file fingerprint": (report, qc.cross_check(report, dataclasses.replace(sales_report(),
                                                                                              file_digest=""))),
+            # The PR #149 review warning: the same uploaded workbook (same file fingerprint) with other content, so
+            # only the content fingerprint tells them apart.
+            "another report's content, this upload's file fingerprint": (report, dataclasses.replace(
+                qc.cross_check(pnl({"Income": [("Design income", income(y_too=False))],
+                                    "Expenses": [("Job Materials", materials(y_too=False))]}), sales_report()),
+                pnl_file=report.file_digest)),
             "no Profit and Loss file fingerprint": (dataclasses.replace(report, file_digest=""),
                                                     qc.cross_check(dataclasses.replace(report, file_digest=""),
                                                                    sales_report())),
@@ -799,8 +805,14 @@ class NoFileTests(unittest.TestCase):
         for name, (pnl_report, check) in cases.items():
             with self.subTest(name):
                 self.assertTrue(check.usable and check.sbcd_unmatched, check.reasons)
-                used_by_figures = "The cross-check was made for another" not in " ".join(
-                    qf.figures(pnl_report, base(pnl_report), cross_check=check).warnings)
+                result = qf.figures(pnl_report, say(pnl_report, base(pnl_report), qf.COVERAGE_YES),
+                                    cross_check=check)
+                used_by_figures = "The cross-check was made for another" not in " ".join(result.warnings)
+                # Not only the warning: what the figures do with it. A used one contradicts the yes (its sales are
+                # missing from the report); a refused one leaves the yes as it was.
+                expected = qf.CONTRADICTED if used_by_figures else (
+                    qf.CONFIRMED if pnl_report.file_digest else qf.NOT_CONFIRMED)
+                self.assertEqual(expected, result.coverage)
                 used_by_questions = qq._cross_check_for(pnl_report, check)
                 contradiction = qf.contradicts(pnl_report, check)
                 self.assertEqual(name == "this upload", used_by_figures)
