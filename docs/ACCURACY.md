@@ -282,9 +282,10 @@ the company or a job be Complete, and every profit must carry the hold otherwise
 "yes" with a sale only the second report has keeps the hold on every figure, costs included. Every
 change: 300 reports and 300 pairs.
 
-- Planted mistakes, each caught (2026-11-17, 18 of 18): the hold dropped; an answer to other words
+- Planted mistakes, each caught (2026-11-17, 20 of 20): the hold dropped; an answer to other words
   accepted; an answer for another file accepted; an answer for a different workbook that reads the
-  same accepted, for coverage and for S3; the second report's missing sales ignored after a yes;
+  same accepted, for coverage and for S3; a cross-check made for another workbook used by the figures,
+  or by the questions; the second report's missing sales ignored after a yes;
   "nothing is missing" said again; a question for another workbook recorded; "no" counted as yes; sales never held (costs and
   profits only); jobs never held; the no-filter answer also recording yes; "not sure" keeping the old
   answer; a question with other words recorded; the account list leaving out lines MargenX doesn't

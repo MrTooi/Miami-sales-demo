@@ -347,6 +347,29 @@ class OtherWorkbookTests(unittest.TestCase):
         self.assertEqual([qf.NO_FILTER_YET], [h.reason for h in result.jobs[KITCHEN]["profit_after_job_costs"].holds])
         self.assertEqual([qq.NO_FILTER], [q.kind for q in qq.open_questions(report, answers, other).questions])
 
+    def test_a_cross_check_made_for_another_workbook_is_never_used(self):
+        # The automated review of 8d19d7b: workbook A's cross-check, its saved no-filter answer and its no-filter
+        # question, passed directly with workbook B, which reads exactly the same.
+        a, b = full_export(), full_export(saved_at="2026-11-17T09:00:00Z")
+        check_a = qc.cross_check(a, sales_report())
+        answers = say(a, base(a, check=check_a), qf.COVERAGE_YES, check_a)  # S3 answered for A's pair
+        stale_question = next(q for q in qq.open_questions(a, base(a), check_a).questions if q.kind == qq.NO_FILTER)
+        answers = say(b, answers, qf.COVERAGE_YES)  # a fresh coverage yes for B
+        self.assertTrue(qf.coverage_confirmed(b, answers))
+        result = qf.figures(b, answers, cross_check=check_a)
+        self.assertIn("The cross-check was made for another Profit and Loss Detail", " ".join(result.warnings))
+        for key in (KITCHEN, PATIO):
+            self.assertEqual([qf.ONE_REPORT], [h.reason for h in result.jobs[key]["profit_after_job_costs"].holds])
+        self.assertNotIn(qq.NO_FILTER, [q.kind for q in qq.open_questions(b, answers, check_a).questions])
+        self.assertEqual(answers, qq.answer(b, answers, stale_question, "yes", cross_check=check_a))
+        # With no no-filter answer yet, A's cross-check neither asks A's question for B nor lets it record one.
+        fresh = say(b, base(b), qf.COVERAGE_YES)
+        self.assertNotIn(qq.NO_FILTER, [q.kind for q in qq.open_questions(b, fresh, check_a).questions])
+        self.assertEqual("", qq.answer(b, fresh, stale_question, "yes", cross_check=check_a).unfiltered_pair)
+        # B's own cross-check asks B's own no-filter question.
+        check_b = qc.cross_check(b, sales_report())
+        self.assertEqual([qq.NO_FILTER], [q.kind for q in qq.open_questions(b, answers, check_b).questions])
+
     def test_replacing_workbooks_on_the_real_upload_page(self):
         # The reviewer's reproduction: the same file names, byte-distinct workbooks, identical rows.
         import tempfile

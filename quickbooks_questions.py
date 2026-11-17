@@ -389,7 +389,8 @@ def answer(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | None, ques
 def _cross_check_for(report: qp.ProfitAndLossDetail, cross_check) -> bool:
     """A usable cross-check made for this very Profit and Loss report (PR #142 manual review, blocker 2)."""
     return (cross_check is not None and getattr(cross_check, "usable", False)
-            and getattr(cross_check, "pnl_fingerprint", None) == qf.report_fingerprint(report))
+            and getattr(cross_check, "pnl_fingerprint", None) == qf.report_fingerprint(report)
+            and getattr(cross_check, "pnl_file", None) == report.file_digest)  # this very workbook (review of 8d19d7b)
 
 
 def _classification(answers: qf.OwnerAnswers, row: int) -> qf.LineAnswer | None:
