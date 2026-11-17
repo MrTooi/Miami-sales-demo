@@ -316,6 +316,36 @@ class FileBindingTests(unittest.TestCase):
         self.assertEqual([qq.NO_FILTER], [q.kind for q in qq.open_questions(report, answers, other).questions])
 
 
+def upload_page(folder: Path, names: tuple[str, ...]) -> AppTest:
+    """The real upload page reading these made-up files from folder; the list of files in use is read on every run
+    from folder/files.txt, so a test can remove or replace a file mid-session, as an owner can."""
+    import test_quickbooks_upload as up
+    (folder / "files.txt").write_text(" ".join(names))
+    source = up.PAGE.read_text(encoding="utf-8").replace(
+        'SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"', f"SAMPLES = Path({str(folder)!r})").replace(
+        'DEFAULT_SAMPLE_SET = "demo"', 'DEFAULT_SAMPLE_SET = "test"').replace(
+        'SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")',
+        "SAMPLE_FILES = tuple((SAMPLES / 'files.txt').read_text().split())")
+    at = AppTest.from_string(source, default_timeout=60)
+    at.run()
+    assert not at.exception, at.exception
+    return at
+
+
+def answer_everything(at, coverage="Yes, I checked") -> None:
+    """Every question on the upload page: jobs, the no-filter answer, job-cost accounts, then coverage."""
+    import test_quickbooks_upload as up
+    for _ in range(8):
+        title = up.titles(at)[0]
+        if title.startswith("After job costs"):
+            return
+        radio = up.answer_radio(at)
+        label = {"Do you use sub-customers in QuickBooks for jobs?": "Yes, each sub-customer is a job",
+                 up.NO_FILTER: "Yes, both have no filter", COVERAGE_TITLE: coverage}.get(title)
+        up.save(at, label or next(o for o in radio.options if o.startswith("Job costs")))
+    raise AssertionError("questions never ran out")
+
+
 class OtherWorkbookTests(unittest.TestCase):
     """The PR #148 manual review, blocker 1: a different workbook that reads exactly the same (same name, same
     rows) never inherits the confirmation; replacing only the sales workbook keeps it and asks S3 again."""
@@ -369,6 +399,62 @@ class OtherWorkbookTests(unittest.TestCase):
         # B's own cross-check asks B's own no-filter question.
         check_b = qc.cross_check(b, sales_report())
         self.assertEqual([qq.NO_FILTER], [q.kind for q in qq.open_questions(b, answers, check_b).questions])
+
+    def test_not_sure_for_another_workbook_never_withdraws_this_ones_answer(self):
+        # The PR #148 manual review, round 2, blocker 1.
+        a, b = full_export(), full_export(saved_at="2026-11-17T09:00:00Z")
+        answers = say(a, base(a), qf.COVERAGE_YES)
+        after_b = say(b, answers, qq.NOT_SURE)  # B's own question, answered "Not sure"
+        self.assertEqual(answers.coverage, after_b.coverage)
+        self.assertEqual(qf.CONFIRMED, qf.figures(a, after_b).coverage)
+        self.assertNotEqual(qf.CONFIRMED, qf.figures(b, after_b).coverage)
+        # A's own "Not sure" still withdraws A's answer.
+        self.assertIsNone(say(a, answers, qq.NOT_SURE).coverage)
+
+    def test_a_then_b_then_a_on_screen(self):
+        def page():
+            import sys
+            from pathlib import Path
+            import streamlit as st
+            for folder in (Path.cwd(), Path.cwd() / "tests"):
+                sys.path.insert(0, str(folder))
+            import quickbooks_results as qresults
+            import quickbooks_screens as qscreens
+            import test_quickbooks_coverage as t
+            report = t.full_export(saved_at=st.session_state.get("saved_at", "2026-10-26T19:04:00Z"))
+            answers = qscreens.question_screen(report, key="a-b-a")
+            st.session_state["answers"] = answers
+            qresults.results_screen(report, answers)
+
+        at = AppTest.from_function(page, default_timeout=30)
+        at.run()
+        save = ScreenTests.save
+        save(at, "Yes, each sub-customer is a job")
+        for _ in range(2):
+            save(at, "Job costs: what's in it is spent on specific jobs")
+        save(at, "Yes, I checked")
+        self.assertIn(qf.COVERAGE_CONFIRMED, [s.value for s in at.success])
+
+        at.session_state["saved_at"] = "2026-11-17T09:00:00Z"  # workbook B: the same rows, other bytes
+        at.run()
+        self.assertEqual(COVERAGE_TITLE, at.subheader[0].value)
+        review = next(e for e in at.expander if e.label.startswith("Your answers"))
+        self.assertTrue(review.label.startswith("Your answers (3)"), review.label)  # A's coverage yes isn't counted
+        in_use = review.markdown[:[m.value for m in review.markdown].index(
+            "**Earlier answers that don't apply now** (because of a later answer; they count again only if you change "
+            "that answer back)")]
+        self.assertFalse([m.value for m in in_use if m.value.startswith(COVERAGE_TITLE)])
+        self.assertEqual(3, len([b for b in review.button if b.label == "Change"]))  # none for A's coverage answer
+        save(at, "Not sure")
+        self.assertNotIn(qf.COVERAGE_CONFIRMED, [s.value for s in at.success])
+
+        at.session_state["saved_at"] = "2026-10-26T19:04:00Z"  # back to workbook A
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn(qf.COVERAGE_CONFIRMED, [s.value for s in at.success])
+        self.assertEqual("$3,400.00 · Complete", dict(zip(at.dataframe[0].value["Figure"],
+                                                          at.dataframe[0].value["Amount and status"]))[
+            "Profit after job costs"])
 
     def test_replacing_workbooks_on_the_real_upload_page(self):
         # The reviewer's reproduction: the same file names, byte-distinct workbooks, identical rows.
@@ -448,6 +534,54 @@ class ContradictionTests(unittest.TestCase):
         self.assertEqual(qf.NOT_CONFIRMED, unconfirmed.coverage)
         self.assertTrue(coverage_held(unconfirmed))
 
+    def test_removing_the_sales_report_keeps_the_contradiction_for_that_file(self):
+        # The PR #148 manual review, round 2, blocker 2, through the real upload page.
+        import tempfile
+        import test_quickbooks_upload as up
+        folder = Path(tempfile.mkdtemp(dir=up._FOLDERS.name))
+        filtered = fx.report_rows({"Income": [("Design income", income(y_too=False))],
+                                   "Expenses": [("Job Materials", materials(y_too=False)), ("Labor", labor())]})
+        (folder / "pnl.xlsx").write_bytes(fx.xlsx(filtered))
+        (folder / "sales.xlsx").write_bytes(fx.xlsx(sales_rows()))
+        at = upload_page(folder, ("pnl.xlsx", "sales.xlsx"))
+        answer_everything(at)
+        self.assertEqual("$1,500.00 · Needs a check (missing amount unknown)", up.company(at)["Job costs"])
+        self.assertIn(qf.COVERAGE_CONTRADICTED, [w.value for w in at.warning])
+
+        (folder / "files.txt").write_text("pnl.xlsx")  # the sales report removed
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+        company = up.company(at)
+        self.assertEqual("$1,500.00 · Needs a check (missing amount unknown)", company["Job costs"])
+        self.assertEqual("$3,000.00 · Needs a check (missing amount unknown)", company["Profit after job costs"])
+        self.assertIn(qf.COVERAGE_CONTRADICTED, [w.value for w in at.warning])
+        self.assertNotIn(qf.COVERAGE_CONFIRMED, [s.value for s in at.success])
+
+        # Another Profit and Loss file (here the full export) starts without that evidence.
+        (folder / "pnl.xlsx").write_bytes(fx.xlsx(fx.report_rows({
+            "Income": [("Design income", income())],
+            "Expenses": [("Job Materials", materials()), ("Labor", labor())]})))
+        at.run()
+        answer_everything(at)
+        self.assertEqual("$3,400.00 · Complete", up.company(at)["Profit after job costs"])
+
+    def test_the_contradiction_is_remembered_even_if_seen_before_the_yes(self):
+        report = pnl({"Income": [("Design income", income(y_too=False))],
+                      "Expenses": [("Job Materials", materials(y_too=False)), ("Labor", labor())]})
+        check = qc.cross_check(report, sales_report())
+        seen = qf.record_contradiction(report, base(report), check)  # the screen records it while both are uploaded
+        self.assertEqual((report.file_digest,), seen.sales_missing_seen)
+        later_yes = say(report, seen, qf.COVERAGE_YES)  # the sales report removed, then "yes"
+        result = qf.figures(report, later_yes)
+        self.assertEqual(qf.CONTRADICTED, result.coverage)
+        self.assertTrue(coverage_held(result))
+        # It's about that file only: another workbook, even one that reads the same, isn't touched.
+        other = pnl({"Income": [("Design income", income(y_too=False))],
+                     "Expenses": [("Job Materials", materials(y_too=False)), ("Labor", labor())]},
+                    saved_at="2026-11-17T09:00:00Z")
+        self.assertEqual(qf.CONFIRMED, qf.figures(other, say(other, seen, qf.COVERAGE_YES)).coverage)
+        self.assertEqual(seen, qf.record_contradiction(report, seen, qc.cross_check(report, sales_report())))  # once
+
     def test_a_matching_sales_report_never_contradicts(self):
         report = full_export()
         check = qc.cross_check(report, sales_report())
@@ -484,8 +618,10 @@ class NoSilentYesTests(unittest.TestCase):
         self.assertEqual(["quickbooks_questions.py"], builders)
         source = (root / "quickbooks_questions.py").read_text(encoding="utf-8")
         self.assertEqual(1, source.count("CoverageAnswer("))
-        block = source[source.index("if question.kind == COVERAGE:\n        if question.statement"):]
-        self.assertIn("qf.CoverageAnswer(choice", block[:400])
+        answer = source[source.index("\ndef answer("):]
+        answer = answer[:answer.index("\ndef ", 1)]
+        self.assertIn("qf.CoverageAnswer(choice", answer)  # only inside answer(), under the coverage question
+        self.assertIn("if question.kind == COVERAGE:", answer[:answer.index("qf.CoverageAnswer(choice")])
 
 
 class AccountListTests(unittest.TestCase):
@@ -590,6 +726,30 @@ class DisplayTests(unittest.TestCase):
                 self.assertEqual(confirmed.company[key].amount, held.company[key].amount)
         self.assertEqual(held.company["sales"].amount - held.company["job_costs"].amount,
                          held.company["profit_after_job_costs"].amount)
+
+
+class NoFileTests(unittest.TestCase):
+    """The PR #148 manual review, round 2, warning: a report not read from an uploaded file has no file fingerprint,
+    so no confirmation, and no cross-check, can be tied to it."""
+
+    def test_a_report_without_a_file_fingerprint_is_never_confirmed(self):
+        report = dataclasses.replace(full_export(), file_digest="")
+        question = coverage_question(report, base(report))
+        self.assertEqual(base(report), qq.answer(report, base(report), question, qf.COVERAGE_YES))
+        forced = dataclasses.replace(base(report), coverage=qf.CoverageAnswer(
+            qf.COVERAGE_YES, qf.coverage_statement(report), qf.report_fingerprint(report), ""))
+        self.assertFalse(qf.coverage_confirmed(report, forced))
+        result = qf.figures(report, forced)
+        self.assertTrue(coverage_held(result))
+        self.assertIn("can't tell which uploaded file", " ".join(result.warnings))
+
+    def test_a_cross_check_for_a_report_without_a_file_fingerprint_is_never_used(self):
+        report = dataclasses.replace(full_export(), file_digest="")
+        check = qc.cross_check(report, sales_report())
+        self.assertEqual("", check.pnl_file)
+        result = qf.figures(report, base(report, check=check), cross_check=check)
+        self.assertIn("The cross-check was made for another Profit and Loss Detail", " ".join(result.warnings))
+        self.assertNotIn(qq.NO_FILTER, [q.kind for q in qq.open_questions(report, base(report), check).questions])
 
 
 class LimitationTests(unittest.TestCase):

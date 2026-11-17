@@ -122,14 +122,16 @@ def held_amounts(figures: qf.Figures) -> dict[tuple[str, int], list[Decimal | No
 
 
 def headline(report: qp.ProfitAndLossDetail, figures: qf.Figures) -> str:
-    """The one-sentence answer. It says "final" only when the figure is Complete."""
+    """The one-sentence answer. It says "Complete" only when the figure is Complete."""
     layout = report.layout
     profit = figures.company["profit_after_job_costs"]
     made = "made" if profit.amount >= 0 else "lost"
     shown = money(abs(profit.amount))
     where = f"{layout.company}, {layout.period}"
     if profit.status == qp.COMPLETE:
-        return f"After job costs, {where}: the business {made} {shown}. This figure is final for this report."
+        # "Complete", as in the tables: the required checks and the owner's confirmations, not independent proof (the
+        # PR #148 manual review, round 2, warning).
+        return f"After job costs, {where}: the business {made} {shown}. This figure is Complete for this report."
     # The count and the amount both come from this figure's own holds, each line once (the automated review of
     # 9234135: lines holding only a job or a customer aren't the business's).
     known, unknown = _held(profit)

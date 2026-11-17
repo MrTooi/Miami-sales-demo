@@ -352,7 +352,8 @@ def answer(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | None, ques
             return answers  # only the pair of reports the question was asked about, made for this report
         return dataclasses.replace(answers, unfiltered_pair=cross_check.pair)
     if question.kind == COVERAGE:
-        if question.statement != qf.coverage_statement(report) or question.file != report.file_digest:
+        if (question.statement != qf.coverage_statement(report) or question.file != report.file_digest
+                or not report.file_digest):
             return answers  # only the exact words and the exact file asked about now
         return dataclasses.replace(answers, coverage=qf.CoverageAnswer(choice, question.statement, fingerprint,
                                                                        report.file_digest, answered_at))
@@ -390,7 +391,8 @@ def _cross_check_for(report: qp.ProfitAndLossDetail, cross_check) -> bool:
     """A usable cross-check made for this very Profit and Loss report (PR #142 manual review, blocker 2)."""
     return (cross_check is not None and getattr(cross_check, "usable", False)
             and getattr(cross_check, "pnl_fingerprint", None) == qf.report_fingerprint(report)
-            and getattr(cross_check, "pnl_file", None) == report.file_digest)  # this very workbook (review of 8d19d7b)
+            and getattr(cross_check, "pnl_file", None) == report.file_digest  # this very workbook (review of 8d19d7b)
+            and bool(report.file_digest))
 
 
 def _classification(answers: qf.OwnerAnswers, row: int) -> qf.LineAnswer | None:
@@ -423,7 +425,13 @@ def _reopen(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers, question: 
             return answers  # a confirmation of another pair of reports is never cleared by this question
         return dataclasses.replace(answers, unfiltered_pair="")
     if question.kind == COVERAGE:
-        return dataclasses.replace(answers, coverage=None)  # "Not sure" withdraws any earlier answer
+        # "Not sure" withdraws the earlier answer, but only this file's: never an answer given for another workbook
+        # (the PR #148 manual review, round 2, blocker 1).
+        given = answers.coverage
+        if (not report.file_digest or question.file != report.file_digest or given is None
+                or given.file != question.file):
+            return answers
+        return dataclasses.replace(answers, coverage=None)
     if question.kind == ACCOUNT:
         return dataclasses.replace(answers, accounts={k: v for k, v in answers.accounts.items() if k != question.account})
     lines = dict(answers.lines)

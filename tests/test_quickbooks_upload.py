@@ -163,7 +163,7 @@ class PageTests(unittest.TestCase):
         self.assertIn("No questions left.", text)
         self.assertIn("Coverage confirmed by you for this file.", text)
         headline = titles(at)[-1]
-        self.assertTrue(headline.endswith("the business made $2,400.00. This figure is final for this report."),
+        self.assertTrue(headline.endswith("the business made $2,400.00. This figure is Complete for this report."),
                         headline)
         self.assertIn("The required checks and confirmations are complete for this report.", text)
         self.assertNotIn("Nothing is missing", text)

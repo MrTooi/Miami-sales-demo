@@ -268,7 +268,9 @@ reads exactly the same (a second export), or an answer to other words needs a ne
 replacing only the second report (even with a workbook that reads the same) keeps the coverage answer
 and asks S3's no-filter question again, on the real upload page too; a "yes" contradicted by the
 second report (sales the Profit and Loss Detail doesn't have: a file filtered to Customer X shows
-$1,500 of job costs, never Complete) keeps every figure held; answering every other question, or adding the second report, never records
+$1,500 of job costs, never Complete) keeps every figure held, and keeps holding once the sales report
+is removed, until another Profit and Loss file is used; "Not sure" for one workbook never withdraws
+another's answer (workbook A, then B, then A again on screen); answering every other question, or adding the second report, never records
 a "yes"; the screen never says "nothing is missing", only that the required checks and
 confirmations are complete; the account list shows overhead, mixed, unanswered, negative and zero-net accounts with exact
 Decimal totals; "missing amount unknown" is shown, never $900 and never $0, beside any known held
@@ -282,10 +284,12 @@ the company or a job be Complete, and every profit must carry the hold otherwise
 "yes" with a sale only the second report has keeps the hold on every figure, costs included. Every
 change: 300 reports and 300 pairs.
 
-- Planted mistakes, each caught (2026-11-17, 20 of 20): the hold dropped; an answer to other words
+- Planted mistakes, each caught (2026-11-17, 26 of 26): the hold dropped; an answer to other words
   accepted; an answer for another file accepted; an answer for a different workbook that reads the
   same accepted, for coverage and for S3; a cross-check made for another workbook used by the figures,
-  or by the questions; the second report's missing sales ignored after a yes;
+  or by the questions; "not sure" for another workbook withdrawing this one's answer; another
+  workbook's answer shown in use; a contradiction never remembered, or remembered but ignored; a
+  report without a file fingerprint confirmed; the headline saying "final" again; the second report's missing sales ignored after a yes;
   "nothing is missing" said again; a question for another workbook recorded; "no" counted as yes; sales never held (costs and
   profits only); jobs never held; the no-filter answer also recording yes; "not sure" keeping the old
   answer; a question with other words recorded; the account list leaving out lines MargenX doesn't

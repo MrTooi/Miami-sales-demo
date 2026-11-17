@@ -112,7 +112,8 @@ COVERAGE_NOT_YET = ("You haven't confirmed yet that this Profit and Loss Detail 
 COVERAGE_SAID_MISSING = ("You said something is missing from this Profit and Loss Detail, so every figure needs a "
                          f"check: {MISSING_UNKNOWN}. Export it again from QuickBooks for the whole business, with no "
                          "filters, and upload that file.")
-COVERAGE_CONTRADICTED = ("Sales by Customer Detail has sales that aren't in this Profit and Loss Detail, so it may not "
+COVERAGE_CONTRADICTED = ("A Sales by Customer Detail you uploaded has sales that aren't in this Profit and Loss Detail, "
+                         "so it may not "
                          "include your whole business, even though you confirmed it does. Every figure needs a check: "
                          f"{MISSING_UNKNOWN}. Export both reports again for the whole business, with no filters.")
 COVERAGE_CONFIRMED = "Coverage confirmed by you for this file."
@@ -197,6 +198,11 @@ class OwnerAnswers:
     # "This Profit and Loss Detail includes the whole business's income and costs ... with no filters": recorded
     # only by the owner answering that question. No other answer, upload or step ever sets it.
     coverage: CoverageAnswer | None = None
+    # Not an answer: the uploaded Profit and Loss files (file_digest) for which a usable Sales by Customer Detail showed
+    # sales the file doesn't have, in this browser session. Removing the sales report doesn't remove that evidence: it
+    # keeps the coverage hold until another Profit and Loss file is used (the PR #148 manual review, round 2).
+    # Recorded only by the question screen (record_contradiction), never by an answer.
+    sales_missing_seen: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -223,9 +229,25 @@ def cost_accounts(report: qp.ProfitAndLossDetail) -> tuple[CostAccount, ...]:
                  for path, lines in found.items())
 
 
+def contradicts(report: qp.ProfitAndLossDetail, cross_check) -> bool:
+    """True when a usable cross-check made for this very file shows sales the file doesn't have: evidence that it may
+    leave out other activity too."""
+    return bool(cross_check is not None and getattr(cross_check, "usable", False) and report.file_digest
+                and cross_check.pnl_fingerprint == report_fingerprint(report)
+                and cross_check.pnl_file == report.file_digest and cross_check.sbcd_unmatched)
+
+
+def record_contradiction(report: qp.ProfitAndLossDetail, answers: OwnerAnswers, cross_check) -> OwnerAnswers:
+    """The answers with this file remembered as contradicted when the cross-check contradicts it (else unchanged)."""
+    import dataclasses
+    if not contradicts(report, cross_check) or report.file_digest in answers.sales_missing_seen:
+        return answers
+    return dataclasses.replace(answers, sales_missing_seen=(*answers.sales_missing_seen, report.file_digest))
+
+
 def coverage_confirmed(report: qp.ProfitAndLossDetail, answers: OwnerAnswers | None) -> bool:
-    """True only for the owner's "yes" to this exact wording, for this exact file."""
-    if answers is None or answers.coverage is None:
+    """True only for the owner's "yes" to this exact wording, for this exact uploaded file."""
+    if answers is None or answers.coverage is None or not report.file_digest:
         return False
     fingerprint = report_fingerprint(report)
     given = answers.coverage
@@ -362,7 +384,6 @@ class _Builder:
         self.report = report
         self.cross_check = cross_check
         self.one_report = True  # S3, until a usable cross-check lifts it (step 5b)
-        self.sales_missing_here = False  # a usable cross-check found sales this report doesn't have
         self.one_report_reason = ONE_REPORT
         self.warnings: list[str] = []
         if answers != OwnerAnswers() and answers.report != report_fingerprint(report):
@@ -370,6 +391,8 @@ class _Builder:
                                  "one, so none of them is used. Answer again for this file.")
             answers = OwnerAnswers()
         self.answers = answers
+        # A usable cross-check found sales this report doesn't have: now, or earlier in this session for this very file.
+        self.sales_missing_here = bool(report.file_digest) and report.file_digest in answers.sales_missing_seen
         self.coverage = self.coverage_state()
         self.jobs_on = answers.sub_customers_are_jobs is True
         self.lines = {line.row: line for line in report.lines}
@@ -390,6 +413,12 @@ class _Builder:
         """The owner's coverage confirmation, used only for this exact file and wording (coverage_confirmed)."""
         given = self.answers.coverage
         if given is None:
+            return NOT_CONFIRMED
+        if not self.report.file_digest:
+            # A report not read from an uploaded file can't be tied to one, so no confirmation can apply to it (the
+            # PR #148 manual review, round 2, warning).
+            self.warnings.append("MargenX can't tell which uploaded file this report came from, so your coverage "
+                                 "answer isn't used.")
             return NOT_CONFIRMED
         if (given.report != report_fingerprint(self.report) or given.file != self.report.file_digest
                 or given.statement != coverage_statement(self.report)):
@@ -705,7 +734,8 @@ class _Builder:
         check = self.cross_check
         if check is None:
             return
-        if check.pnl_fingerprint != report_fingerprint(self.report) or check.pnl_file != self.report.file_digest:
+        if (check.pnl_fingerprint != report_fingerprint(self.report) or check.pnl_file != self.report.file_digest
+                or not self.report.file_digest):
             # Made for another workbook, even one that reads the same: its pair, and any no-filter answer bound to
             # it, are about other files (the automated review of 8d19d7b).
             self.warn("The cross-check was made for another Profit and Loss Detail, so it wasn't used.")
@@ -713,7 +743,7 @@ class _Builder:
         if not check.usable:
             self.warn("Sales by Customer Detail couldn't be used as the cross-check: " + "; ".join(check.reasons) + ".")
             return
-        self.sales_missing_here = bool(check.sbcd_unmatched)
+        self.sales_missing_here = self.sales_missing_here or bool(check.sbcd_unmatched)
         if self.answers.unfiltered_pair != check.pair:
             self.one_report_reason = NO_FILTER_YET
         else:

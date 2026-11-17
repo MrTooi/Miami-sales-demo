@@ -63,7 +63,7 @@ class LayerTests(unittest.TestCase):
         self.assertIn("so far, but this isn't final yet", line)
         self.assertIn("3 lines are still held back ($3,600.00), and you haven't confirmed yet that this file includes "
                       "your whole business (missing amount unknown)", line)
-        self.assertNotIn("final for this report", line)
+        self.assertNotIn("Complete for this report", line)
         cells = [r["Amount and status"] for r in qr.company_rows(figures)]
         self.assertIn("$0.00 · Needs a check ($3,600.00 held across 3 lines; missing amount unknown)", cells)
         for text in cells:
@@ -75,7 +75,7 @@ class LayerTests(unittest.TestCase):
         figures = qf.figures(report, answers, check)
         self.assertEqual((), figures.warnings)
         self.assertEqual("After job costs, Biscayne Landscaping (fictional), January 1-October 26, 2026: the business "
-                         "made $2,400.00. This figure is final for this report.", qr.headline(report, figures))
+                         "made $2,400.00. This figure is Complete for this report.", qr.headline(report, figures))
         self.assertEqual([], qr.missing(figures))
         jobs = qr.group_rows(figures.jobs, "Customer › Job")
         self.assertEqual(f"{Y} › Job B", jobs[0]["Customer › Job"])  # losing money first
@@ -93,7 +93,7 @@ class LayerTests(unittest.TestCase):
                       "sales first.", qr.missing(figures))  # the rule code is left out
         cell = qr.group_rows(figures.jobs, "Customer › Job")[0]["Profit after job costs"]
         self.assertEqual("-$600.00 · Needs a check (see why below)", cell)
-        self.assertIn("This figure is final for this report.", qr.headline(report, figures))  # the business's own
+        self.assertIn("This figure is Complete for this report.", qr.headline(report, figures))  # the business's own
 
     def test_the_headline_counts_only_the_lines_holding_its_own_figure(self):
         # The automated review of 9234135: the $700 sale with no job holds only Customer X's jobs, never the business.
@@ -156,7 +156,7 @@ class LayerTests(unittest.TestCase):
             ("Expenses", "Job Materials"): qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT, (), "")},
             coverage=qf.CoverageAnswer(qf.COVERAGE_YES, qf.coverage_statement(report), qf.report_fingerprint(report),
                                        report.file_digest))
-        self.assertIn("the business lost $150.00. This figure is final for this report.",
+        self.assertIn("the business lost $150.00. This figure is Complete for this report.",
                       qr.headline(report, qf.figures(report, answers)))
 
     def test_reasons_are_plain_words_with_dollar_amounts(self):
@@ -227,7 +227,7 @@ class ScreenTests(unittest.TestCase):
         at.run()
         self.assertFalse(at.exception, at.exception)
         headline = at.subheader[0].value.replace("\\$", "$")
-        self.assertTrue(headline.endswith("made $2,400.00. This figure is final for this report."), headline)
+        self.assertTrue(headline.endswith("made $2,400.00. This figure is Complete for this report."), headline)
         self.assertIn("**By job** (losing money first)", [m.value for m in at.markdown])
         jobs = next(d.value for d in at.dataframe if "Customer › Job" in d.value.columns)
         self.assertEqual("-$600.00 · Complete", jobs.iloc[0]["Profit after job costs"])
