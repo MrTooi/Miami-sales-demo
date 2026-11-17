@@ -209,7 +209,7 @@ class LiveKeyRecheckTests(unittest.TestCase):
     def test_with_the_real_checker_a_key_cloudflare_removed_closes_an_open_tab(self):
         """The real TokenChecker and PyJWKClient, with only the network replaced: Cloudflare rotates its keys
         while a tab is open. Once the cached key set expires, the next re-check refuses the old key and closes
-        the tab. In the trial that takes at most KEY_SET_SECONDS + KEY_RECHECK_SECONDS (about 6 minutes)."""
+        the tab. In the trial that takes about KEY_SET_SECONDS + KEY_RECHECK_SECONDS + TOKEN_CHECK_SECONDS (6 min 10 s)."""
         served = {"set": t.key_set(("old", t.KEY))}
 
         class Network:

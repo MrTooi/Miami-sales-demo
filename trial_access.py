@@ -44,8 +44,9 @@ Limits, stated honestly:
   checked again against Cloudflare's current keys every KEY_RECHECK_SECONDS (the other PR #137
   follow-up): if Cloudflare has removed the key that signed it, or the check can't finish (deadline or
   cap), the connection is closed. The browser then reconnects, which needs a fresh, valid token.
-  So a key Cloudflare removes cuts an open tab within about KEY_SET_SECONDS + KEY_RECHECK_SECONDS
-  (the cached key set's life, then the next re-check): about 6 minutes at most.
+  So a key Cloudflare removes cuts an open tab within about KEY_SET_SECONDS + KEY_RECHECK_SECONDS +
+  TOKEN_CHECK_SECONDS (the cached key set's life, the next re-check, and that check's deadline), plus
+  a moment of scheduling: about 6 minutes and 10 seconds.
   Figures already on screen stay visible (behind Streamlit's "Connection error" box) until the tab is
   closed.
 - Closed mode (deploy/trial/launch.py, MARGINX_TRIAL_CLOSED=1) gives MargenX CLOSED_INVITE, nobody's
