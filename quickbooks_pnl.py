@@ -177,6 +177,9 @@ class ProfitAndLossDetail:
     checks: tuple[TotalCheck, ...]
     problems: tuple[Problem, ...]
     sections: dict[str, SectionCoverage]
+    # The uploaded file itself (sha256 of its bytes): the owner's coverage confirmation is about one exact file, so a
+    # different workbook that reads the same still needs its own answer (the PR #148 manual review, blocker 1).
+    file_digest: str = ""
 
     @property
     def reconciled(self) -> bool:
@@ -593,4 +596,6 @@ def read_profit_and_loss_detail(name: str, data: bytes) -> ProfitAndLossDetail:
     if found.layout is None:
         raise ji.IntakeError(qlayouts.quickbooks_refusal(table, ji.MAX_TITLE_LINES, is_xlsx=True)
                              or "This isn't QuickBooks' Profit and Loss Detail report.")
-    return reconcile(found.layout, name, sheet)
+    import dataclasses
+    import hashlib
+    return dataclasses.replace(reconcile(found.layout, name, sheet), file_digest=hashlib.sha256(data).hexdigest())

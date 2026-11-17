@@ -55,7 +55,8 @@ def covered(report, owner_answers: qf.OwnerAnswers) -> qf.OwnerAnswers:
     """The answers bound to this report, with the owner's coverage "yes" for it (the 2026-11-17 coverage
     confirmation), unless the answers already carry a coverage answer of their own."""
     fingerprint = qf.report_fingerprint(report)
-    coverage = owner_answers.coverage or qf.CoverageAnswer(qf.COVERAGE_YES, qf.coverage_statement(report), fingerprint)
+    coverage = owner_answers.coverage or qf.CoverageAnswer(qf.COVERAGE_YES, qf.coverage_statement(report), fingerprint,
+                                                           report.file_digest)
     return dataclasses.replace(owner_answers, report=fingerprint, coverage=coverage)
 
 

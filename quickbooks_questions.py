@@ -69,6 +69,7 @@ class Question:
     pair: str = ""  # for NO_FILTER: the exact pair of reports it was asked about (CrossCheck.pair)
     line_kind: str = ""  # for "which job": what the line is, as the question shows it (a job answer keeps exactly this)
     statement: str = ""  # for COVERAGE: the exact words confirmed (a "yes" counts only for these words)
+    file: str = ""  # for COVERAGE: the uploaded file it was asked about (ProfitAndLossDetail.file_digest)
 
     @property
     def progress(self) -> str:
@@ -203,7 +204,7 @@ def open_questions(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
 
     if not (bound and answers.coverage is not None and answers.coverage.choice in (qf.COVERAGE_YES, qf.COVERAGE_NO)
             and qf.coverage_statement(report) == answers.coverage.statement
-            and answers.coverage.report == qf.report_fingerprint(report)):
+            and answers.coverage.report == qf.report_fingerprint(report) and answers.coverage.file == report.file_digest):
         pending.append(_coverage_question(report, answers if bound else qf.OwnerAnswers()))
 
     for row in sorted(resolutions):
@@ -252,15 +253,18 @@ def _coverage_question(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers)
                      "can't read")
         listed.append(f"{' › '.join(account.path)} ({account.section}): {count}, {total} · {use}")
     statement = qf.coverage_statement(report)
-    return dict(key="coverage", kind=COVERAGE, statement=statement,
+    return dict(key="coverage", kind=COVERAGE, statement=statement, file=report.file_digest,
                 title="Does this file include your whole business?",
                 details=("A filter in QuickBooks can leave out an account, a customer or some transactions without "
                          "showing in the file. MargenX can't see that, so until you confirm, every figure stays on "
                          f"\"Needs a check\" ({qf.MISSING_UNKNOWN}).",
-                         (f"The cost accounts in this file ({len(accounts)}):" if accounts
-                          else "This file has no cost accounts with activity."),
+                         (f"The cost accounts in this file's Cost of Goods Sold and Expenses sections ({len(accounts)}):"
+                          if accounts else "This file has no cost accounts with activity in its Cost of Goods Sold "
+                                           "and Expenses sections."),
                          *listed,
-                         "Accounts with no activity in these dates don't appear in the report, and don't need to.",
+                         "Accounts with no activity in these dates don't appear in the report, and don't need to. "
+                         "Other income and other expense accounts aren't listed here, but the words below cover them "
+                         "too.",
                          "Check your export settings in QuickBooks and this list, then say whether this is true:",
                          f"\"{statement}\""),
                 small_print="Your answer counts only for this exact file. MargenX doesn't check it against "
@@ -348,10 +352,10 @@ def answer(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | None, ques
             return answers  # only the pair of reports the question was asked about, made for this report
         return dataclasses.replace(answers, unfiltered_pair=cross_check.pair)
     if question.kind == COVERAGE:
-        if question.statement != qf.coverage_statement(report):
-            return answers  # only the exact words asked now; an answer to other words is never recorded as this one
+        if question.statement != qf.coverage_statement(report) or question.file != report.file_digest:
+            return answers  # only the exact words and the exact file asked about now
         return dataclasses.replace(answers, coverage=qf.CoverageAnswer(choice, question.statement, fingerprint,
-                                                                       answered_at))
+                                                                       report.file_digest, answered_at))
     if question.kind == ACCOUNT:
         entries = tuple(question.entries) if choice == qf.OVERHEAD_ACCOUNT else ()  # exactly the entries shown
         accounts = {**answers.accounts, question.account: qf.AccountAnswer(choice, entries, answered_at)}

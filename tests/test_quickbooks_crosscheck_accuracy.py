@@ -26,7 +26,7 @@ PAIRS = max(300, int(os.environ.get("QBO_CROSSCHECK_PAIRS", "300")))
 
 class KnownAnswerTests(unittest.TestCase):
     def test_random_pairs_match_their_known_answers(self):
-        complete = held = matched_but_uncovered = 0
+        complete = held = matched_but_uncovered = contradicted = 0
         for seed in range(PAIRS):
             pair = gen.make_pair(seed)
             if pair.pnl_rows is None:
@@ -47,7 +47,9 @@ class KnownAnswerTests(unittest.TestCase):
                     self.assertEqual(cents, int(figures["sales"].amount * 100), job)
                     self.assertEqual(ok, figures["sales"].status == qp.COMPLETE, (job, figures["sales"].holds))
                     self.assertEqual(ok, figures["profit_after_job_costs"].status == qp.COMPLETE, job)
-                    self.assertEqual(pair.coverage != "yes", figures["profit_after_job_costs"].coverage_open, job)
+                    self.assertEqual(pair.coverage_held, figures["profit_after_job_costs"].coverage_open, job)
+                    self.assertEqual(pair.coverage_held, result.company["job_costs"].coverage_open)  # costs too
+                    contradicted += pair.coverage == "yes" and pair.coverage_held
                     complete += ok
                     held += not ok
                     matched_but_uncovered += pair.coverage != "yes" and figures["sales"].holds and all(
@@ -56,6 +58,8 @@ class KnownAnswerTests(unittest.TestCase):
         self.assertGreater(held, PAIRS // 2)
         # Pairs whose sales agree line by line, held only because the owner hasn't confirmed coverage, came up.
         self.assertGreater(matched_but_uncovered, PAIRS // 10)
+        # A "yes" contradicted by sales the Profit and Loss Detail doesn't have came up, and kept the hold.
+        self.assertGreater(contradicted, PAIRS // 20)
 
 
 if __name__ == "__main__":

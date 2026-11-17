@@ -71,7 +71,11 @@ def _id(question: qq.Question) -> str:
     """What the screen tracks a question by. The no-filter question is about one exact pair of reports, so its
     widgets, skips and saved answer belong to that pair: replacing only the second report asks afresh (the PR #143
     manual review, blocker)."""
-    return f"{question.key}@{question.pair}" if question.kind == qq.NO_FILTER else question.key
+    if question.kind == qq.NO_FILTER:
+        return f"{question.key}@{question.pair}"
+    if question.kind == qq.COVERAGE:
+        return f"{question.key}@{question.file}"  # about one exact uploaded file (the PR #148 manual review)
+    return question.key
 
 
 def _label(question: qq.Question, value: str) -> str:
@@ -97,7 +101,7 @@ def _coverage_answered(entry: _Entry, answers: qf.OwnerAnswers) -> bool:
     """The coverage answer is recorded exactly as this entry gave it: same choice, same words, same file."""
     given = answers.coverage
     return (given is not None and given.choice == entry.choice and given.statement == entry.question.statement
-            and given.report == entry.question.report)
+            and given.report == entry.question.report and given.file == entry.question.file)
 
 
 def _own_line_answer(entry: _Entry, answers: qf.OwnerAnswers) -> qf.LineAnswer | None:

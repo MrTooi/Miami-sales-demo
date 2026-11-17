@@ -154,7 +154,8 @@ class LayerTests(unittest.TestCase):
         self.assertIn("the business made $100.00 so far", qr.headline(report, qf.figures(report)))
         answers = qf.OwnerAnswers(report=qf.report_fingerprint(report), accounts={
             ("Expenses", "Job Materials"): qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT, (), "")},
-            coverage=qf.CoverageAnswer(qf.COVERAGE_YES, qf.coverage_statement(report), qf.report_fingerprint(report)))
+            coverage=qf.CoverageAnswer(qf.COVERAGE_YES, qf.coverage_statement(report), qf.report_fingerprint(report),
+                                       report.file_digest))
         self.assertIn("the business lost $150.00. This figure is final for this report.",
                       qr.headline(report, qf.figures(report, answers)))
 
@@ -208,7 +209,7 @@ class ScreenTests(unittest.TestCase):
                       texts)
         details = next(e for e in at.expander if e.label.startswith("Details:"))
         self.assertTrue(details.caption[0].value.startswith("Within QuickBooks' Profit and Loss Detail"))
-        self.assertEqual([], [s for s in at.success if "Nothing is missing" in s.value])
+        self.assertEqual([], [s for s in at.success if s.value == qr.CHECKS_DONE])
 
     def test_everything_answered_shows_jobs_and_says_nothing_is_missing(self):
         # The automated review of 8a41156 (warning): the fully answered screen, rendered.
@@ -230,7 +231,7 @@ class ScreenTests(unittest.TestCase):
         self.assertIn("**By job** (losing money first)", [m.value for m in at.markdown])
         jobs = next(d.value for d in at.dataframe if "Customer › Job" in d.value.columns)
         self.assertEqual("-$600.00 · Complete", jobs.iloc[0]["Profit after job costs"])
-        self.assertIn("Nothing is missing: every figure above is final for this report.", [s.value for s in at.success])
+        self.assertIn(qr.CHECKS_DONE, [s.value for s in at.success])
         self.assertNotIn("**What's missing**", " ".join(m.value for m in at.markdown))
 
     def test_the_company_name_is_never_read_as_markdown(self):
@@ -284,7 +285,7 @@ class ScreenTests(unittest.TestCase):
         self.assertIn("1 line of unknown amount held", company["Profit after job costs"])
         missing = [m.value.replace("\\$", "$") for m in at.markdown if m.value.startswith("- ")]
         self.assertTrue(any(m.startswith("- amount unknown held · Row ") for m in missing), missing)
-        self.assertEqual([], [s for s in at.success if "Nothing is missing" in s.value])
+        self.assertEqual([], [s for s in at.success if s.value == qr.CHECKS_DONE])
 
     def test_the_upload_page_shows_the_results_only_through_the_quickbooks_flow(self):
         root = Path(__file__).resolve().parents[1]

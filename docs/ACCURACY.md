@@ -263,21 +263,29 @@ The tests also check, one row of the reviewer's table each: every account name p
 transactions filtered out, and an income account left out (held until "yes": the account list is an
 aid, not evidence); a contradiction the file shows (totals that don't match) still holds after "yes";
 changing "yes" to "no", "not sure" or no answer updates every status at once, with no amount changed
-and the other holds kept; a changed file (same name, same account names) or an answer to other words
-needs a new answer, while replacing only the second report keeps the coverage answer and asks S3's
-no-filter question again; answering every other question, or adding the second report, never records
-a "yes"; the account list shows overhead, mixed, unanswered, negative and zero-net accounts with exact
+and the other holds kept; a changed file (same name, same account names), a different workbook that
+reads exactly the same (a second export), or an answer to other words needs a new answer, while
+replacing only the second report (even with a workbook that reads the same) keeps the coverage answer
+and asks S3's no-filter question again, on the real upload page too; a "yes" contradicted by the
+second report (sales the Profit and Loss Detail doesn't have: a file filtered to Customer X shows
+$1,500 of job costs, never Complete) keeps every figure held; answering every other question, or adding the second report, never records
+a "yes"; the screen never says "nothing is missing", only that the required checks and
+confirmations are complete; the account list shows overhead, mixed, unanswered, negative and zero-net accounts with exact
 Decimal totals; "missing amount unknown" is shown, never $900 and never $0, beside any known held
 amount; and the hold reaches every profit without changing its arithmetic.
 
 **Random reports.** `tests/qbo_pnl_reports.py` and `tests/qbo_crosscheck_reports.py` give each report
 or pair one owner coverage answer (from a separate random draw, so the reports themselves are as
-before): "yes" for this file and words (half), "no", none, a "yes" for another file, or a "yes" to
-other words. Only the first lets a customer, the company or a job be Complete, and every profit must
-carry the hold otherwise. Every change: 300 reports and 300 pairs.
+before): "yes" for this file and words (half), "no", none, a "yes" for another file, a "yes" for a
+different workbook that reads the same, or a "yes" to other words. Only the first lets a customer,
+the company or a job be Complete, and every profit must carry the hold otherwise. In the pairs, a
+"yes" with a sale only the second report has keeps the hold on every figure, costs included. Every
+change: 300 reports and 300 pairs.
 
-- Planted mistakes, each caught (2026-11-17, 13 of 13): the hold dropped; an answer to other words
-  accepted; an answer for another file accepted; "no" counted as yes; sales never held (costs and
+- Planted mistakes, each caught (2026-11-17, 18 of 18): the hold dropped; an answer to other words
+  accepted; an answer for another file accepted; an answer for a different workbook that reads the
+  same accepted, for coverage and for S3; the second report's missing sales ignored after a yes;
+  "nothing is missing" said again; a question for another workbook recorded; "no" counted as yes; sales never held (costs and
   profits only); jobs never held; the no-filter answer also recording yes; "not sure" keeping the old
   answer; a question with other words recorded; the account list leaving out lines MargenX doesn't
   count; "missing amount unknown" not shown; the hold shown as $0; the question no longer asked once

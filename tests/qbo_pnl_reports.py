@@ -24,7 +24,8 @@ the text, not copied from the code:
 - Coverage (the 2026-11-17 design review on issue #128): every customer and company figure is Complete
   only once the owner has said "yes" to the coverage confirmation for this exact file and its exact
   words. Each report gets one owner answer (COVERAGE_CASES): "yes", "no", none at all, a "yes" given
-  for another file, or a "yes" to other words. Only the first lifts the coverage hold.
+  for another file, a "yes" for a different workbook that reads the same, or a "yes" to other words.
+  Only the first lifts the coverage hold.
 """
 from __future__ import annotations
 
@@ -52,7 +53,7 @@ TIDY_NAMES = ["Coral Cafe (fictional):Patio", "Coral Cafe (fictional):Kitchen", 
 SUB_ACCOUNTS = ["Job Materials", "Plants and Soil", "Fuel", "Labor", "Gas and Electric", "Telephone", "Decks"]
 # The owner's coverage answer for a report: "yes" for this file and these words, "no", no answer, a "yes" for another
 # file, or a "yes" to other words (an older, narrower question). Only "yes" covers the report.
-COVERAGE_CASES = ["yes"] * 4 + ["no", "none", "another file", "other words"]
+COVERAGE_CASES = ["yes"] * 5 + ["no", "none", "another file", "another workbook", "other words"]
 
 NAMES = ["Coral Cafe (fictional):Patio", "Coral Cafe (fictional):Kitchen", "Palm Gym (fictional):Lobby",
          "Bay Clinic (fictional)", "Garden Supply (fictional)", "Bayside Fuel (fictional)", "Landlord (fictional)",

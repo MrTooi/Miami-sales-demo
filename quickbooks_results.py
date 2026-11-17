@@ -24,6 +24,7 @@ import quickbooks_figures as qf
 import quickbooks_pnl as qp
 
 FINAL = "Complete"
+CHECKS_DONE = "The required checks and confirmations are complete for this report."
 NOT_FINAL = "Needs a check"
 _CODES = re.compile(r"\s*\((?:issue #\d+|plan|AGENTS\.md|the PR #|S\d)[^)]*\)")
 _BARE_AMOUNT = re.compile(r"\((-?)(\d[\d,]*\.\d\d)\)")  # "(1,000.00)" in a hold's reason
@@ -138,8 +139,11 @@ def headline(report: qp.ProfitAndLossDetail, figures: qf.Figures) -> str:
         whys.append(f"{lines} line{'' if lines == 1 else 's'} {'is' if lines == 1 else 'are'} still held back "
                     f"({_held_text(profit)})")
     if profit.coverage_open:
-        whys.append("you said something is missing from this file" if figures.coverage == qf.SAID_MISSING else
-                    "you haven't confirmed yet that this file includes your whole business")
+        whys.append({qf.SAID_MISSING: "you said something is missing from this file",
+                     qf.CONTRADICTED: "Sales by Customer Detail has sales this file doesn't, so it may not include "
+                                      "your whole business"}.get(figures.coverage,
+                                                                 "you haven't confirmed yet that this file includes "
+                                                                 "your whole business"))
         whys[-1] += f" ({qf.MISSING_UNKNOWN})"
     if any(hold.row is None and hold.kind != qf.COVERAGE_HOLD for hold in profit.holds) or not whys:
         whys.append("something else that applies to the whole report is still open" if whys
@@ -202,6 +206,8 @@ def results_screen(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
         st.success(qf.COVERAGE_CONFIRMED)
     elif figures.coverage == qf.SAID_MISSING:
         st.warning(_md(qf.COVERAGE_SAID_MISSING))
+    elif figures.coverage == qf.CONTRADICTED:
+        st.warning(_md(qf.COVERAGE_CONTRADICTED))
     else:
         st.info(_md(qf.COVERAGE_NOT_YET))
     st.caption(_md(qf.RELIANCE))
@@ -225,7 +231,9 @@ def results_screen(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
         for reason in reasons:
             st.markdown(f"- {_md(reason)}")
     else:
-        st.success("Nothing is missing: every figure above is final for this report.")
+        # Never "nothing is missing": MargenX can't know that, and Complete relies on the owner's answers (the PR #148
+        # manual review, blocker 3).
+        st.success(CHECKS_DONE)
 
     with st.expander("Details: what these figures cover and how each line was counted"):
         st.caption(_md(figures.scope))

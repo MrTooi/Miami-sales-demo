@@ -45,12 +45,15 @@ def cents(amount: Decimal) -> int:
 
 def coverage_answer(case: str, report: qp.ProfitAndLossDetail) -> qf.CoverageAnswer | None:
     """The owner's coverage answer the generator chose (gen.COVERAGE_CASES), for this report."""
-    statement, fingerprint = qf.coverage_statement(report), qf.report_fingerprint(report)
-    return {"yes": qf.CoverageAnswer(qf.COVERAGE_YES, statement, fingerprint),
-            "no": qf.CoverageAnswer(qf.COVERAGE_NO, statement, fingerprint),
+    statement, fingerprint, file = qf.coverage_statement(report), qf.report_fingerprint(report), report.file_digest
+    return {"yes": qf.CoverageAnswer(qf.COVERAGE_YES, statement, fingerprint, file),
+            "no": qf.CoverageAnswer(qf.COVERAGE_NO, statement, fingerprint, file),
             "none": None,
-            "another file": qf.CoverageAnswer(qf.COVERAGE_YES, statement, "0" * 64),
-            "other words": qf.CoverageAnswer(qf.COVERAGE_YES, "All my cost accounts are on the list.", fingerprint),
+            "another file": qf.CoverageAnswer(qf.COVERAGE_YES, statement, "0" * 64, file),
+            # A different workbook that reads exactly the same (the PR #148 manual review, blocker 1).
+            "another workbook": qf.CoverageAnswer(qf.COVERAGE_YES, statement, fingerprint, "f" * 64),
+            "other words": qf.CoverageAnswer(qf.COVERAGE_YES, "All my cost accounts are on the list.", fingerprint,
+                                             file),
             }[case]
 
 

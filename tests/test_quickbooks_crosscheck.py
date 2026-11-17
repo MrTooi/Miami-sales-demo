@@ -54,7 +54,8 @@ COSTS = [L(5, "Bill", "B-1", f"{X}:Job A", D("1000.0"), D("1000.0")),
 
 def yes(report) -> qf.CoverageAnswer:
     """The owner's coverage "yes" for this Profit and Loss Detail (the 2026-11-17 coverage confirmation)."""
-    return qf.CoverageAnswer(qf.COVERAGE_YES, qf.coverage_statement(report), qf.report_fingerprint(report))
+    return qf.CoverageAnswer(qf.COVERAGE_YES, qf.coverage_statement(report), qf.report_fingerprint(report),
+                             report.file_digest)
 
 
 def figures(report, check, lines=None, accounts=None, unfiltered=True, covered=True):

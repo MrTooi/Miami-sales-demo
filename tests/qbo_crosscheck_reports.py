@@ -12,7 +12,10 @@ written rules (plan v7, S1, S3, S4, S8), not from MargenX's code:
 - with no costs in these reports, a job's profit is Complete exactly when its sales are;
 - matching sales never stand in for the coverage confirmation (the 2026-11-17 design review on #128):
   each pair gets one owner coverage answer (COVERAGE_CASES), and only a "yes" for this exact Profit and
-  Loss Detail and its exact words lets a job be Complete, even when both reports agree line by line.
+  Loss Detail and its exact words lets a job be Complete, even when both reports agree line by line;
+- a sale in Sales by Customer Detail with no partner in Profit and Loss Detail is evidence that the Profit
+  and Loss Detail may leave out activity, so it keeps the coverage hold on every figure even after a
+  "yes" (the PR #148 manual review, blocker 2).
 """
 from __future__ import annotations
 
@@ -27,7 +30,7 @@ CUSTOMERS = {"Coral Cafe (fictional)": ["Patio", "Kitchen"], "Palm Gym (fictiona
 TYPES = ["Invoice"] * 6 + ["Sales Receipt"] * 3 + ["Credit Memo"]
 # The owner's coverage answer: "yes" for this file and these words, "no", none, a "yes" for another file, or a "yes"
 # to other words. Only "yes" covers the report.
-COVERAGE_CASES = ["yes"] * 4 + ["no", "none", "another file", "other words"]
+COVERAGE_CASES = ["yes"] * 5 + ["no", "none", "another file", "another workbook", "other words"]
 
 
 @dataclass
@@ -38,6 +41,7 @@ class Pair:
     unmatched_pnl: int = 0
     unmatched_sbcd: int = 0
     coverage: str = "yes"  # the owner's coverage answer (COVERAGE_CASES)
+    coverage_held: bool = False  # every figure holds "missing amount unknown"
 
 
 def make_pair(seed: int) -> Pair:
@@ -101,5 +105,6 @@ def make_pair(seed: int) -> Pair:
         counts = t["kind"] in ("Invoice", "Sales Receipt") and t["cents"] >= 0
         pair.jobs[key] = (cents + (t["cents"] if counts else 0), ok and counts and index not in pnl_bad)
     covered = pair.coverage == "yes"
+    pair.coverage_held = not covered or any_sbcd_orphan
     pair.jobs = {key: (cents, ok and not any_sbcd_orphan and covered) for key, (cents, ok) in pair.jobs.items()}
     return pair

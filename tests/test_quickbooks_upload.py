@@ -165,7 +165,8 @@ class PageTests(unittest.TestCase):
         headline = titles(at)[-1]
         self.assertTrue(headline.endswith("the business made $2,400.00. This figure is final for this report."),
                         headline)
-        self.assertIn("Nothing is missing: every figure above is final for this report.", text)
+        self.assertIn("The required checks and confirmations are complete for this report.", text)
+        self.assertNotIn("Nothing is missing", text)
         steps = next(m.value for m in at.markdown if m.value.startswith('<div class="mx-nav-l">'))
         self.assertIn('<div class="mx-nav on"><div class="n">3</div>', steps)  # See your money
         jobs = next(d.value for d in at.dataframe if "Customer › Job" in d.value.columns)

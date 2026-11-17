@@ -45,9 +45,11 @@ The rules, from plan v7:
   can leave a whole cost account, or some transactions, out of the export, and the file can't show it:
   Labor left out turns a company's $3,400 into $4,300 with every total still matching. So every figure
   (company, every customer, every job) holds "missing amount unknown" until the owner confirms, for
-  this exact file and this exact wording (coverage_statement), that the report includes the whole
-  business's income and costs for its dates, with no filters. A "yes" clears only that hold: S3 and
-  every other hold stay. "No", "not sure", no answer, or an answer for another file or wording keep it.
+  this exact file (its bytes, not only what it reads as) and this exact wording (coverage_statement),
+  that the report includes the whole business's income and costs for its dates, with no filters. A
+  "yes" clears only that hold: S3 and every other hold stay. "No", "not sure", no answer, or an answer
+  for another file or wording keep it. So does evidence against it: a usable Sales by Customer Detail
+  with sales this report doesn't have (the PR #148 manual review, blocker 2).
   This is the owner's word, not proof: a wrong "yes" on an incomplete file can give Complete figures.
 
 The upload page reads a recognised report through quickbooks_upload; job_intake still refuses QuickBooks reports.
@@ -110,6 +112,9 @@ COVERAGE_NOT_YET = ("You haven't confirmed yet that this Profit and Loss Detail 
 COVERAGE_SAID_MISSING = ("You said something is missing from this Profit and Loss Detail, so every figure needs a "
                          f"check: {MISSING_UNKNOWN}. Export it again from QuickBooks for the whole business, with no "
                          "filters, and upload that file.")
+COVERAGE_CONTRADICTED = ("Sales by Customer Detail has sales that aren't in this Profit and Loss Detail, so it may not "
+                         "include your whole business, even though you confirmed it does. Every figure needs a check: "
+                         f"{MISSING_UNKNOWN}. Export both reports again for the whole business, with no filters.")
 COVERAGE_CONFIRMED = "Coverage confirmed by you for this file."
 RELIANCE = ("MargenX calculates figures from your uploaded reports and your answers. QuickBooks exports may not reveal "
             "filters that excluded accounts or transactions. We therefore ask you to check the export settings and "
@@ -166,11 +171,14 @@ class AccountAnswer:
 @dataclass(frozen=True)
 class CoverageAnswer:
     """The owner's answer to the coverage confirmation: COVERAGE_YES or COVERAGE_NO ("not sure" is no answer at
-    all), with the exact words it was given for (statement) and the exact file (report, its fingerprint). It counts
-    only for that file and those words: a new or changed file, or other wording, needs a new answer."""
+    all), with the exact words it was given for (statement) and the exact file: what it reads as (report, its
+    fingerprint) and the uploaded file itself (file, ProfitAndLossDetail.file_digest). It counts only for that file
+    and those words: a new or changed file, a different workbook that reads the same, or other wording, needs a new
+    answer."""
     choice: str
     statement: str
     report: str
+    file: str = ""
     answered_at: str = ""
 
 
@@ -221,8 +229,8 @@ def coverage_confirmed(report: qp.ProfitAndLossDetail, answers: OwnerAnswers | N
         return False
     fingerprint = report_fingerprint(report)
     given = answers.coverage
-    return (answers.report == fingerprint and given.report == fingerprint and given.choice == COVERAGE_YES
-            and given.statement == coverage_statement(report))
+    return (answers.report == fingerprint and given.report == fingerprint and given.file == report.file_digest
+            and given.choice == COVERAGE_YES and given.statement == coverage_statement(report))
 
 
 def report_fingerprint(report: qp.ProfitAndLossDetail) -> str:
@@ -308,6 +316,7 @@ class Figures:
 
 
 CONFIRMED = "confirmed"
+CONTRADICTED = "contradicted"  # confirmed, but the second report shows sales this report doesn't have
 SAID_MISSING = "said missing"
 NOT_CONFIRMED = "not confirmed"
 
@@ -353,6 +362,7 @@ class _Builder:
         self.report = report
         self.cross_check = cross_check
         self.one_report = True  # S3, until a usable cross-check lifts it (step 5b)
+        self.sales_missing_here = False  # a usable cross-check found sales this report doesn't have
         self.one_report_reason = ONE_REPORT
         self.warnings: list[str] = []
         if answers != OwnerAnswers() and answers.report != report_fingerprint(report):
@@ -381,7 +391,8 @@ class _Builder:
         given = self.answers.coverage
         if given is None:
             return NOT_CONFIRMED
-        if given.report != report_fingerprint(self.report) or given.statement != coverage_statement(self.report):
+        if (given.report != report_fingerprint(self.report) or given.file != self.report.file_digest
+                or given.statement != coverage_statement(self.report)):
             self.warnings.append("Your coverage answer was given for another file, or for other words than the "
                                  "question asked now, so it isn't used. Answer the coverage question again.")
             return NOT_CONFIRMED
@@ -676,10 +687,15 @@ class _Builder:
         """Until the owner confirms this file's coverage, every figure of the company, of every customer and of
         every job holds "missing amount unknown": which figures a left-out account or transaction would change
         can't be known from the file, so all of them are held. The hold has no amount, and changes none."""
+        if self.coverage == CONFIRMED and self.sales_missing_here:
+            # The second report shows sales this file doesn't have: the file may leave out more (costs too), by an
+            # amount nobody can know, so the owner's "yes" can't stand (the PR #148 manual review, blocker 2).
+            self.coverage = CONTRADICTED
         if self.coverage == CONFIRMED:
             return
-        hold = Hold(None, None, COVERAGE_SAID_MISSING if self.coverage == SAID_MISSING else COVERAGE_NOT_YET,
-                    kind=COVERAGE_HOLD)
+        reason = {SAID_MISSING: COVERAGE_SAID_MISSING, CONTRADICTED: COVERAGE_CONTRADICTED}.get(self.coverage,
+                                                                                            COVERAGE_NOT_YET)
+        hold = Hold(None, None, reason, kind=COVERAGE_HOLD)
         self.hold_everything(hold)
 
     def apply_cross_check(self, resolutions: list[Resolution]) -> None:
@@ -695,6 +711,7 @@ class _Builder:
         if not check.usable:
             self.warn("Sales by Customer Detail couldn't be used as the cross-check: " + "; ".join(check.reasons) + ".")
             return
+        self.sales_missing_here = bool(check.sbcd_unmatched)
         if self.answers.unfiltered_pair != check.pair:
             self.one_report_reason = NO_FILTER_YET
         else:
