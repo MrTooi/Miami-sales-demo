@@ -22,8 +22,18 @@ class RelianceWordingTests(unittest.TestCase):
             with self.subTest(name):
                 text = (ROOT / name).read_text()
                 self.assertIn("Until you answer \"Yes, I checked\", every figure", text)
-                self.assertIn("No, something is missing" if name.endswith("GUIDE.md") else "relies on that confirmation",
-                              text)
+                self.assertIn("MargenX relies on your confirmation for that file" if name.endswith("TERMS_DRAFT.md")
+                              else "No, something is missing", text)
+
+    def test_the_guide_says_yes_confirms_the_whole_business_not_only_that_you_looked(self):
+        # The PR #147 confirmation review, blocker: "Yes, I checked" "only if you did" could read as "I looked", even
+        # after finding an account missing. A mistaken yes on a file missing Labor can show $4,300 Complete.
+        text = (ROOT / "docs/TRIAL_SHOP_GUIDE.md").read_text()
+        self.assertIn("Choose **Yes, I checked** only if you checked the list and export settings and can confirm that "
+                      "this file includes your whole business's income and costs for those dates, with no filters "
+                      "excluding accounts or transactions. If you found something missing, choose **No, something is "
+                      "missing**. If you can't tell, choose **Not sure**.", text)
+        self.assertNotIn("only if you did", text)
 
 
 if __name__ == "__main__":
