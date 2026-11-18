@@ -61,7 +61,11 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
      The menu names are still to be confirmed against a real QuickBooks Online account; correct them here if they differ. A Profit and Loss Detail already holds the sales and the costs, so don't add other sales or cost files with it.
    - **Other systems (for example Square):** the sales or invoices file and the costs or bills file, as CSV.
    - **Every file must be under 1 MB (1,000,000 bytes).** Check each one on the owner's computer before it is moved: in Finder, select the file → **Get Info** → **Size**, which shows the exact number of bytes.
-     - **Why:** MargenX keeps uploads in memory only up to this size. The web library it runs on (Starlette 1.9.0, used by Streamlit 1.65.0) writes an upload larger than 1 MiB to a temporary file on the laptop's disk while reading it. That would break the promise that nothing is saved.
+     - **Why:** MargenX keeps uploads in memory only up to this size.
+       - Streamlit 1.65.0 runs on Starlette; its server switched from Tornado to Starlette in 1.57.
+       - Its upload handler reads each upload with Starlette's form parser.
+       - Starlette 1.9.0 writes an upload part larger than 1 MiB (1,048,576 bytes) to a temporary file on the laptop's disk while reading it. That would break the promise that nothing is saved.
+       - This rule is checked against those exact versions; see "Before the first real visit", step 5.
      - **If a file is larger:** export a shorter date range (for example one month instead of a quarter) and check again. If it still doesn't fit, stop the visit for that file.
      - This limit holds until a change to MargenX is shown to keep larger uploads in memory.
 5. **Move the files to the laptop with a USB drive or AirDrop.** Don't email them, and don't put them in Google Drive, Dropbox or a chat app.
@@ -96,6 +100,9 @@ Repeat the real upload-and-delete test with a **made-up** CSV. Then repeat it wi
 2. Upload the made-up files and check that they are read: the CSV's line, or the QuickBooks questions and results.
 3. Click **End session**. It must show the "removed from MargenX's upload storage" message, and the file name and results must be gone.
 4. Run the test suite (`python -m unittest discover -s tests`). It must pass.
+5. **Check the web library the 1 MB rule depends on** (step 4 of the visit). `requirements.txt` pins Streamlit, but Streamlit accepts a range of Starlette versions, so Starlette can change even when Streamlit doesn't.
+   - In the Python setup MargenX runs with, run `python -c "import streamlit, starlette; print(streamlit.__version__, starlette.__version__)"`. It must print `1.65.0 1.9.0`.
+   - **If either number differs, don't take real files.** First, the upload limit must be checked again on the installed versions and this checklist updated. The check: does an upload just over the limit stay in memory?
 
 ## If something goes wrong
 - **The page shows an error:** click End session and start again. Don't screenshot it. Write down what you were doing, not the data.
