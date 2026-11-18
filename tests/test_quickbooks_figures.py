@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import quickbooks_fixtures as fx  # noqa: E402
 import quickbooks_figures as qf  # noqa: E402
+import qbo_job_costs as jc  # noqa: E402
 import quickbooks_pnl as qp  # noqa: E402
 
 D = Decimal
@@ -53,16 +54,19 @@ def answers(accounts=None, lines=None, **kw) -> qf.OwnerAnswers:
 
 def covered(report, owner_answers: qf.OwnerAnswers) -> qf.OwnerAnswers:
     """The answers bound to this report, with the owner's coverage "yes" for it (the 2026-11-17 coverage
-    confirmation), unless the answers already carry a coverage answer of their own."""
+    confirmation) and, given last, the owner's job-cost "yes" for the cost list they give (J1, the labor-gap plan v3),
+    unless the answers already carry answers of their own."""
     fingerprint = qf.report_fingerprint(report)
     coverage = owner_answers.coverage or qf.CoverageAnswer(qf.COVERAGE_YES, qf.coverage_statement(report), fingerprint,
                                                            report.file_digest)
-    return dataclasses.replace(owner_answers, report=fingerprint, coverage=coverage)
+    answers = dataclasses.replace(owner_answers, report=fingerprint, coverage=coverage)
+    return answers if answers.job_costs is not None else jc.confirmed(report, answers)
 
 
 def figures(report, owner_answers: qf.OwnerAnswers) -> qf.Figures:
     """The figures, with the answers bound to this report (as the question screens will bind them). The tests in
-    this file are about the other rules, so the file's coverage is confirmed; CoverageTests covers that hold."""
+    this file are about the other rules, so the file's coverage and its job costs are confirmed; CoverageTests and
+    tests/test_quickbooks_job_costs.py cover those holds."""
     return qf.figures(report, covered(report, owner_answers))
 
 
@@ -134,8 +138,11 @@ class S8UnknownJobCostTests(unittest.TestCase):
                                              qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT)}))
         for job in (A, B):
             self.assertEqual({row}, holds(result.jobs[job]["profit_after_job_costs"]))
-        self.assertTrue(ready(result.jobs[(Y, "Job C")]["profit_after_job_costs"]))  # other customers' jobs unaffected
-        self.assertEqual(set(), holds(result.customers[Y]["profit_after_job_costs"]))
+        # Other customers' jobs aren't held by the line. Job C has a $300 sale and no costs, so the no-costs rule
+        # (J3, the labor-gap plan v3) holds it and Customer Y, by a hold with no row.
+        for figure in (result.jobs[(Y, "Job C")]["profit_after_job_costs"], result.customers[Y]["profit_after_job_costs"]):
+            self.assertEqual({None}, holds(figure))
+            self.assertEqual([qf.NO_JOB_COSTS_HOLD], [h.kind for h in figure.holds if h.reason != qf.ONE_REPORT])
         # W1: the cost counts in Customer X's profit although its job is unknown.
         self.assertEqual((D("2400"), D("3600"), qp.COMPLETE),
                          (result.customers[X]["job_costs"].amount,
@@ -747,7 +754,8 @@ class SpeedCheckBeforeTheFirstShopTests(unittest.TestCase):
         result = figures(report, answers())
         took = time.perf_counter() - start
         held = result.customers[X]["profit_after_job_costs"]
-        self.assertEqual(3000 + 2, len({h.row for h in held.holds}))  # every bill, plus Job Materials unanswered
+        # Every bill, plus Job Materials unanswered (the no-costs hold, J3, has no row).
+        self.assertEqual(3000 + 2, len({h.row for h in held.holds if h.row is not None}))
         self.assertLess(took, 1.0, f"figures took {took:.2f}s for 3,000 held lines")
 
 

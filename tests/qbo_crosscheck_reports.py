@@ -9,7 +9,10 @@ written rules (plan v7, S1, S3, S4, S8), not from MargenX's code:
 - a job's sales are Complete only when every transaction of that job matched and counts as a sale (an
   Invoice or a Sales Receipt that isn't negative), and the second report has no line without a partner
   (that one could be anyone's);
-- with no costs in these reports, a job's profit is Complete exactly when its sales are;
+- every job in the Profit and Loss Detail has one made-up cost bill on it (a positive amount, in an account the owner
+  answers "job costs"), so the no-costs rule (J3 of the labor-gap plan v3) never holds a job here, and a job's
+  profit is Complete exactly when its sales are and the owner's job-cost answer (JOB_COSTS_CASES) is "yes" for this
+  exact cost list and its exact words;
 - matching sales never stand in for the coverage confirmation (the 2026-11-17 design review on #128):
   each pair gets one owner coverage answer (COVERAGE_CASES), and only a "yes" for this exact Profit and
   Loss Detail and its exact words lets a job be Complete, even when both reports agree line by line;
@@ -31,6 +34,8 @@ TYPES = ["Invoice"] * 6 + ["Sales Receipt"] * 3 + ["Credit Memo"]
 # The owner's coverage answer: "yes" for this file and these words, "no", none, a "yes" for another file, or a "yes"
 # to other words. Only "yes" covers the report.
 COVERAGE_CASES = ["yes"] * 5 + ["no", "none", "another file", "another workbook", "other words"]
+# The owner's job-cost answer (J1): only "yes" for this exact list and words clears its hold on a job's profit.
+JOB_COSTS_CASES = ["yes"] * 5 + ["overhead", "none", "another list", "other words"]
 
 
 @dataclass
@@ -42,6 +47,7 @@ class Pair:
     unmatched_sbcd: int = 0
     coverage: str = "yes"  # the owner's coverage answer (COVERAGE_CASES)
     coverage_held: bool = False  # every figure holds "missing amount unknown"
+    job_costs: str = "yes"  # the owner's job-cost answer (JOB_COSTS_CASES)
 
 
 def make_pair(seed: int) -> Pair:
@@ -83,6 +89,11 @@ def make_pair(seed: int) -> Pair:
     # Amounts are built exactly, in whole cents, never through a float.
     pnl_lines = [fx.line(t["day"], t["kind"], t["num"], f"{t['customer']}:{t['job']}", Decimal(t["cents"]) / 100, None)
                  for t in pnl_side if t]
+    # One cost bill per job in the Profit and Loss Detail, from its own generator, so the sales are as before.
+    costs = random.Random(f"costs-{seed}")
+    cost_lines = [fx.line(costs.randint(1, 26), "Bill", f"B-{index}", f"{customer}:{job}",
+                          Decimal(costs.randint(100, 100_000)) / 100, None)
+                  for index, (customer, job) in enumerate(sorted({(t["customer"], t["job"]) for t in pnl_side if t}))]
     groups: dict[str, dict[str, list]] = {}
     for t in sbcd_side:
         if t:
@@ -90,10 +101,12 @@ def make_pair(seed: int) -> Pair:
             groups.setdefault(t["customer"], {}).setdefault(t["job"], []).append(
                 fx.sale(t["day"], t["kind"], t["num"], "Made-up", sign, Decimal(abs(t["cents"])) / 100))
     customers = [(name, [], sorted(jobs.items())) for name, jobs in sorted(groups.items())]
-    pair = Pair(fx.report_rows({"Income": [("Design income", pnl_lines)]}) if pnl_lines else None,
+    pair = Pair(fx.report_rows({"Income": [("Design income", pnl_lines)], "Expenses": [("Job Materials", cost_lines)]})
+                if pnl_lines else None,
                 fx.sbcd_rows(customers), unmatched_pnl=len(pnl_bad), unmatched_sbcd=len(sbcd_bad),
                 # Drawn from its own generator, so each seed's pair is the same as before coverage was added.
-                coverage=random.Random(f"coverage-{seed}").choice(COVERAGE_CASES))
+                coverage=random.Random(f"coverage-{seed}").choice(COVERAGE_CASES),
+                job_costs=random.Random(f"job-costs-{seed}").choice(JOB_COSTS_CASES))
 
     # Expected: every job named in Profit and Loss Detail, its sales and whether they can be Complete.
     any_sbcd_orphan = bool(sbcd_bad)
