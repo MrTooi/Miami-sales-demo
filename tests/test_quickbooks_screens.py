@@ -14,6 +14,7 @@ PAGE = str(Path(__file__).resolve().parent / "qbo_question_screen_app.py")
 JOBS = "Do you use sub-customers in QuickBooks for jobs?"
 MATERIALS = 'How do you usually use the account "Job Materials"?'
 COVERAGE = "Does this file include your whole business?"
+JOB_COSTS = "Is every job cost for these dates in this report, on its job?"
 
 
 def start():
@@ -65,7 +66,7 @@ class QuestionScreenTests(unittest.TestCase):
     def test_one_question_at_a_time_with_progress_and_nothing_pre_selected(self):
         at = start()
         self.assertEqual([JOBS], title(at))
-        self.assertIn("**Question 1 of 5**", text(at))
+        self.assertIn("**Question 1 of 6**", text(at))  # the job-cost confirmation is the sixth (J1)
         self.assertEqual(1, len(at.radio))
         self.assertIsNone(at.radio[0].value)  # no default answer
         self.assertTrue(button(at, "Save answer").disabled)
@@ -91,10 +92,10 @@ class QuestionScreenTests(unittest.TestCase):
 
     def test_skip_then_come_back_to_skipped_questions(self):
         at = start()
-        for _ in range(5):
+        for _ in range(6):
             button(at, "Skip for now").click().run()
         self.assertEqual([], title(at))
-        self.assertIn('You skipped 5 questions. They stay on "Needs a check" until you answer them.',
+        self.assertIn('You skipped 6 questions. They stay on "Needs a check" until you answer them.',
                       [i.value for i in at.info])
         self.assertIsNone(answers(at).sub_customers_are_jobs)
         button(at, "Go through the skipped questions").click().run()
@@ -161,7 +162,7 @@ class QuestionScreenTests(unittest.TestCase):
         self.assertIn("Which job is this $700.00 for? → Job \"Job A\"", listed[listed.index(next(
             m for m in listed if m.startswith("**Earlier answers that don't apply now**"))) + 1:])
         self.assertEqual(1, len([b for b in at.button if b.label == "Change"]))  # only the answer in use
-        self.assertIn("of 5**", text(at))  # 1 answer in use + 4 open; the answer apart isn't counted (it would be 6)
+        self.assertIn("of 6**", text(at))  # 1 answer in use + 5 open; the answer apart isn't counted (it would be 7)
 
     def test_an_outside_job_needs_its_name(self):
         at = save(start(), "Yes, each sub-customer is a job")
@@ -389,6 +390,8 @@ class SafetyTests(unittest.TestCase):
         button(at, "Skip for now").click().run()
         self.assertEqual([COVERAGE], title(at))  # asked after the no-filter question, with one report or two
         button(at, "Skip for now").click().run()
+        self.assertEqual([JOB_COSTS], title(at))  # asked last (J1)
+        button(at, "Skip for now").click().run()
         self.assertEqual([], title(at))
         self.swap_second_report(at)
         self.assertEqual(["Did you export both reports for the whole business, with no filter?"], title(at))
@@ -423,12 +426,13 @@ class SafetyTests(unittest.TestCase):
         self.swap_second_report(at)
         self.assertNotIn("Changing an earlier answer", text(at))
         self.assertEqual(["Did you export both reports for the whole business, with no filter?"], title(at))
-        self.assertIn("**Question 2 of 3**", text(at))  # jobs answered; no-filter and coverage open
+        self.assertIn("**Question 2 of 4**", text(at))  # jobs answered; no-filter, coverage and job costs open
         self.assertIsNone(at.radio[0].value)
         self.assertTrue(button(at, "Save answer").disabled)
         self.assertNotIn("Keep my answer", [b.label for b in at.button])
-        self.assertIn("The reports changed while you were changing an answer, so that change was dropped. The "
-                      "questions shown now are about the files you uploaded.", [i.value for i in at.info])
+        self.assertIn("The reports, or how MargenX counts your costs, changed while you were changing an answer, so "
+                      "that change was dropped. The questions shown now are about the files you uploaded.",
+                      [i.value for i in at.info])
         self.assertNotIn("Your answer is unchanged.", [i.value for i in at.info])
         # Pair A's own confirmation is untouched, and counts again once pair A is back.
         self.assertNotEqual(at.session_state["pair"], at.session_state["answers"].unfiltered_pair)
@@ -442,6 +446,8 @@ class SafetyTests(unittest.TestCase):
         at = self.two_reports()
         button(at, "Skip for now").click().run()
         save(at, "Yes, I checked")  # the coverage question, so only the no-filter questions are left to skip
+        self.assertEqual([JOB_COSTS], title(at))
+        save(at, "Yes, I checked")  # the job-cost question (J1): a new sales report doesn't change the cost list
         self.swap_second_report(at)
         button(at, "Skip for now").click().run()
         self.assertEqual([], title(at))

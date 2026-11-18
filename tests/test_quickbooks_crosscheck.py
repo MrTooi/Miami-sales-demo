@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import quickbooks_fixtures as fx  # noqa: E402
 import quickbooks_crosscheck as qc  # noqa: E402
 import quickbooks_figures as qf  # noqa: E402
+import qbo_job_costs as jc  # noqa: E402
 import quickbooks_pnl as qp  # noqa: E402
 import quickbooks_sbcd as qs  # noqa: E402
 
@@ -58,14 +59,15 @@ def yes(report) -> qf.CoverageAnswer:
                              report.file_digest)
 
 
-def figures(report, check, lines=None, accounts=None, unfiltered=True, covered=True):
+def figures(report, check, lines=None, accounts=None, unfiltered=True, covered=True, job_costs=True):
     """The figures with the owner's answers; unfiltered: the owner confirmed this pair was exported with no filter;
-    covered: the owner confirmed the Profit and Loss Detail's coverage (these tests are about the cross-check)."""
+    covered: the owner confirmed the Profit and Loss Detail's coverage; job_costs: the owner's job-cost "yes", given
+    last (J1, the labor-gap plan v3). These tests are about the cross-check."""
     answers = qf.OwnerAnswers(report=qf.report_fingerprint(report), sub_customers_are_jobs=True,
                               accounts=accounts if accounts is not None else JOB_COSTS, lines=lines or {},
                               unfiltered_pair=check.pair if (unfiltered and check is not None) else "",
                               coverage=yes(report) if covered else None)
-    return qf.figures(report, answers, cross_check=check)
+    return qf.figures(report, jc.confirmed(report, answers) if job_costs else answers, cross_check=check)
 
 
 def holds(figure):

@@ -51,6 +51,29 @@ The rules, from plan v7:
   for another file or wording keep it. So does evidence against it: a usable Sales by Customer Detail
   with sales this report doesn't have (the PR #148 manual review, blocker 2).
   This is the owner's word, not proof: a wrong "yes" on an incomplete file can give Complete figures.
+- Job costs (the labor-gap plan v3 on issue #128, reviewed in three rounds and approved by the owner on 2026-11-17).
+  A file can't show that a job's costs are all on the job: crew pay run through payroll as overhead, materials
+  booked to overhead, or a bill not entered yet all leave a job's profit too high, with every check passing. A
+  line check can't prove it either (one small labor bill passes "has labor"). So:
+  J1. After every other question, MargenX shows how it counted the costs (cost_list) and the owner answers, for
+      this exact file, these exact words (job_costs_statement) and this exact list (its digest): "Yes, I
+      checked" (every cost of work for customers that belongs in this accrual period is entered, dated in it, in
+      this report and on its job or customer), "All of them are in this report, but some are booked to overhead",
+      or "Not sure" (no answer). Any answer that changes how a line is counted or where it goes changes the
+      list's digest, so the old answer isn't used and the question is asked again.
+  J2. Until "Yes", every job's and customer's job costs and profit after job costs, and the company's job costs,
+      profit after job costs and overhead, hold "may be misstated". With "some are booked to overhead" the
+      company's profit after overhead isn't held by J2 (every job cost is in this report); with no answer it is
+      (a cost may not be in the report at all).
+  J3. Even after "Yes", a job or customer with any counted sales activity (even netting to $0) and no counted job
+      cost, or counted job costs of $0 or less, holds its job costs and profit after job costs. With jobs on, a
+      customer with sales not on a job in this report always holds: nothing shows which costs go with them.
+      J3 never holds the company: its job costs are a period total.
+  J4. The company's profit after overhead is built from its own parts (sales, job costs, overhead, other) before
+      J2 and J3, so it keeps exactly its other holds.
+  A J1 or J3 hold has no amount and changes none. Unlike the spreadsheet path, a labor line and a materials line
+  aren't required per job: the owner's confirmation covers them. This is the owner's word, not proof: a wrong
+  "yes" (crew pay in overhead, a bill not entered yet) can still give Complete figures.
 
 The upload page reads a recognised report through quickbooks_upload; job_intake still refuses QuickBooks reports.
 """
@@ -123,6 +146,19 @@ RELIANCE = ("MargenX calculates figures from your uploaded reports and your answ
             "guarantee that nothing was omitted or incorrectly recorded in QuickBooks. If you are unsure, choose Not "
             "sure.")
 
+# The owner's job-cost confirmation (J1-J4 in the docstring: the labor-gap plan v3 on issue #128).
+JOB_COSTS_ON_JOBS = "on jobs"  # "Yes, I checked"
+JOB_COSTS_SOME_OVERHEAD = "some in overhead"  # "All of them are in this report, but some are booked to overhead"
+JOB_COSTS_CHOICES = (JOB_COSTS_ON_JOBS, JOB_COSTS_SOME_OVERHEAD)
+JOB_COSTS_NOT_CONFIRMED = "not confirmed"  # no answer, "not sure", or an answer that no longer applies
+JOB_COSTS_HOLD = "job costs"  # Hold.kind of a J2 hold
+NO_JOB_COSTS_HOLD = "no job costs"  # Hold.kind of a J3 hold
+MAY_BE_MISSTATED = "job costs may be misstated"
+JOB_COSTS_CONFIRMED = "Job costs confirmed by you for this file."
+JOB_COSTS_RELIANCE = ("For jobs and customers, Complete also relies on your confirmation that every job cost for these "
+                      "dates is in this report and on its job. MargenX can't check that against your payroll or your "
+                      "bills.")
+
 
 def coverage_statement(report: qp.ProfitAndLossDetail) -> str:
     """The exact words the owner confirms, with this report's dates and basis (the reviewer's wording). An answer is
@@ -132,6 +168,28 @@ def coverage_statement(report: qp.ProfitAndLossDetail) -> str:
             f"whole business's income and costs recorded in QuickBooks for {layout.period}, on "
             f"{layout.basis.lower()} basis, with no filters excluding accounts or transactions. All cost accounts "
             "with activity in this period are included.")
+
+
+def job_costs_statement(report: qp.ProfitAndLossDetail, jobs_on: bool, choice: str) -> str:
+    """The exact words the owner confirms for one J1 choice, with this report's dates and basis: costs that belong in
+    this accrual reporting period, customer-only work included (the round-3 review's warning). An answer counts only
+    for these exact words."""
+    layout = report.layout
+    unit = "job" if jobs_on else "customer"
+    common = ("I checked this list against QuickBooks. Every cost of work for customers that belongs in this "
+              f"{layout.basis.lower()} reporting period ({layout.period}) is entered in QuickBooks, dated in that "
+              "period, and is in this Profit and Loss Detail: crew pay and payroll, materials, subcontractors and any "
+              "other job cost, for every " + ("job, including jobs with no sale yet, and for work for a customer "
+                                              "that isn't on a job" if jobs_on else
+                                              "customer, including customers with no sale yet")
+              + ". None is waiting to be entered.")
+    if choice == JOB_COSTS_ON_JOBS:
+        return (common + " Each one is recorded on its " + ("job (or on its customer, for work that isn't on a job)"
+                                                           if jobs_on else "customer")
+                + f", not only in overhead, and the list above shows each {unit}'s costs as I'd expect.")
+    if choice == JOB_COSTS_SOME_OVERHEAD:
+        return common + f" But some of them are booked to overhead, not to their {unit}s."
+    return ""
 
 
 @dataclass(frozen=True)
@@ -184,6 +242,19 @@ class CoverageAnswer:
 
 
 @dataclass(frozen=True)
+class JobCostsAnswer:
+    """The owner's J1 answer: JOB_COSTS_ON_JOBS or JOB_COSTS_SOME_OVERHEAD ("not sure" is no answer at all), with the
+    exact words of that choice (statement), the exact file (report fingerprint and uploaded-file digest) and the exact
+    cost list it was given for (costs: Figures.cost_digest). If any of them differs now, it isn't used."""
+    choice: str
+    statement: str
+    report: str
+    file: str
+    costs: str
+    answered_at: str = ""
+
+
+@dataclass(frozen=True)
 class OwnerAnswers:
     """The owner's answers, bound to one report (report_fingerprint): answers given for another report,
     or for an earlier version of this one, are never used (the PR #138 manual review, blocker 3)."""
@@ -203,6 +274,9 @@ class OwnerAnswers:
     # keeps the coverage hold until another Profit and Loss file is used (the PR #148 manual review, round 2).
     # Recorded only by the question screen (record_contradiction), never by an answer.
     sales_missing_seen: tuple[str, ...] = ()
+    # J1: "Is every job cost for these dates in this report, on its job?" Recorded only by the owner answering that
+    # question (quickbooks_questions), for the cost list shown. No other answer, upload or step ever sets it.
+    job_costs: JobCostsAnswer | None = None
 
 
 @dataclass(frozen=True)
@@ -344,6 +418,10 @@ class Figures:
     resolutions: tuple[Resolution, ...]
     warnings: tuple[str, ...]  # answers that couldn't be used, in plain words
     coverage: str = ""  # CONFIRMED, SAID_MISSING or NOT_CONFIRMED: the owner's coverage confirmation for this file
+    # J1: JOB_COSTS_ON_JOBS, JOB_COSTS_SOME_OVERHEAD or JOB_COSTS_NOT_CONFIRMED, for this file, words and cost list.
+    job_costs: str = ""
+    cost_list: tuple[str, ...] = ()  # how MargenX counted the costs, as J1 shows it
+    cost_digest: str = ""  # what a J1 answer is bound to: every line's resolution, the jobs setting and cost_list
 
 
 CONFIRMED = "confirmed"
@@ -403,6 +481,7 @@ class _Builder:
         # A usable cross-check found sales this report doesn't have: now, or earlier in this session for this very file.
         self.sales_missing_here = bool(report.file_digest) and report.file_digest in answers.sales_missing_seen
         self.coverage = self.coverage_state()
+        self.job_costs = JOB_COSTS_NOT_CONFIRMED  # J1, worked out once the lines are placed (job_costs_state)
         self.jobs_on = answers.sub_customers_are_jobs is True
         self.lines = {line.row: line for line in report.lines}
         self.customers: set[str] = set()
@@ -718,8 +797,67 @@ class _Builder:
         for path in self.answers.accounts:
             if tuple(path) not in paths:
                 self.warn(f"There's no account '{' › '.join(path)}' in this report, so that answer wasn't used.")
-        return Figures(self.scope(), self.jobs_on, *self.assemble(), tuple(resolutions), tuple(self.warnings),
-                       self.coverage)
+        company, customers, jobs = self.assemble()
+        listing = cost_list(self.jobs_on, company, customers, jobs, resolutions)
+        digest = cost_list_digest(self.jobs_on, resolutions, listing)
+        self.job_costs = self.job_costs_state(digest)
+        company, customers, jobs = self.apply_job_costs(company, customers, jobs, resolutions)
+        return Figures(self.scope(), self.jobs_on, company, customers, jobs, tuple(resolutions), tuple(self.warnings),
+                       self.coverage, self.job_costs, listing, digest)
+
+    def job_costs_state(self, digest: str) -> str:
+        """The owner's J1 answer, used only for this exact file, the exact words of its choice and this exact cost
+        list (the round-3 review: bound to the list shown)."""
+        given = self.answers.job_costs
+        if given is None:
+            return JOB_COSTS_NOT_CONFIRMED
+        if not self.report.file_digest:
+            self.warn("MargenX can't tell which uploaded file this report came from, so your answer about job costs "
+                      "isn't used.")
+            return JOB_COSTS_NOT_CONFIRMED
+        if given.choice not in JOB_COSTS_CHOICES:
+            self.warn(f"The job-costs answer '{given.choice}' isn't one MargenX knows, so it isn't used.")
+            return JOB_COSTS_NOT_CONFIRMED
+        if (given.report != report_fingerprint(self.report) or given.file != self.report.file_digest
+                or given.statement != job_costs_statement(self.report, self.jobs_on, given.choice)):
+            self.warn("Your answer about job costs was given for another file, or for other words than the question "
+                      "asked now, so it isn't used. Answer the job-costs question again.")
+            return JOB_COSTS_NOT_CONFIRMED
+        if given.costs != digest:
+            self.warn("How MargenX counts your costs has changed since you answered about job costs (a later answer "
+                      "changed how a cost is counted or where it goes), so that answer isn't used. Check the list "
+                      "again and answer the job-costs question again.")
+            return JOB_COSTS_NOT_CONFIRMED
+        return given.choice
+
+    def apply_job_costs(self, company: dict, customers: dict, jobs: dict, resolutions: list[Resolution]):
+        """J2 and J3, added after every figure is assembled, so the company's profit after overhead (built from its
+        own parts, J4) takes J2's hold only when the answer says a cost may not be in this report at all."""
+        period = self.report.layout.period
+        unit = "job" if self.jobs_on else "customer"
+        j2 = None
+        if self.job_costs == JOB_COSTS_SOME_OVERHEAD:
+            j2 = Hold(None, None, f"You said some job costs are booked to overhead, not to their {unit}s, so job "
+                                  "costs, overhead and profit after job costs may be misstated.", kind=JOB_COSTS_HOLD)
+        elif self.job_costs != JOB_COSTS_ON_JOBS:
+            j2 = Hold(None, None, f"You haven't confirmed that every job cost for {period} is in this report and on "
+                                  f"its {unit}, so job costs and profits may be misstated.", kind=JOB_COSTS_HOLD)
+
+        def held(figure: Figure, *new: Hold) -> Figure:
+            new = tuple(h for h in new if h is not None)
+            return Figure(figure.amount, tuple(dict.fromkeys(figure.holds + new))) if new else figure
+
+        def group(figs: dict, *new: Hold) -> dict:
+            return {**figs, "job_costs": held(figs["job_costs"], *new),
+                    "profit_after_job_costs": held(figs["profit_after_job_costs"], *new)}
+
+        no_costs = no_job_costs(self.jobs_on, customers, jobs, resolutions)
+        jobs = {key: group(figs, j2, *no_costs.get(("job", key), ())) for key, figs in jobs.items()}
+        customers = {key: group(figs, j2, *no_costs.get(("customer", key), ())) for key, figs in customers.items()}
+        company = {**group(company, j2), "overhead": held(company["overhead"], j2),
+                   "after_overhead": held(company["after_overhead"],
+                                          j2 if self.job_costs == JOB_COSTS_NOT_CONFIRMED else None)}
+        return company, customers, jobs
 
     def apply_coverage(self) -> None:
         """Until the owner confirms this file's coverage, every figure of the company, of every customer and of
@@ -801,6 +939,9 @@ class _Builder:
             words.append("your confirmation that it includes the whole business's income and costs, with no filters")
         if not self.one_report:
             words.append("your word that both reports were exported with no filter")
+        if self.job_costs == JOB_COSTS_ON_JOBS:
+            words.append("your confirmation that every job cost for these dates is in this report and on its "
+                         + ("job" if self.jobs_on else "customer"))
         return (f"Within QuickBooks' Profit and Loss Detail for {layout.company}, {layout.period}, "
                 f"{layout.basis.lower()} basis. A filter QuickBooks doesn't print in the file can't be seen, so "
                 "this isn't proof the report covers the whole business"
@@ -841,9 +982,12 @@ class _Builder:
         sales, costs = figure(("company", "sales")), figure(("company", "job_costs"))
         overhead, other = figure(("company", "overhead")), figure(("company", "other"))
         profit = derived(sales.amount - costs.amount, sales, costs)
+        # J4: from its own parts (the same holds, in the same order, as through the profit), so J2's hold on the profit
+        # after job costs, added later, never reaches it by itself.
         company = {"sales": sales, "job_costs": costs, "profit_after_job_costs": profit, "overhead": overhead,
                    "other": other,
-                   "after_overhead": derived(profit.amount - overhead.amount + other.amount, profit, overhead, other)}
+                   "after_overhead": derived(profit.amount - overhead.amount + other.amount, sales, costs, overhead,
+                                             other)}
         customers = {}
         for customer in sorted(self.customers):
             s, c = figure(("customer", customer, "sales")), figure(("customer", customer, "job_costs"))
@@ -856,6 +1000,136 @@ class _Builder:
                                                            extra=(Hold(None, None, self.one_report_reason),)
                                                            if self.one_report else ())}
         return company, customers, jobs
+
+
+def _money(amount: Decimal | None) -> str:
+    if amount is None:
+        return "amount unknown"
+    return f"-${-amount:,.2f}" if amount < 0 else f"${amount:,.2f}"
+
+
+def attribution(resolution: Resolution, jobs_on: bool) -> tuple[str, str]:
+    """Where a counted sale or job cost goes, as the J1 list shows it: (status, the named job outside this report).
+    Status: "job", "no job", "outside job", "which job isn't known" or "whose isn't known". The outside job's name
+    is part of it: moving a bill from one outside job to another changes the list (the round-3 review's warning)."""
+    answer = resolution.answer if isinstance(resolution.answer, LineAnswer) else None
+    if resolution.customer is None:
+        return "whose isn't known", ""
+    if resolution.job is not None:
+        return "job", ""
+    if not jobs_on:
+        return "customer", ""
+    if answer is not None and answer.outside_job:
+        return "outside job", answer.outside_job
+    if answer is not None and answer.no_job:
+        return "no job", ""
+    return "which job isn't known", ""
+
+
+def cost_list(jobs_on: bool, company: dict, customers: dict, jobs: dict,
+              resolutions: list[Resolution]) -> tuple[str, ...]:
+    """How MargenX counted the costs, in plain words, for the owner to check before J1: each job's (or customer's)
+    sales and job costs; with jobs on, each customer's sales and costs not on a job in this report (named outside
+    jobs by name); costs whose customer, job or kind isn't known yet; lines not resolved; and overhead. Exact
+    amounts, credits shown as credits."""
+    out = []
+    if jobs_on:
+        for (customer, job), figs in sorted(jobs.items()):
+            out.append(f"{customer} › {job}: sales {_money(figs['sales'].amount)}, job costs "
+                       f"{_money(figs['job_costs'].amount)}")
+        apart: dict[tuple[str, str], list[Decimal]] = {}
+        for r in resolutions:
+            if (r.kind in (REVENUE, REDUCTION, JOB_COST) and r.customer is not None and r.job is None
+                    and r.amount is not None):
+                status, outside = attribution(r, jobs_on)
+                where = (f"the job \"{outside}\", which isn't in this report" if status == "outside job" else
+                         "no job" if status == "no job" else "a job MargenX doesn't know yet")
+                sums = apart.setdefault((r.customer, where), [ZERO, ZERO])
+                sums[0 if r.kind in (REVENUE, REDUCTION) else 1] += r.amount
+        for (customer, where), (sales, costs) in sorted(apart.items()):
+            out.append(f"{customer}, {where}: sales {_money(sales)}, job costs {_money(costs)}")
+    else:
+        for customer, figs in sorted(customers.items()):
+            out.append(f"{customer}: sales {_money(figs['sales'].amount)}, job costs "
+                       f"{_money(figs['job_costs'].amount)}")
+    nobody = [r.amount for r in resolutions if r.kind == JOB_COST and r.customer is None and r.amount is not None]
+    if nobody:
+        out.append(f"Job costs whose customer isn't known yet: {len(nobody)} line{'' if len(nobody) == 1 else 's'}, "
+                   f"{_money(sum(nobody, ZERO))}")
+    unknown = [r.amount for r in resolutions if r.kind == COST_KIND_UNKNOWN and r.amount is not None]
+    if unknown:
+        out.append(f"Costs not yet known to be a job cost or overhead: {len(unknown)} line"
+                   f"{'' if len(unknown) == 1 else 's'}, {_money(sum(unknown, ZERO))}")
+    open_lines = [r for r in resolutions if r.kind == NOT_RESOLVED]
+    if open_lines:
+        known = sum((r.amount for r in open_lines if r.amount is not None), ZERO)
+        unreadable = sum(1 for r in open_lines if r.amount is None)
+        out.append(f"Lines not resolved yet, so not counted: {len(open_lines)}, {_money(known)}"
+                   + (f" plus {unreadable} with an amount MargenX can't read" if unreadable else ""))
+    out.append(f"Overhead: {_money(company['overhead'].amount)}")
+    return tuple(out)
+
+
+def cost_list_digest(jobs_on: bool, resolutions: list[Resolution], listing: tuple[str, ...]) -> str:
+    """What a J1 answer is bound to: whether sub-customers are jobs, every line's resolution (row, what it is,
+    customer, job, amount) with where it goes (attribution: the outside job's name included), and the list shown.
+    Any answer that changes how a line is counted or where it goes gives a new digest."""
+    import hashlib
+    import json
+
+    parts = [jobs_on, [[r.row, r.kind, r.customer, r.job, None if r.amount is None else str(r.amount),
+                        *attribution(r, jobs_on)] for r in resolutions], list(listing)]
+    return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
+
+
+def no_job_costs(jobs_on: bool, customers: dict, jobs: dict,
+                 resolutions: list[Resolution]) -> dict[tuple, tuple[Hold, ...]]:
+    """J3: the holds for each job ("job", key) and customer ("customer", name) with counted sales activity (any
+    revenue or reduction line counted for it, even netting to $0) and no counted job cost, or counted job costs of
+    $0 or less. With jobs on, a customer with sales not on a job in this report always holds: nothing shows which of
+    its costs go with them. Costs for a named job outside this report never count for any job in it."""
+    activity: set = set()
+    loose: set = set()  # customers with sales not on a job in this report (jobs on)
+    costs: dict = {}
+    for r in resolutions:
+        if r.customer is None or r.amount is None:
+            continue
+        if r.kind in (REVENUE, REDUCTION):
+            activity.add(("customer", r.customer))
+            if jobs_on and r.job is not None:
+                activity.add(("job", (r.customer, r.job)))
+            elif jobs_on:
+                loose.add(r.customer)
+        elif r.kind == JOB_COST:
+            costs.setdefault(("customer", r.customer), []).append(r.amount)
+            if jobs_on and r.job is not None:
+                costs.setdefault(("job", (r.customer, r.job)), []).append(r.amount)
+
+    def bare(key) -> bool:
+        found = costs.get(key, [])
+        return key in activity and (not found or sum(found, ZERO) <= ZERO)
+
+    found: dict[tuple, tuple[Hold, ...]] = {}
+
+    def add(key, reason):
+        found[key] = (*found.get(key, ()), Hold(None, None, reason, kind=NO_JOB_COSTS_HOLD))
+
+    for key in (sorted(jobs) if jobs_on else ()):
+        if bare(("job", key)):
+            reason = (f"{key[0]} › {key[1]}: no job costs are counted for this job in this report yet, or they add up "
+                      "to $0 or less (credits included), so its profit may be misstated.")
+            add(("job", key), reason)
+            add(("customer", key[0]), reason)
+    for customer in sorted(customers):
+        # Once one of its jobs holds it, the job's reason says why; the customer's own reason would repeat it.
+        if bare(("customer", customer)) and ("customer", customer) not in found:
+            add(("customer", customer), f"{customer}: no job costs are counted for this customer in this report "
+                                        "yet, or they add up to $0 or less (credits included), so its profit may be "
+                                        "misstated.")
+        if customer in loose:
+            add(("customer", customer), f"Some of {customer}'s sales aren't on a job in this report, so MargenX can't "
+                                        "tell which costs go with them, and this customer's profit may be misstated.")
+    return found
 
 
 def figures(report: qp.ProfitAndLossDetail, answers: OwnerAnswers | None = None, cross_check=None) -> Figures:
