@@ -1,6 +1,10 @@
 # MargenX pilot visit checklist (sit-down pilot)
 
-**Use this only after the owner has approved real data for a named pilot shop in a written decision (D-008 or later; D-006 is the public demo page and D-007 the wider target customer, and neither approves any files).** Until then, use the made-up sample files only. Merging step 3 doesn't approve real data by itself (D-003).
+**Use this only after Alex has approved, in writing, this named shop's real files for a sit-down visit on the team laptop, before the team receives any of its files.** No standing decision covers it:
+- D-008 approves real files only for the website trial, and says the sit-down pilot needs its own owner decision for each named shop;
+- D-006 is the public demo page, and D-007 the wider target customer; neither approves any files.
+
+Until that written approval exists, use made-up files only. Merging this checklist doesn't approve real data by itself (D-003).
 
 How the pilot works: Alex or Abrey visits the shop and runs MargenX on a team laptop, with the shop owner present. The shop's files are read in memory only. They are never saved, uploaded or kept after the session.
 
@@ -45,15 +49,21 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
 1. **Sign the agreement first, before any files.** Walk through it in plain words, especially: what MargenX shows (job contribution, not net profit), how files are handled and cleaned up, that it isn't advice, and the limit of responsibility. Both of you sign and date both copies; the owner keeps one, with the Privacy Notice.
 2. **Explain what happens on screen.** Use the agreement text on the screen too: we read their files on this laptop only, nothing is kept, and they can stop at any time.
 3. **Ask for files without sensitive details.** Before exporting, ask the owner to leave out Social Security numbers, card numbers, bank logins and other personal details. If a file has them, don't use it: ask for a clean version that still has every sale or cost row. **Never run with only part of what MargenX needs** (see step 4): if a clean version isn't possible, stop the pilot rather than show results with something missing.
+   - **For QuickBooks workbooks, check them on the owner's computer before they are moved.** Look through the **Name**, **Memo/Description** and similar columns with the owner. They hold customer, vendor and sometimes employee names, which is expected. Check that they hold no Social Security, card or bank numbers, tax IDs, or individual payroll details.
+   - **Don't edit an exported workbook to remove such details:** a re-saved file may no longer match the layout MargenX reads. If a workbook has such details, stop the visit for that file.
 4. **The shop owner exports the files on their own computer while you watch.** Which files depends on how they keep their books:
    - **QuickBooks Online (the usual case):**
      1. **Reports** → **Profit and Loss Detail**. Choose the dates to look at, for example last quarter, and **Accounting method: Accrual**. Cash basis is refused.
      2. **No filters, and no changed columns.** Leave every customer and every account in. A filter doesn't show in the file, so MargenX can't see it, and it can make jobs look more profitable than they are.
      3. **Export** → **Export to Excel**.
-     4. **Sales by Customer Detail for the same dates**, exported the same way. MargenX uses it only to double-check the sales. Without it, profit by job can't be Complete.
+     4. **Optional, but needed for job profit to be Complete: Sales by Customer Detail** from the **same company**, for the **same dates**, also **accrual**, also exported to Excel (`.xlsx`). MargenX uses it only to double-check the sales; its amounts are never added. The Profit and Loss Detail works on its own, but profit by job can be Complete only when this check is usable **and** the owner separately confirms that both exports were unfiltered.
 
      The menu names are still to be confirmed against a real QuickBooks Online account; correct them here if they differ. A Profit and Loss Detail already holds the sales and the costs, so don't add other sales or cost files with it.
    - **Other systems (for example Square):** the sales or invoices file and the costs or bills file, as CSV.
+   - **Every file must be under 1 MB (1,000,000 bytes).** Check each one on the owner's computer before it is moved: in Finder, select the file → **Get Info** → **Size**, which shows the exact number of bytes.
+     - **Why:** MargenX keeps uploads in memory only up to this size. The web library it runs on (Starlette 1.9.0, used by Streamlit 1.65.0) writes an upload larger than 1 MiB to a temporary file on the laptop's disk while reading it. That would break the promise that nothing is saved.
+     - **If a file is larger:** export a shorter date range (for example one month instead of a quarter) and check again. If it still doesn't fit, stop the visit for that file.
+     - This limit holds until a change to MargenX is shown to keep larger uploads in memory.
 5. **Move the files to the laptop with a USB drive or AirDrop.** Don't email them, and don't put them in Google Drive, Dropbox or a chat app.
 6. **Never put a shop's file, numbers or screen into any AI tool** (ChatGPT, Claude, Copilot or similar) or any website. We only open their files in MargenX on the laptop, and never upload or send them anywhere.
 7. **The owner ticks the agreement box themselves.** Then upload the files.
@@ -61,7 +71,12 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
    - **For a QuickBooks report, MargenX lists the cost accounts it found, with their totals, and asks whether the file includes the whole business, with no filters.** The owner chooses **Yes, I checked** only after checking that list against QuickBooks and their export settings. **No, something is missing** and **Not sure** are fine answers. Until the answer is "Yes, I checked", every figure says **Needs a check (missing amount unknown)**.
    - **Never nudge the owner toward "Yes" to make a figure Complete.** A Complete figure built on a guessed answer is exactly what MargenX exists to avoid.
 9. **Look at the results together.** Write down what they say in the #30 format, in their own words. **Never copy their numbers, customer names or job details into notes.** Write "a customer job lost money on materials", not "Acme lost $412".
-   - **Explain "Needs a check" plainly:** MargenX couldn't prove that figure from the file and the answers, and it says why. That's the product working, not a fault.
+   - **Explain "Needs a check" plainly:** one or more of MargenX's checks or the owner's confirmations are still open for that figure, and MargenX says which. That's the product working, not a fault.
+   - **Explain "Complete" just as plainly:** MargenX's required checks and the owner's confirmations passed for that figure. It isn't a guarantee that nothing was left out of QuickBooks.
+   - **Until the labor-gap fix (#128) is on `main`, treat job and customer profit as provisional** wherever applicable job costs (crew pay, materials, subcontractors) are missing from the jobs, booked only to overhead, or uncertain, **even if MargenX shows Complete.**
+     - **Why:** today a QuickBooks job with materials but no labor can show Complete, even after the sales double-check and the coverage confirmation pass.
+     - **Ask the owner** whether crew pay and other direct costs are recorded on each job. If they aren't, or they aren't sure, say so out loud and in your notes: "provisional: job costs may be missing".
+     - Remove this rule only when the fix is merged and this checklist is updated.
 10. **No screenshots or photos of the screen,** and no recording of the session.
 
 ## Before you leave (don't skip this)
@@ -76,9 +91,9 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
 - [ ] **File the signed agreement** where the Privacy Notice says signed agreements are kept.
 
 ## Before the first real visit, and after any Streamlit upgrade
-Repeat the real upload-and-delete test with a **made-up** CSV, and again with a **made-up** QuickBooks Profit and Loss Detail (from QuickBooks' practice company). MargenX's cleanup relies on Streamlit 1.65.0 internals (`pilot_safety.release_uploads`).
+Repeat the real upload-and-delete test with a **made-up** CSV. Then repeat it with **both** made-up QuickBooks workbooks (a Profit and Loss Detail and a Sales by Customer Detail from QuickBooks' practice company) uploaded together in the same session, each under 1 MB. MargenX's cleanup relies on Streamlit 1.65.0 internals (`pilot_safety.release_uploads`).
 1. Start pilot mode and tick the agreement.
-2. Upload the made-up file and check that it is read: the CSV's line, or the Profit and Loss Detail's questions and results.
+2. Upload the made-up files and check that they are read: the CSV's line, or the QuickBooks questions and results.
 3. Click **End session**. It must show the "removed from MargenX's upload storage" message, and the file name and results must be gone.
 4. Run the test suite (`python -m unittest discover -s tests`). It must pass.
 
@@ -94,7 +109,7 @@ Repeat the real upload-and-delete test with a **made-up** CSV, and again with a 
 
 ## What this setup does and doesn't protect
 - **It does:**
-  - Files stay on one laptop and in memory only.
+  - Files stay on one laptop and in memory only, **as long as each file is under 1 MB** (step 4).
   - Nothing is saved by MargenX. **End session** removes the uploaded files from MargenX's upload storage, clears the answers and results, and checks the files are gone before saying so. It can't prove that no copy remains anywhere in the computer's memory, which is why the tab is closed and MargenX stopped at the end of every visit (stopping MargenX drops everything). A closed tab's files are dropped within about 10 seconds.
   - No usage data is sent anywhere.
   - Error pages show no file contents.
