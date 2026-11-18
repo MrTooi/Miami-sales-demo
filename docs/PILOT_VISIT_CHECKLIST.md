@@ -15,6 +15,7 @@ How the pilot works: Alex or Abrey visits the shop and runs MargenX on a team la
 - [ ] **The laptop has a password and locks** after a few minutes idle.
 - [ ] **Find My (Mac) or Find my device (Windows) is turned on**, so a lost laptop can be located and locked (on a Mac, also erased).
 - [ ] **Latest MargenX:** in the project folder, run `git pull`.
+- [ ] **The upload library versions are unchanged, checked before every visit** (the 1 MB rule in step 4 depends on them). In the Python setup MargenX runs with, run `python -c "import streamlit, starlette; print(streamlit.__version__, starlette.__version__)"`. It must print `1.65.0 1.9.0`. **If either number differs, don't take real files** until the limit is checked again ("Before the first real visit", step 5).
 - [ ] **No screen recording, screen sharing or remote-control apps** are running.
 - [ ] **Cloud syncing is off for the folders files may land in** (Downloads, Desktop, Documents): iCloud Drive "Desktop & Documents", Dropbox, Google Drive, OneDrive. The agreement promises shop files aren't sent to any cloud service.
 - [ ] **Automatic backups are paused for the visit** (Time Machine or similar), so no backup copy of the shop's files is made.
@@ -100,7 +101,7 @@ Repeat the real upload-and-delete test with a **made-up** CSV. Then repeat it wi
 2. Upload the made-up files and check that they are read: the CSV's line, or the QuickBooks questions and results.
 3. Click **End session**. It must show the "removed from MargenX's upload storage" message, and the file name and results must be gone.
 4. Run the test suite (`python -m unittest discover -s tests`). It must pass.
-5. **Check the web library the 1 MB rule depends on** (step 4 of the visit). `requirements.txt` pins Streamlit, but Streamlit accepts a range of Starlette versions, so Starlette can change even when Streamlit doesn't.
+5. **Check the web library the 1 MB rule depends on** (step 4 of the visit). `requirements.txt` pins Streamlit, but Streamlit accepts a range of Starlette versions, so Starlette can change even when Streamlit doesn't. **That's why the same version check is also on the "Before the visit" list for every visit.**
    - In the Python setup MargenX runs with, run `python -c "import streamlit, starlette; print(streamlit.__version__, starlette.__version__)"`. It must print `1.65.0 1.9.0`.
    - **If either number differs, don't take real files.** First, the upload limit must be checked again on the installed versions and this checklist updated. The check: does an upload just over the limit stay in memory?
 
