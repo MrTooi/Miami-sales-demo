@@ -6,7 +6,11 @@
 
 Until that written approval exists, use made-up files only. Merging this checklist doesn't approve real data by itself (D-003).
 
-How the pilot works: Alex or Abrey visits the shop and runs MargenX on a team laptop, with the shop owner present. The shop's files are read in memory only. They are never saved, uploaded or kept after the session.
+How the pilot works: Alex or Abrey visits the shop and runs MargenX on a team laptop, with the shop owner present.
+- **The exported files themselves** are copied to the laptop (by USB drive or AirDrop) for the visit. They sit in the laptop's storage, and on the USB drive if one is used, until they are deleted before you leave ("Before you leave"). They are never sent to any cloud service or website.
+- **MargenX** reads them in memory only, as long as each file is under 1 MB (step 4). It never saves them, uploads them anywhere or keeps them after the session.
+
+Explain both parts to the owner before they agree to anything.
 
 **This checklist is how we keep the promises in the signed MargenX Free Pilot Agreement and Privacy Notice** (draft kept as a Claude Doc; the owner fills in the blanks before first use). If a step here can't be done, don't run the pilot: the agreement says we do it. A signed agreement doesn't approve real data by itself; the real-data decision above still comes first.
 
@@ -67,7 +71,7 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
        - Its upload handler reads each upload with Starlette's form parser.
        - Starlette 1.9.0 writes an upload part larger than 1 MiB (1,048,576 bytes) to a temporary file on the laptop's disk while reading it. That would break the promise that nothing is saved.
        - This rule is checked against those exact versions; see "Before the first real visit", step 5.
-     - **If a file is larger:** export a shorter date range (for example one month instead of a quarter) and check again. If it still doesn't fit, stop the visit for that file.
+     - **If a file is larger:** export a shorter date range (for example one month instead of a quarter) and check again. **If you're using the Sales by Customer Detail too, export both reports again for the same shorter dates.** If it still doesn't fit, stop the visit for that file.
      - This limit holds until a change to MargenX is shown to keep larger uploads in memory.
 5. **Move the files to the laptop with a USB drive or AirDrop.** Don't email them, and don't put them in Google Drive, Dropbox or a chat app.
 6. **Never put a shop's file, numbers or screen into any AI tool** (ChatGPT, Claude, Copilot or similar) or any website. We only open their files in MargenX on the laptop, and never upload or send them anywhere.
@@ -117,7 +121,7 @@ Repeat the real upload-and-delete test with a **made-up** CSV. Then repeat it wi
 
 ## What this setup does and doesn't protect
 - **It does:**
-  - Files stay on one laptop and in memory only, **as long as each file is under 1 MB** (step 4).
+  - **MargenX's own handling stays in memory, as long as each file is under 1 MB** (step 4). The exported copies on the laptop and the USB drive are ordinary files until the "Before you leave" steps delete them.
   - Nothing is saved by MargenX. **End session** removes the uploaded files from MargenX's upload storage, clears the answers and results, and checks the files are gone before saying so. It can't prove that no copy remains anywhere in the computer's memory, which is why the tab is closed and MargenX stopped at the end of every visit (stopping MargenX drops everything). A closed tab's files are dropped within about 10 seconds.
   - No usage data is sent anywhere.
   - Error pages show no file contents.
