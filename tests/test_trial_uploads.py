@@ -240,6 +240,12 @@ class BeforeTheBodyTests(UploadBase):
         self.assertEqual([], [a for a in state.issue("s1", 1) if a in state._attempts])
         self.assertEqual("unavailable", state.grant("s1", t.INVITED))  # no launcher: no consent at all
 
+    def test_an_address_recorded_for_another_session_is_never_accepted(self):
+        """Defense in depth: addresses are only ever recorded for the consented session, but even one recorded
+        for another session (planted here directly) is refused."""
+        self.state._attempts["planted"] = ta.Attempt("s2")
+        self.assertFalse(self.state.begin_upload("s1", "planted"))
+
     def test_the_consented_tab_gone_means_no_upload(self):
         file_id = self.address()
         self.state.leave(self.state.consented_connection)  # the tab closed: the process ends
@@ -305,6 +311,48 @@ class ThroughStreamlitTests(UploadBase):
         self.upload(file_id, body, client=client)
         self.assertEqual(403, client.status())
         self.assertEqual(2, client.reads)  # nothing read after the ending
+        self.assertEqual([], self.stored(file_id))
+
+    def test_an_ending_between_two_chunks_stops_the_reading_at_once(self):
+        body = multipart(content=b"z" * 300_000)
+        client = Client(body, chunk=10_000)
+        original = client.receive
+
+        async def receive():
+            message = await original()
+            if client.reads == 2:  # the ending lands right after the second chunk was handed on
+                asyncio.get_running_loop().call_soon(self.state.end)
+            return message
+        client.receive = receive
+        file_id = self.address()
+        self.upload(file_id, body, client=client)
+        self.assertEqual(403, client.status())
+        self.assertEqual(2, client.reads)
+        self.assertEqual([], self.stored(file_id))
+
+    def test_once_ending_the_upload_reader_asks_for_no_more_chunks(self):
+        calls = []
+
+        async def receive():
+            calls.append(1)
+            return {"type": "http.request", "body": b"x", "more_body": True}
+
+        async def read_after_ending():
+            limited = self.gate()._limited(receive)
+            first = await limited()
+            self.state.end()
+            return first, await limited()
+        first, after = asyncio.run(read_after_ending())
+        self.assertEqual("http.request", first["type"])
+        self.assertEqual("http.disconnect", after["type"])
+        self.assertEqual(1, len(calls))  # the browser's next chunk was never even asked for
+
+    def test_streamlits_success_is_turned_into_a_refusal_when_nothing_was_stored(self):
+        file_id = self.address()
+        with mock.patch.object(self.state, "commit", return_value=False):  # the store refused to commit it
+            client = self.upload(file_id, multipart())
+        self.assertEqual(403, client.status())
+        self.assertEqual(1, self.handler_calls)  # Streamlit's handler did answer, with its 204
         self.assertEqual([], self.stored(file_id))
 
     def test_broken_forms_are_refused_and_store_nothing(self):
@@ -566,9 +614,25 @@ class LiveConnectionTests(unittest.TestCase):
 
     def test_nothing_more_is_sent_once_the_process_is_ending(self):
         state = ConsentTests.state(self)
-        state.ending = True
         later = {"type": "websocket.send", "bytes": b"results"}
-        sent = self.serve(state, [], [later])
+
+        async def app(scope, receive, send):
+            await send({"type": "websocket.accept"})
+            state.ending = True  # the process starts ending while results are queued for this connection
+            await send(later)
+            await receive()
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+
+        async def receive():
+            await asyncio.sleep(0.05)
+            return {"type": "websocket.disconnect", "code": 1000}
+        gate = ta.TrialGate(app, config=t.CONFIG, checker=t.checker(), register=state.register, state=state,
+                            check_every=0.01)
+        asyncio.run(gate(t.ws_scope(tok=t.token()), receive, send))
+        self.assertTrue(any(m["type"] == "websocket.accept" for m in sent))
         self.assertNotIn(later, sent)
 
 
@@ -618,6 +682,8 @@ class UploadLimitsTests(unittest.TestCase):
         ratio = workbook(part_size=5_000_000)  # under the total, but over 100 times compressed
         self.assertEqual(upload_limits.TOO_MUCH, upload_limits.refusal("report.xlsx", ratio))
         self.assertEqual(upload_limits.TOO_MUCH, upload_limits.refusal("report.xlsx", workbook(parts=101)))
+        many = workbook(part_size=1_000_000, parts=30)  # each part small enough for the ratio rule, 30 MB in all
+        self.assertEqual(upload_limits.TOO_MUCH, upload_limits.refusal("report.xlsx", many))
         for message in (upload_limits.TOO_BIG, upload_limits.BROKEN, upload_limits.TOO_MUCH):
             self.assertNotIn("report", message)  # never quotes the file
 
@@ -756,6 +822,16 @@ class TrialPagePieces(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         self.assertIn("reads only QuickBooks Online's Profit and Loss Detail", at.error[0].value)
         self.assertEqual(["arm", "disarm"], self.pipe.read())  # read inside the slot, the deadline armed
+
+    def test_a_quickbooks_report_with_another_file_alongside_is_refused(self):
+        state, consent = self.consented_state()
+        found = SimpleNamespace(quickbooks=True, other=[object()])
+        with consent, mock.patch("quickbooks_upload.sort_files", return_value=found), \
+                mock.patch("quickbooks_upload.show") as show:
+            at = self.run_page(state, uploads=(FakeUpload("pnl.xlsx", workbook()), FakeUpload("other.xlsx", workbook())))
+        self.assertFalse(at.exception, at.exception)
+        self.assertIn("reads only QuickBooks Online's Profit and Loss Detail", at.error[0].value)
+        show.assert_not_called()
 
     def test_an_oversized_or_broken_file_is_refused_before_any_reader(self):
         state, consent = self.consented_state()

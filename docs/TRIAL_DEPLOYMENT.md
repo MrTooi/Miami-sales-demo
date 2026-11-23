@@ -42,7 +42,8 @@ browser ──HTTPS──> Cloudflare Access (emailed one-time code, exact invit
 │    ├─ cloudflared (pinned version, checksum checked at build): "Protect with Access"  │
 │    └─ MargenX (Streamlit, trial_app.py) on 127.0.0.1:8501 only                        │
 │         └─ TrialGate (trial_access.py): checks the token again on every request,      │
-│            exact host, live connections, logout, no-store; refuses every upload       │
+│            exact host, live connections, logout, no-store; one consent per process;  │
+│            every upload checked before its body is read (uploads PR, plan v7)         │
 └───────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -62,8 +63,8 @@ It holds no setting, token or secret, and the Dockerfile declares **no build arg
   - a stop that arrives while MargenX is still starting ends the wait at once, and the tunnel is never started;
   - **no stop can slip in between the last check and the tunnel's start:** from that check until the tunnel exists, the host's stop signals are held back and then looked at. A stop that arrived before the start means the tunnel is never started. One that arrives during the start itself, the few milliseconds of creating the process, means the new tunnel is killed at once, without its grace period;
 - gives the token to the tunnel only, and the trial settings to MargenX only;
-- **never restarts anything:** if either program stops, it stops the other and exits, so the whole copy stops;
-- on the host's stop, stops MargenX first (no request is handled any more), then the tunnel, which has a 1-second grace period;
+- **supervises MargenX (the uploads PR, plan v7).** One MargenX process holds at most one shop consent, for one tab, and **any ending ends that process**: End session, Log out, the consented tab's connection closing (a closed or reloaded tab, a Wi-Fi drop, an expired login), or MargenX asking. The launcher then kills MargenX's whole process group at once (SIGKILL), reads its control pipe to the end, and starts a **fresh, empty MargenX** on the same port, with a fresh pipe; the tunnel keeps running and open tabs reload by themselves. The launcher also replaces MargenX when reading a file takes more than **60 s**, when MargenX sends no heartbeat for **15 s**, or when its memory passes **1.2 GB**, so a stuck MargenX is still stopped. Log lines say only why: `recycled: session ended`, `recycled: work took too long`, `recycled: not responding`, `recycled: memory`, `recycled: MargenX stopped by itself`. **Logouts survive this:** the launcher keeps the latest logout time (never lowered) and gives it to every new MargenX before it serves anything; after any ending it can't fully explain (anything but a clean End session), it treats every earlier login as logged out (`...; every earlier login must log in again`), with a 30-second margin. MargenX starts with **no core dumps**. More than 3 unexplained endings within 10 minutes: both programs are stopped for good (`stopped: MargenX ended unexpectedly too often`);
+- **never restarts an ended trial and never exits by itself:** on the host's stop or a stop-now, MargenX's process group is killed first (no request is handled any more), then the tunnel, which has a 1-second grace period, and nothing is started again. If the tunnel stops by itself, the launcher hits an error, or MargenX can't be kept running, both are stopped and the launcher **waits for Render's stop** instead of exiting (log: `stopped: ...; waiting for the host's stop (Suspend), nothing restarts`): Render would restart an exited copy, and a restarted launcher would have forgotten the logout time. To recover: Suspend, then follow the restart check (section 7, step 4) before any shop is let back in;
 - never prints a setting's value or the token;
 - **closed mode** (`MARGINX_TRIAL_CLOSED=1`): MargenX is given nobody's address (`closed@margenx.invalid`) instead of the invited email, so the copy itself refuses every login. The log says `closed: this copy refuses every login`. Since PR B, MargenX's gate then refuses **every** request before any login check, with the page text "This MargenX trial copy is closed." and the response header `X-MargenX-Gate: closed`. Used by the restart check (section 7);
 - **the operator's stop-now** (PR B): `python /app/deploy/trial/stop_now.py`, run in Render's **Shell** on the running copy, makes the launcher stop MargenX, then the tunnel, **at once**. It is **expected** to cut every open tab within seconds: under 3 s in local tests with stand-in programs. On Render this is still to be shown in PR B's release run, and for an upload in progress in the uploads PR. A stop-now the launcher has received wins however it is ending (a program stopping by itself, an error, or the cleanup), **except** one that lands in the instant after its last check, as it exits: that one is lost, and the command then prints a WARNING (section 7, step 1.ii). The launcher then **stays running and does nothing** (log: `stopped now: MargenX and the tunnel are stopped; waiting for the host's stop`), so Render doesn't see the copy end by itself and doesn't restart it (outside that one instant). **A successful command means only that the request was sent and the launcher was still running 5 s later**, not that the stop finished: the `stopped now` log line, the open tab disconnected, the tunnel Down and Render's Suspend are still all required (section 7, step 1.iv). Suspend is still pressed.
@@ -345,7 +346,7 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
 - **No pushes, no schedules:**
   - Auto-Deploy is off, so a push to GitHub doesn't deploy.
   - There is no cron job or scheduled job.
-- **The launcher:** never restarts a program. If one stops, the whole copy stops.
+- **The launcher:** replaces MargenX with a fresh, empty one after a session ends (above), but never after the host's stop or a stop-now, and never restarts the tunnel. If the tunnel stops, or MargenX can't be kept running, both are stopped and the launcher waits for Render's stop.
 - **After a stop-now** (section 7, step 1.ii), the launcher keeps both programs stopped and waits only for Render's stop. Nothing in the copy starts them again.
 - **The tunnel:** with the copy stopped, nothing connects to it, and after the stop procedure it has no public hostname either. Cloudflare shows its own error page, and MargenX is unreachable.
 
@@ -358,13 +359,7 @@ The plan checks PR A by "a run against the operator-only copy, with results on t
   - packages: regenerate `requirements.lock` as its header says.
 
 ## 10. Not in this PR (later steps)
-- **The uploads-on PR** (after #128's reading is ready). It covers:
-  - consent;
-  - a consent withdrawal that is safe against an upload in flight;
-  - file, unpacked-size, time and concurrency limits;
-  - no upload bytes left on disk or in Streamlit's storage after cleanup;
-  - making sure no error log quotes a file's contents (logs can't be switched off on the hosts);
-  - **the upload parts of the release checks** (Alex, 2026-11-17: PR B without uploads): check 2, check 3's hosted run, the slow upload in check 5, upload markers in check 6, and the worst-case memory (`docs/TRIAL_RELEASE_CHECKS.md`).
+- **The uploads PR** (plan v7, reviewed PASS WITH WARNINGS; built in its own PR): consent per process and tab; every ending ends the MargenX process under the launcher's supervision (above); every upload checked before its body is read; file, unpacked-size, time and concurrency limits; no spooling to disk; no file name or contents in logs or refusals. **The upload parts of the release checks run once, on that PR's exact head** (`docs/TRIAL_RELEASE_CHECKS.md`).
 - **PR B** (this guide's PR B additions are listed at the top): the release checks that work with the made-up samples, the stop-now, the self-check, closed mode's own refusal, the two PR #137 follow-ups (a total deadline and a cap on token checks; open live connections checked again against Cloudflare's current keys), and drafts of the trial terms (`docs/TRIAL_TERMS_DRAFT.md`), the one-page guide (`docs/TRIAL_SHOP_GUIDE.md`) and Alex's checklist (`docs/TRIAL_OPERATOR_CHECKLIST.md`).
 - **The provider retention evidence** (plan section 3.4). Real files stay off until it's complete for the exact host and data path.
 - **The website:** its Log in link set to the app's address with no password form, and its Privacy Policy matching the emailed-code login (issue #131 comment of 2026-11-04). This needs fixing before any shop is invited.

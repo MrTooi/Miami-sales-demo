@@ -405,6 +405,11 @@ class SupervisorTests(unittest.TestCase):
             launch.kill_app(gen.proc)
             gen.close()
 
+    def test_margenx_starts_with_no_core_dumps(self):
+        out = subprocess.run([sys.executable, "-c", "import resource;print(resource.getrlimit(resource.RLIMIT_CORE))"],
+                             preexec_fn=launch._app_preexec, capture_output=True, text=True, timeout=30)
+        self.assertEqual("(0, 0)", out.stdout.strip())
+
     def test_killing_margenx_takes_its_whole_process_group(self):
         child = subprocess.Popen([sys.executable, "-c", "import subprocess,sys,time;"
                                   "p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"

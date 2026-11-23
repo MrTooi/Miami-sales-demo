@@ -26,6 +26,8 @@
 
 ## D. During the trial
 - Nothing changes on the copy. No deploys. If something must change, stop first.
+- **`recycled: ...` lines in Render's log are normal** (uploads PR): each one is a session ending (End session, Log out, a closed tab, a Wi-Fi drop) and MargenX starting fresh. Lines ending `every earlier login must log in again` mean MargenX ended unexpectedly or took too long: the shop sees **Log in again**. Note the time privately; if it happens more than once, ask the shop how it went.
+- **If the log says `stopped: ... waiting for the host's stop`** (the tunnel stopped, or MargenX ended unexpectedly too often), the copy is down and won't come back by itself. Treat it as an early end (section E), then tell the shop. Restarting it for the same shop needs the restart check (`docs/TRIAL_DEPLOYMENT.md`, section 7, step 4) and your yes again.
 - Answer questions without ever asking for a financial file.
 - Hold the follow-up meeting **before** the closeout if it uses the results screen.
 
