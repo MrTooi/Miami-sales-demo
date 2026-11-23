@@ -336,7 +336,9 @@ The tests also check:
 - another job's or an outside job's costs never count for a job with none;
 - with jobs on, a customer with sales not on a job holds; with jobs off, each customer is checked;
 - profit after overhead keeps exactly its other holds;
-- the cells, the headline and What's missing say "job costs may be misstated", never an amount.
+- the cells, the headline and What's missing say "job costs may be misstated": each figure keeps
+  its own amount, as with every hold, and no dollar amount is ever given for what may be missing or
+  misplaced (never a held amount, never $0).
 
 **Random reports.** `tests/qbo_pnl_reports.py` gives each report one job-cost answer, from its own
 random draw: "yes" (half), "overhead", none, a "yes" for another list, or a "yes" to other words.

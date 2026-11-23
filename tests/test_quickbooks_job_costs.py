@@ -509,6 +509,15 @@ class ResultsTests(unittest.TestCase):
         self.assertIn("Customer Y (fictional) › Patio: no job costs are counted for this job in this report yet, or "
                       "they add up to $0 or less (credits included), so its profit may be misstated.",
                       qr.missing(confirmed))
+        # D-011: each figure keeps its own amount (as with every hold), and the note beside it never gives a dollar
+        # amount for what may be missing or misplaced: no held amount, never $0.
+        for result in (unanswered, some, confirmed):
+            for _, group in t.every_figure(result):
+                for figure in group.values():
+                    text = qr.cell(figure)
+                    if qf.MAY_BE_MISSTATED in text:
+                        self.assertTrue(text.startswith(qr.money(figure.amount) + " · Needs a check ("), text)
+                        self.assertNotIn("$", text.split(" · Needs a check (", 1)[1], text)
 
 
 if __name__ == "__main__":

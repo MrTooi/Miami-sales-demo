@@ -88,7 +88,9 @@ def cell(figure: qf.Figure) -> str:
     amounts = _held_text(figure)
     unknown = [qf.MISSING_UNKNOWN] if figure.coverage_open else []
     if any(hold.kind in (qf.JOB_COSTS_HOLD, qf.NO_JOB_COSTS_HOLD) for hold in figure.holds):
-        unknown.append(qf.MAY_BE_MISSTATED)  # never an amount: what may be missing or misplaced isn't known
+        # The figure keeps its own amount, as with every hold (S8, D-011); what may be missing or misplaced has no
+        # amount, so none is ever shown for it, never $0.
+        unknown.append(qf.MAY_BE_MISSTATED)
     if not amounts:
         return f"{money(figure.amount)} · {NOT_FINAL} ({'; '.join(unknown) or 'see why below'})"
     lines = sum(_held(figure))
