@@ -79,13 +79,16 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
 8. **The owner answers MargenX's questions themselves.** You can read a question out and explain the words, but the answer is theirs: it's about their books, and MargenX relies on it.
    - **For a QuickBooks report, MargenX lists the cost accounts it found, with their totals, and asks whether the file includes the whole business, with no filters.** The owner chooses **Yes, I checked** only after checking that list against QuickBooks and their export settings. **No, something is missing** and **Not sure** are fine answers. Until the answer is "Yes, I checked", every figure says **Needs a check (missing amount unknown)**.
    - **Never nudge the owner toward "Yes" to make a figure Complete.** A Complete figure built on a guessed answer is exactly what MargenX exists to avoid.
+   - **Then MargenX asks about job costs (the labor-gap fix, #151, D-011):** "Is every job cost for these dates in this report, on its job?" ("customer" when jobs aren't used).
+     - **What the owner sees:** MargenX shows how it counted the costs for those dates: which costs went to which job, and which to overhead.
+     - **What they check:** that list against their payroll and vendor bills for those dates. Posted costs only, not QuickBooks Projects' estimated labor. Unpaid work they do themselves isn't a cost.
+     - **The three answers:** **Yes, I checked**; **All of them are in this report, but some are booked to overhead**; **Not sure, or some may be missing**.
+     - **Not sure is a fine answer:** job costs and profit then stay on Needs a check, and MargenX says why. If a job has sales but no costs at all, it stays on Needs a check too.
+     - **If an answer to another question changes how a cost is counted, MargenX asks this question again.** That's expected.
+     - **Same rule as above: the owner answers, never nudged toward Yes.** A mistaken Yes can make missing costs look Complete; MargenX can't see payroll or bills, so it relies on the answer.
 9. **Look at the results together.** Write down what they say in the #30 format, in their own words. **Never copy their numbers, customer names or job details into notes.** Write "a customer job lost money on materials", not "Acme lost $412".
    - **Explain "Needs a check" plainly:** one or more of MargenX's checks or the owner's confirmations are still open for that figure, and MargenX says which. That's the product working, not a fault.
    - **Explain "Complete" just as plainly:** MargenX's required checks and the owner's confirmations passed for that figure. It isn't a guarantee that nothing was left out of QuickBooks.
-   - **Until the labor-gap fix (#128) is on `main`, treat job and customer profit as provisional** wherever applicable job costs (crew pay, materials, subcontractors) are missing from the jobs, booked only to overhead, or uncertain, **even if MargenX shows Complete.**
-     - **Why:** today a QuickBooks job with materials but no labor can show Complete, even after the sales double-check and the coverage confirmation pass.
-     - **Ask the owner** whether crew pay and other direct costs are recorded on each job. If they aren't, or they aren't sure, say so out loud and in your notes: "provisional: job costs may be missing".
-     - Remove this rule only when the fix is merged and this checklist is updated.
 10. **No screenshots or photos of the screen,** and no recording of the session.
 
 ## Before you leave (don't skip this)
