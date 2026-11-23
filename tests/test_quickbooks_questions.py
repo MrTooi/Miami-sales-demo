@@ -48,9 +48,10 @@ class OrderAndShapeTests(unittest.TestCase):
     def test_questions_come_in_order_with_their_progress(self):
         questions = qq.open_questions(shop())
         kinds = [q.kind for q in questions.questions]
-        # The coverage confirmation comes right after the account questions (the 2026-11-17 design review).
-        self.assertEqual([qq.JOBS, qq.ACCOUNT, qq.ACCOUNT, qq.COVERAGE, qq.LINE], kinds)
-        self.assertEqual([f"Question {n} of 5" for n in range(1, 6)], [q.progress for q in questions.questions])
+        # The coverage confirmation comes right after the account questions (the 2026-11-17 design review); the
+        # job-cost confirmation comes last, after everything that shapes the cost list (J1, the labor-gap plan v3).
+        self.assertEqual([qq.JOBS, qq.ACCOUNT, qq.ACCOUNT, qq.COVERAGE, qq.LINE, qq.JOB_COSTS], kinds)
+        self.assertEqual([f"Question {n} of 6" for n in range(1, 7)], [q.progress for q in questions.questions])
         self.assertEqual("Do you use sub-customers in QuickBooks for jobs?", questions.questions[0].title)
         self.assertFalse(questions.done)
 
@@ -102,7 +103,7 @@ class AnsweringTests(unittest.TestCase):
         same = qq.answer(report, None, questions.questions[0], qq.NOT_SURE)
         self.assertEqual([q.key for q in questions.questions], [q.key for q in qq.open_questions(report, same).questions])
         offered = qq.answer(report, None, questions.questions[0], "something not offered")
-        self.assertEqual(5, len(qq.open_questions(report, offered).questions))
+        self.assertEqual(6, len(qq.open_questions(report, offered).questions))
 
     def test_answering_never_changes_the_old_answers(self):
         report = shop()
@@ -401,7 +402,8 @@ class AnsweringTests(unittest.TestCase):
                                                      L(4, "Invoice", "1003", Y, D("300"), None)])]})
         answers = qq.answer(report, None, qq.open_questions(report).questions[0], "yes")
         titles = [q.title for q in qq.open_questions(report, answers).questions]
-        self.assertEqual(["Does this file include your whole business?", "Which job is this $700.00 for?"], titles)
+        self.assertEqual(["Does this file include your whole business?", "Which job is this $700.00 for?",
+                          "Is every job cost for these dates in this report, on its job?"], titles)
         answers = qq.answer(report, answers, first(qq.open_questions(report, answers), qq.COVERAGE), qf.COVERAGE_YES)
         self.assertEqual(qp.COMPLETE, qf.figures(report, answers).customers[Y]["sales"].status)
 
@@ -474,14 +476,18 @@ class CrossCheckAndProblemTests(unittest.TestCase):
         answers = qq.answer(report, None, qq.open_questions(report, None, check).questions[0], "yes", cross_check=check)
         question = first(qq.open_questions(report, answers, check), qq.NO_FILTER)
         answers = qq.answer(report, answers, question, "yes", cross_check=check)
-        self.assertEqual([qq.COVERAGE], [q.kind for q in qq.open_questions(report, answers, check).questions])
+        self.assertEqual([qq.COVERAGE, qq.JOB_COSTS], [q.kind for q in qq.open_questions(report, answers, check).questions])
         self.assertEqual(qp.NEEDS_A_CHECK,  # S3's answer never stands in for the coverage confirmation
                          qf.figures(report, answers, cross_check=check).jobs[(X, "Job A")]["profit_after_job_costs"].status)
         answers = qq.answer(report, answers, first(qq.open_questions(report, answers, check), qq.COVERAGE),
                             qf.COVERAGE_YES, cross_check=check)
+        answers = qq.answer(report, answers, first(qq.open_questions(report, answers, check), qq.JOB_COSTS),
+                            qf.JOB_COSTS_ON_JOBS, cross_check=check)
         self.assertTrue(qq.open_questions(report, answers, check).done)
-        self.assertEqual(qf.figures(report, answers, cross_check=check).jobs[(X, "Job A")]["profit_after_job_costs"].status,
-                         qp.COMPLETE)
+        # S3 and coverage no longer hold Job A. Its $4,000 sale has no costs in this report, so the no-costs rule (J3,
+        # the labor-gap plan v3) still does, even after the job-cost yes.
+        holds = qf.figures(report, answers, cross_check=check).jobs[(X, "Job A")]["profit_after_job_costs"].holds
+        self.assertEqual([qf.NO_JOB_COSTS_HOLD], [h.kind for h in holds])
 
     def test_the_reports_own_problems_are_listed(self):
         rows = fx.report_rows({"Income": [("Design income", [L(2, "Invoice", "1001", f"{X}:Job A", D("4000"), None)])]})
@@ -496,7 +502,8 @@ class WalkThroughTests(unittest.TestCase):
     def test_answering_every_question_leaves_only_what_can_never_be_counted(self):
         report = shop()
         answers = None
-        script = {qq.JOBS: "yes", qq.COVERAGE: qf.COVERAGE_YES, "Job Materials": qf.JOB_COSTS_ACCOUNT, "Office Supplies": qf.OVERHEAD_ACCOUNT,
+        script = {qq.JOBS: "yes", qq.COVERAGE: qf.COVERAGE_YES, qq.JOB_COSTS: qf.JOB_COSTS_ON_JOBS,
+                  "Job Materials": qf.JOB_COSTS_ACCOUNT, "Office Supplies": qf.OVERHEAD_ACCOUNT,
                   "-$200.00": qf.REDUCTION, "$700.00": "no job", "$900.00": f"job:{X}{qq.SEPARATOR}Job A"}
         for _ in range(20):
             questions = qq.open_questions(report, answers)

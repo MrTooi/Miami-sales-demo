@@ -299,6 +299,73 @@ change: 300 reports and 300 pairs.
   count; "missing amount unknown" not shown; the hold shown as $0; the question no longer asked once
   other questions are answered.
 
+## 9. Every job cost on its job (issue #128, labor-gap plan v3, D-011)
+
+A QuickBooks file can't show that a job's costs are all on the job. Crew pay may run through payroll
+as overhead, materials may be booked to overhead, or a bill may not be entered yet. A line check
+can't prove it either: one small labor bill passes "has labor". So the owner confirms MargenX's own
+cost list, once per file (J1). Until then, every job-cost figure holds (J2). Even after "yes", a job
+or customer with sales and no costs holds (J3). The company's profit after overhead is built from
+its own parts (J4).
+
+**Worked by hand** (`tests/test_quickbooks_job_costs.py`, made up). The full export of section 8,
+with coverage "yes", the second report and the no-filter answer:
+
+| Case | The owner's job-cost answer | Patio's profit after job costs | Company profit after overhead |
+|---|---|---|---|
+| Patio: $800 materials, an $80 labor bill, $450 of crew pay in a payroll account answered overhead | none or "Not sure" | $320, Needs a check (job costs may be misstated) | $2,870, Needs a check |
+| the same | "All of them are in this report, but some are booked to overhead" | $320, Needs a check | **$2,870, Complete** |
+| the same | **a wrong "Yes, I checked"** | **$320, Complete** (really -$130) | $2,870, Complete |
+| Patio: $80 labor on the job, its $800 of materials in an overhead account | a wrong "Yes" | **$1,120, Complete** (really $320) | Complete |
+| Patio: a $1,200 sale, no costs | "Yes" | $1,200, Needs a check (no job costs counted) | Complete |
+| Patio: a $1,200 invoice and its $1,200 credit memo, no costs | "Yes" | $0, Needs a check | Complete |
+
+The wrong-"yes" rows are the limitation the owner accepted (D-011): the confirmation is the owner's
+word against a list they can check, not proof.
+
+The tests also check:
+- an answer for another cost list, another workbook that reads the same, other words or an unknown
+  choice isn't used, with a warning;
+- moving a bill to overhead, to another job, from one outside job to another ("Garage" to "Shed"),
+  or turning jobs off, asks again;
+- a question shown before such a change can't confirm the newer list;
+- "Not sure" for another workbook never withdraws this one's answer;
+- no other answer, upload or second report records it, and it's asked last;
+- yes, then "not sure", updates every status at once with no amount changed;
+- coverage and S3 still hold on their own;
+- another job's or an outside job's costs never count for a job with none;
+- with jobs on, a customer with sales not on a job holds; with jobs off, each customer is checked;
+- profit after overhead keeps exactly its other holds;
+- the cells, the headline and What's missing say "job costs may be misstated": each figure keeps
+  its own amount, as with every hold, and no dollar amount is ever given for what may be missing or
+  misplaced (never a held amount, never $0).
+
+**Random reports.** `tests/qbo_pnl_reports.py` gives each report one job-cost answer, from its own
+random draw: "yes" (half), "overhead", none, a "yes" for another list, or a "yes" to other words.
+It works out, without MargenX code, which customers have a counted sale and no counted cost. Only
+"yes" lets a customer's or the company's job costs be Complete, and never for those customers. In
+`tests/qbo_crosscheck_reports.py`, each job gets one made-up cost bill (its own draw, so the sales
+are as before), and a job's profit is Complete only with that "yes". 300 reports and 300 pairs on
+every change.
+
+- Planted mistakes (2026-11-17), 26 of 28 caught:
+  - **J2:** the hold dropped; kept off profit after overhead with no answer; put on it for "some in
+    overhead" too; kept off overhead; "some in overhead" taken as yes.
+  - **J3:** removed; triggered by net sales instead of activity; $0 of costs let through; customer-only
+    sales never holding; a job's hold never reaching its customer; held costs, another job's costs or
+    an outside job's costs counted for a job.
+  - **The binding:** the outside job's name or each line's attribution left out of the digest; an
+    answer for another list, another file or other words accepted; a stale screen's question
+    confirming a newer list; "not sure" for another workbook withdrawing this one's answer; the
+    screen counting an answer for another list as in use.
+  - **The screens:** the question never asked, or asked first; overhead left out of the list; "may
+    be misstated", the headline's reason or "Job costs confirmed by you for this file." not shown.
+
+  The two not caught can't change any result:
+  - building profit after overhead from the profit in `assemble`, since J2 is added after;
+  - leaving the jobs setting out of the digest, since that setting also changes the confirmed words,
+    which are checked.
+
 ## What this doesn't prove
 
 - **Real exports.** The made-up shops use one simple CSV layout. Real QuickBooks or Square files,
