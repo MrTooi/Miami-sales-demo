@@ -21,7 +21,9 @@ class RelianceWordingTests(unittest.TestCase):
         for name in ("docs/TRIAL_SHOP_GUIDE.md", "docs/TRIAL_TERMS_DRAFT.md"):
             with self.subTest(name):
                 text = (ROOT / name).read_text()
-                self.assertIn("Until you answer \"Yes, I checked\", every figure", text)
+                self.assertIn("Until you answer \"Yes, I checked\" to the coverage question (whole business, no filters), "
+                              "every figure" if name.endswith("SHOP_GUIDE.md")
+                              else "Until you answer \"Yes, I checked\", every figure", text)
                 self.assertIn("MargenX relies on your confirmation for that file" if name.endswith("TERMS_DRAFT.md")
                               else "No, something is missing", text)
 
