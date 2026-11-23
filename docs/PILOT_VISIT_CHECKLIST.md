@@ -71,7 +71,7 @@ Pilot mode only works with `--server.address localhost`, opened in a browser on 
        - Its upload handler reads each upload with Starlette's form parser.
        - Starlette 1.9.0 writes an upload part larger than 1 MiB (1,048,576 bytes) to a temporary file on the laptop's disk while reading it. That would break the promise that nothing is saved.
        - This rule is checked against those exact versions; see "Before the first real visit", step 5.
-     - **If a file is larger:** export a shorter date range (for example one month instead of a quarter) and check again. **If you're using the Sales by Customer Detail too, export both reports again for the same shorter dates.** If it still doesn't fit, stop the visit for that file.
+     - **If a file is larger:** export a shorter date range (for example one month instead of a quarter) and check again. **Every file used together must cover the same dates:** with the Sales by Customer Detail, export both QuickBooks reports again for the same shorter dates; for CSV files, export both the sales file and the costs file again for the same shorter dates. Never mix a shorter-range file with a full-range one: that can overstate profit. If it still doesn't fit, stop the visit for those files.
      - This limit holds until a change to MargenX is shown to keep larger uploads in memory.
 5. **Move the files to the laptop with a USB drive or AirDrop.** Don't email them, and don't put them in Google Drive, Dropbox or a chat app.
 6. **Never put a shop's file, numbers or screen into any AI tool** (ChatGPT, Claude, Copilot or similar) or any website. We only open their files in MargenX on the laptop, and never upload or send them anywhere.
