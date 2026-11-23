@@ -1,4 +1,4 @@
-"""D-010: the trial guide and terms must carry the same reliance wording the results show (the PR #148 manual review,
+"""D-010 and D-011: the trial guide and terms must carry the same reliance wording the results show (the PR #148 manual review,
 round 3: "The guide and terms should carry that disclosure before the first real upload")."""
 import sys
 import unittest
@@ -35,6 +35,17 @@ class RelianceWordingTests(unittest.TestCase):
                       "missing**. If you can't tell, choose **Not sure**.", text)
         self.assertNotIn("only if you did", text)
 
+
+    def test_the_guide_and_the_terms_quote_the_job_cost_reliance_exactly(self):
+        # D-011: "The trial guide and terms (PR #147's drafts) must say the same before trial uploads."
+        for name in ("docs/TRIAL_SHOP_GUIDE.md", "docs/TRIAL_TERMS_DRAFT.md"):
+            with self.subTest(name):
+                text = (ROOT / name).read_text()
+                self.assertIn(f"\"{qf.JOB_COSTS_RELIANCE}\"", text)
+                self.assertIn("job costs and profit after job costs", text)
+        guide = (ROOT / "docs/TRIAL_SHOP_GUIDE.md").read_text()
+        self.assertIn("Is every job cost for these dates in this report, on its job?", guide)
+        self.assertIn("If any may be missing, or you can't tell, choose **Not sure**.", guide)
 
 if __name__ == "__main__":
     unittest.main()

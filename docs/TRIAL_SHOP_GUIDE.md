@@ -18,6 +18,8 @@
 
 **3. Upload it.** Tick the box to say you agree to MargenX reading the file, then drag in the file (or both files). MargenX reads them in memory only and doesn't save them. It may ask a few questions, for example whether an account is a job cost or overhead, and whether you exported both reports with no filter. **After the questions about your cost accounts, it lists the cost accounts it found in your file, with their totals, and asks you to confirm that the file includes your whole business, with no filters.** Check that list against QuickBooks and your export settings first. Choose **Yes, I checked** only if you checked the list and export settings and can confirm that this file includes your whole business's income and costs for those dates, with no filters excluding accounts or transactions. If you found something missing, choose **No, something is missing**. If you can't tell, choose **Not sure**.
 
+**Last, it asks about your job costs: "Is every job cost for these dates in this report, on its job?"** It shows how it counted your costs: each job's sales and job costs, and what went to overhead. Check that list against your payroll and your vendor bills for those dates, using costs that are posted, not estimates. Choose **Yes, I checked** only if every cost of your work for customers that belongs in those dates (crew pay, materials, subcontractors) is entered in QuickBooks and in this report, on its job (or on its customer, for work not on a job), including jobs with no sale yet. If they're all in the report but some are booked to overhead, choose that answer. If any may be missing, or you can't tell, choose **Not sure**. If a later answer changes how a cost is counted, MargenX asks again.
+
 **What to leave out.** Upload only the two QuickBooks reports above: Profit and Loss Detail, and optionally Sales by Customer Detail. Never upload or type bank or card details, tax ID numbers, or individual payroll records.
 
 **4. Read the results.**
@@ -25,6 +27,8 @@
 - **Expect many figures to say Needs a check,** even when you follow the steps exactly. MargenX would rather say so than guess.
 - **Until you answer "Yes, I checked", every figure says Needs a check (missing amount unknown).** A filter can leave something out without showing in the file, so MargenX can't know how much.
 - Profit by **job** needs both reports and your "no filter" answer before it can be Complete.
+- **Until you answer the job-cost question with a yes, job costs and profit after job costs say Needs a check (job costs may be misstated).** A job with sales but no costs at all stays on Needs a check even after a yes.
+- **What Complete also relies on, for jobs and customers** (MargenX shows this with your results): "For jobs and customers, Complete also relies on your confirmation that every job cost for these dates is in this report and on its job. MargenX can't check that against your payroll or your bills."
 - **What Complete relies on** (MargenX shows this with your results): "MargenX calculates figures from your uploaded reports and your answers. QuickBooks exports may not reveal filters that excluded accounts or transactions. We therefore ask you to check the export settings and confirm its coverage. Complete means our required checks and confirmations are satisfied; it does not guarantee that nothing was omitted or incorrectly recorded in QuickBooks. If you are unsure, choose Not sure."
 
 **5. When you're done for the day.**
