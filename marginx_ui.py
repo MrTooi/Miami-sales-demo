@@ -301,6 +301,14 @@ def logout_button(action: str) -> None:
           '<button type="submit">Log out</button></form>')
 
 
+def end_session_form(action: str) -> None:
+    """The website trial's End session (uploads plan v7): a plain form post in the same tab, answered by the gate
+    itself (trial_access.END_PATH), so it works even while the page is busy, and the whole MargenX process is
+    then replaced by a fresh one. Styled like Log out, above it."""
+    _html(f'<form class="mx-logout mx-end" method="post" action="{escape(action)}" style="margin-bottom:.4rem">'
+          '<button type="submit">End session and clear everything</button></form>')
+
+
 def privacy_points(pilot: bool) -> None:
     """What happens to the files, in three short lines (the consent box says it in full).
 

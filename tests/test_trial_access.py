@@ -701,18 +701,27 @@ class TrialPageTests(unittest.TestCase):
         self.assertIn("Private MargenX trial", at.info[0].value)
         self.assertEqual(0, len([w for w in at.warning if "Pilot session" in w.value]))
 
-    def test_end_session_in_the_trial_talks_about_the_trial_only(self):
+    def test_end_session_in_the_trial_is_a_form_the_gate_answers(self):
+        """Uploads PR: End session posts to the gate (END_PATH), which ends the whole MargenX process; there is
+        no Streamlit button for it, so it works even while the page is busy."""
+        at, _ = self.run_page()
+        self.assertEqual([], [b for b in at.button if b.label.startswith("End session")])
+        forms = [m.value for m in at.markdown if m.value.startswith('<form class="mx-logout mx-end"')]
+        self.assertEqual(1, len(forms))
+        self.assertIn(f'action="{ta.END_PATH}"', forms[0])
+
+    def test_after_a_replacement_the_page_says_the_session_was_ended_once(self):
         _, patches = self.page()
         with contextlib.ExitStack() as stack:
             for p in patches:
                 stack.enter_context(p)
             at = AppTest.from_file(PAGE, default_timeout=30)
+            at.query_params["ended"] = "1"
             at.run()
-            next(b for b in at.button if b.label.startswith("End session")).click().run()
         self.assertFalse(at.exception, at.exception)
         message = at.success[0].value
-        self.assertIn("Session ended", message)
-        for laptop_words in ("laptop", "Ctrl", "stop MargenX", "upload"):
+        self.assertIn("Your session was ended", message)
+        for laptop_words in ("laptop", "Ctrl", "stop MargenX"):
             self.assertNotIn(laptop_words, message)
 
     def test_the_laptop_pilot_has_no_log_out_button(self):

@@ -248,16 +248,31 @@ class SettingsTests(unittest.TestCase):
 
 
 STAND_IN = textwrap.dedent("""
-    import os, signal, socket, sys, time
+    import os, signal, socket, sys, threading, time
     log, role = sys.argv[1], sys.argv[2]
     def note(text):
         with open(log, "a") as f:
             f.write(f"{time.monotonic():.6f} {role} {text}\\n")
+    def app_gone():  # the launcher kills MargenX's process group outright (SIGKILL), so it can't say so itself
+        pids = [int(line.split("pid=")[1]) for line in open(log) if " app pid=" in line]
+        try:
+            os.kill(pids[-1], 0)
+            return False
+        except ProcessLookupError:
+            return True
     def on_term(signum, frame):
-        note("stopped")
+        note("stopped" + ((" app-gone" if app_gone() else " app-alive") if role == "tunnel" else ""))
         sys.exit(0)
     signal.signal(signal.SIGTERM, on_term)
     note("started env=" + ",".join(sorted(os.environ)))
+    note(f"pid={os.getpid()}")
+    if role == "app" and os.environ.get("MARGINX_SUPERVISOR_FD"):  # MargenX's heartbeat to the launcher
+        fd = int(os.environ["MARGINX_SUPERVISOR_FD"])
+        def beat():
+            while True:
+                os.write(fd, b"alive\\n")
+                time.sleep(0.5)
+        threading.Thread(target=beat, daemon=True).start()
     note("held back=" + ",".join(sorted(str(int(s)) for s in signal.pthread_sigmask(signal.SIG_BLOCK, []))))
     if role == "app":
         time.sleep(float(sys.argv[5]))  # like Streamlit, it takes a moment before it listens
@@ -342,32 +357,76 @@ class LauncherProcessTests(unittest.TestCase):
         out, _ = proc.communicate(timeout=30)
         return proc.returncode, out
 
+    def app_ended(self) -> bool:
+        """MargenX is killed outright (SIGKILL to its process group), so it can't note its own stop: True
+        once every MargenX stand-in the launcher started is gone."""
+        pids = [int(t.split("=")[1]) for r, t in self.events() if r == "app" and t.startswith("pid=")]
+        if not pids:
+            return False
+        for pid in pids:
+            try:
+                os.kill(pid, 0)
+                return False
+            except ProcessLookupError:
+                pass
+        return True
+
+    def wait_until_app_ended(self, seconds=10):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if self.app_ended():
+                return
+            time.sleep(0.05)
+        self.fail(f"MargenX was never ended: {self.events()}")
+
     def test_the_host_stop_ends_margenx_first_then_the_tunnel(self):
         proc = self.start()
         self.wait_for("tunnel", "started")
         proc.send_signal(signal.SIGTERM)  # what Render's Suspend does
         code, out = self.finish(proc)
         self.assertEqual(launch.EXIT_STOPPED_BY_HOST, code, out)
-        stops = [role for role, text in self.events() if text == "stopped"]
-        self.assertEqual(["app", "tunnel"], stops)  # MargenX first: no request is handled any more
+        stops = [(role, text) for role, text in self.events() if text.startswith("stopped")]
+        self.assertEqual([("tunnel", "stopped app-gone")], stops)  # MargenX killed first: no request is handled
 
-    def test_when_the_tunnel_stops_margenx_stops_and_nothing_restarts(self):
+    def test_when_the_tunnel_stops_margenx_stops_and_the_launcher_waits_for_the_host(self):
+        """Since the uploads PR the launcher never exits by itself: Render would restart an exited copy, and a
+        restarted launcher would have forgotten the logout cutoff. It stops MargenX and waits for the host."""
         proc = self.start(tunnel_life=0.5)
+        self.wait_until_app_ended()
+        self.assertTrue(self.alive(proc, 1.0))  # still running, doing nothing
+        proc.send_signal(signal.SIGTERM)
         code, out = self.finish(proc)
-        self.assertEqual(launch.EXIT_PROGRAM_STOPPED, code, out)
+        self.assertEqual(launch.EXIT_STOPPED_BY_HOST, code, out)
         events = self.events()
-        self.assertIn(["app", "stopped"], events)
         self.assertEqual(1, sum(1 for r, t in events if r == "tunnel" and t.startswith("started")))
         self.assertEqual(1, sum(1 for r, t in events if r == "app" and t.startswith("started")))
         self.assertIn("nothing is restarted", out)
+        self.assertIn("stopped: the tunnel stopped; waiting for the host's stop", out)
 
-    def test_when_margenx_stops_the_tunnel_stops_and_nothing_restarts(self):
-        proc = self.start(app_life=1.5)
+    def test_when_margenx_stops_by_itself_it_is_replaced_and_every_earlier_login_must_log_in_again(self):
+        """MargenX ending by itself is an unexplained death: a fresh MargenX replaces it, with the cutoff
+        advanced (uploads plan v7), and the tunnel keeps running. Too many in a row: stopped for good."""
+        proc = self.start(app_life=1.0)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and "stopped: MargenX ended unexpectedly too often" not in "".join(
+                t for _, t in self.events()):
+            if sum(1 for r, t in self.events() if r == "app" and t.startswith("started")) > launch.MAX_UNEXPLAINED:
+                break
+            time.sleep(0.1)
+        self.wait_until_app_ended(seconds=20)
+        time.sleep(1.5)
+        self.assertTrue(self.alive(proc, 0.5))
+        proc.send_signal(signal.SIGTERM)
         code, out = self.finish(proc)
-        self.assertEqual(launch.EXIT_PROGRAM_STOPPED, code, out)
-        events = self.events()
-        self.assertIn(["tunnel", "stopped"], events)
-        self.assertEqual(1, sum(1 for r, t in events if r == "app" and t.startswith("started")))
+        self.assertEqual(launch.EXIT_STOPPED_BY_HOST, code, out)
+        starts = [t for r, t in self.events() if r == "app" and t.startswith("started")]
+        self.assertEqual(launch.MAX_UNEXPLAINED + 1, len(starts), out)  # the first, then 3 replacements
+        self.assertIn("MARGINX_TRIAL_LOGGED_OUT_AT", starts[1])  # each replacement gets the advanced cutoff
+        self.assertNotIn("MARGINX_TRIAL_LOGGED_OUT_AT", starts[0])
+        self.assertEqual(launch.MAX_UNEXPLAINED + 1, out.count("recycled: MargenX stopped by itself; every earlier "
+                                                               "login must log in again"), out)
+        self.assertIn("MargenX ended unexpectedly too often", out)
+        self.assertEqual(1, sum(1 for r, t in self.events() if r == "tunnel" and t.startswith("started")))
 
     def test_a_stop_while_margenx_is_starting_never_starts_the_tunnel(self):
         proc = self.start(listen_delay=30)  # MargenX would take 30 seconds to listen
@@ -378,7 +437,7 @@ class LauncherProcessTests(unittest.TestCase):
         self.assertLess(time.monotonic() - asked, 10)  # the stop doesn't wait for the readiness timeout
         self.assertEqual(launch.EXIT_STOPPED_BY_HOST, code, out)
         self.assertFalse([1 for r, t in self.events() if r == "tunnel"])  # never started
-        self.assertIn(["app", "stopped"], self.events())
+        self.assertTrue(self.app_ended())
         self.assertNotIn("running", out)
 
     def test_a_stop_after_the_last_check_still_never_starts_the_tunnel(self):
@@ -386,7 +445,7 @@ class LauncherProcessTests(unittest.TestCase):
         code, out = self.finish(proc)
         self.assertEqual(launch.EXIT_STOPPED_BY_HOST, code, out)
         self.assertFalse([1 for r, t in self.events() if r == "tunnel"])  # never started
-        self.assertIn(["app", "stopped"], self.events())
+        self.assertTrue(self.app_ended())
         self.assertNotIn("running", out)
 
     def test_the_programs_never_inherit_the_held_back_stop_signals(self):
@@ -454,10 +513,10 @@ class LauncherProcessTests(unittest.TestCase):
         asked = time.monotonic()
         self.assertEqual(0, stop_now.main(proc=self.fake_proc(proc.pid)))  # the real stop_now, a real SIGUSR1
         self.wait_for("tunnel", "stopped", seconds=10)
-        timed = {(r, t): at for at, r, t in self.events(with_time=True)}
+        timed = {(r, t.split(" ")[0]): at for at, r, t in self.events(with_time=True)}
         self.assertLess(timed[("tunnel", "stopped")] - asked, 3)  # within seconds, not Render's ~2 minutes
-        stops = [role for role, text in self.events() if text == "stopped"]
-        self.assertEqual(["app", "tunnel"], stops)  # MargenX first: no request is handled any more
+        stops = [(role, text) for role, text in self.events() if text.startswith("stopped")]
+        self.assertEqual([("tunnel", "stopped app-gone")], stops)  # MargenX killed first: no request is handled
         # The launcher stays up, doing nothing, so the host never sees the copy end by itself and restart it.
         self.assertTrue(self.alive(proc, 1.5))
         self.assertEqual(1, sum(1 for r, t in self.events() if r == "app" and t.startswith("started")))
@@ -475,7 +534,7 @@ class LauncherProcessTests(unittest.TestCase):
         proc = self.start(listen_delay=30)
         self.wait_for("app", "started")
         proc.send_signal(launch.STOP_NOW_SIGNAL)
-        self.wait_for("app", "stopped", seconds=10)
+        self.wait_until_app_ended()
         self.assertTrue(self.alive(proc, 1.0))
         proc.send_signal(signal.SIGTERM)
         code, out = self.finish(proc)
@@ -486,7 +545,7 @@ class LauncherProcessTests(unittest.TestCase):
 
     def test_a_stop_now_after_the_last_check_never_starts_the_tunnel_and_waits(self):
         proc = self.start(stop_before_tunnel=int(launch.STOP_NOW_SIGNAL))  # lands in the held-back window
-        self.wait_for("app", "stopped", seconds=10)
+        self.wait_until_app_ended()
         self.assertTrue(self.alive(proc, 1.0))  # waiting for the host's stop, nothing restarted
         proc.send_signal(signal.SIGTERM)
         code, out = self.finish(proc)
@@ -562,7 +621,11 @@ FAKE_DRIVER = textwrap.dedent("""
             self.code = 0
         def wait(self, timeout=None):
             return self.code
-        def kill(self):
+        def kill(self):  # MargenX is killed outright since the uploads PR (the tunnel too, if it won't stop)
+            if self.code is None:
+                note(self.role + " stopped")
+                if case == "cleanup" and self.role == "app":
+                    stop_now_arrives()  # while the launcher is stopping the programs
             self.code = -9
     def spawn(command, **options):
         if command[0] == "tunnel" and case == "error":
@@ -630,12 +693,22 @@ class StopNowPrecedenceTests(unittest.TestCase):
         out = self.waits_then_ends_on_the_host_stop("error")
         self.assertIn("the launcher hit an error (OSError)", out)
 
-    def test_without_a_stop_now_a_failure_still_ends_the_whole_copy(self):
+    def test_without_a_stop_now_a_failure_still_stops_both_and_waits_for_the_host(self):
+        """Since the uploads PR the launcher never exits by itself (a restarted launcher would forget the logout
+        cutoff): a failure stops both programs, then it waits for the host's stop, restarting nothing."""
         proc = self.start("plain")
+        try:
+            proc.wait(timeout=1.5)
+            self.fail(f"the launcher exited by itself: {proc.stdout.read()}")
+        except subprocess.TimeoutExpired:
+            pass
+        proc.send_signal(signal.SIGTERM)
         out, _ = proc.communicate(timeout=20)
-        self.assertEqual(launch.EXIT_PROGRAM_STOPPED, proc.returncode, out)
+        self.assertEqual(launch.EXIT_STOPPED_BY_HOST, proc.returncode, out)
         self.assertNotIn("stopped now", out)
+        self.assertIn("stopped: the tunnel stopped; waiting for the host's stop", out)
         self.assertIn("app stopped", self.events())
+        self.assertEqual(1, self.events().count("app started"))
 
 
 class StopNowTests(unittest.TestCase):
