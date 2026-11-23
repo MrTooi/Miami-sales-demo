@@ -35,6 +35,8 @@ COPY assets/margenx-logo.png /app/assets/margenx-logo.png
 COPY sample_data/marginx/*.csv /app/sample_data/marginx/
 COPY .streamlit/config.toml /app/.streamlit/config.toml
 COPY deploy/trial/launch.py /app/deploy/trial/launch.py
+# The operator's tools, run from the host's shell (docs/TRIAL_DEPLOYMENT.md, sections 6 and 7; PR B).
+COPY deploy/trial/stop_now.py deploy/trial/self_check.py /app/deploy/trial/
 
 # Run as an ordinary user with no password and no shell login.
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin margenx
