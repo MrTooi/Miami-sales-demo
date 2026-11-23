@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import quickbooks_crosscheck as qc  # noqa: E402
 import quickbooks_figures as qf  # noqa: E402
+import qbo_job_costs as jc  # noqa: E402
 import quickbooks_fixtures as fx  # noqa: E402
 import quickbooks_pnl as qp  # noqa: E402
 import quickbooks_questions as qq  # noqa: E402
@@ -33,6 +34,7 @@ X, Y = "Customer X (fictional)", "Customer Y (fictional)"
 KITCHEN, PATIO = (X, "Kitchen"), (Y, "Patio")
 MATERIALS, LABOR = ("Expenses", "Job Materials"), ("Expenses", "Labor")
 COVERAGE_TITLE = "Does this file include your whole business?"
+JOB_COSTS_TITLE = "Is every job cost for these dates in this report, on its job?"
 
 
 def income(*, y_too=True):
@@ -77,14 +79,17 @@ def sales_report(saved_at=fx.SAVED_AT):
     return qs.read_sales_by_customer_detail("sales.xlsx", fx.xlsx(sales_rows(), saved_at=saved_at))
 
 
-def base(report, *, check=None, accounts=None) -> qf.OwnerAnswers:
-    """Every answer except coverage: sub-customers are jobs, every cost account holds job costs, and (with a
-    usable cross-check) both reports were exported with no filter."""
+def base(report, *, check=None, accounts=None, job_costs=True) -> qf.OwnerAnswers:
+    """Every answer except coverage: sub-customers are jobs, every cost account holds job costs, (with a usable
+    cross-check) both reports were exported with no filter, and (job_costs) the owner's job-cost "yes" for the cost
+    list these answers give (J1, the labor-gap plan v3; tests/test_quickbooks_job_costs.py covers its hold). Coverage
+    doesn't change that list, so the job-cost answer stands whatever the coverage answer."""
     accounts = accounts if accounts is not None else {
         line.account_path: qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT) for line in report.lines
         if line.section in qf.COST_SECTIONS}
-    return qf.OwnerAnswers(report=qf.report_fingerprint(report), sub_customers_are_jobs=True, accounts=accounts,
-                           unfiltered_pair=check.pair if check is not None else "")
+    answers = qf.OwnerAnswers(report=qf.report_fingerprint(report), sub_customers_are_jobs=True, accounts=accounts,
+                              unfiltered_pair=check.pair if check is not None else "")
+    return jc.confirmed(report, answers) if job_costs else answers
 
 
 def coverage_question(report, answers=None, check=None) -> qq.Question:
@@ -333,15 +338,16 @@ def upload_page(folder: Path, names: tuple[str, ...]) -> AppTest:
 
 
 def answer_everything(at, coverage="Yes, I checked") -> None:
-    """Every question on the upload page: jobs, the no-filter answer, job-cost accounts, then coverage."""
+    """Every question on the upload page: jobs, the no-filter answer, job-cost accounts, coverage, then job costs."""
     import test_quickbooks_upload as up
-    for _ in range(8):
+    for _ in range(9):
         title = up.titles(at)[0]
         if title.startswith("After job costs"):
             return
         radio = up.answer_radio(at)
         label = {"Do you use sub-customers in QuickBooks for jobs?": "Yes, each sub-customer is a job",
-                 up.NO_FILTER: "Yes, both have no filter", COVERAGE_TITLE: coverage}.get(title)
+                 up.NO_FILTER: "Yes, both have no filter", COVERAGE_TITLE: coverage,
+                 JOB_COSTS_TITLE: "Yes, I checked"}.get(title)
         up.save(at, label or next(o for o in radio.options if o.startswith("Job costs")))
     raise AssertionError("questions never ran out")
 
@@ -361,7 +367,8 @@ class OtherWorkbookTests(unittest.TestCase):
         self.assertNotEqual(qf.CONFIRMED, result.coverage)
         self.assertTrue(coverage_held(result))
         self.assertIn("given for another file", " ".join(result.warnings))
-        self.assertEqual([qq.COVERAGE], [q.kind for q in qq.open_questions(second, answers).questions])
+        # The job-cost answer is bound to the file too (J1), so the second workbook needs both answers again.
+        self.assertEqual([qq.COVERAGE, qq.JOB_COSTS], [q.kind for q in qq.open_questions(second, answers).questions])
         # The first file's question can't record a yes for the second.
         self.assertEqual(answers, qq.answer(second, answers, coverage_question(first, base(first)), qf.COVERAGE_YES))
 
@@ -384,7 +391,7 @@ class OtherWorkbookTests(unittest.TestCase):
         check_a = qc.cross_check(a, sales_report())
         answers = say(a, base(a, check=check_a), qf.COVERAGE_YES, check_a)  # S3 answered for A's pair
         stale_question = next(q for q in qq.open_questions(a, base(a), check_a).questions if q.kind == qq.NO_FILTER)
-        answers = say(b, answers, qf.COVERAGE_YES)  # a fresh coverage yes for B
+        answers = jc.confirmed(b, say(b, answers, qf.COVERAGE_YES))  # fresh coverage and job-cost yeses for B
         self.assertTrue(qf.coverage_confirmed(b, answers))
         result = qf.figures(b, answers, cross_check=check_a)
         self.assertIn("The cross-check was made for another Profit and Loss Detail", " ".join(result.warnings))
@@ -433,7 +440,10 @@ class OtherWorkbookTests(unittest.TestCase):
         for _ in range(2):
             save(at, "Job costs: what's in it is spent on specific jobs")
         save(at, "Yes, I checked")
+        self.assertEqual(JOB_COSTS_TITLE, at.subheader[0].value)  # asked last (J1)
+        save(at, "Yes, I checked")
         self.assertIn(qf.COVERAGE_CONFIRMED, [s.value for s in at.success])
+        self.assertIn(qf.JOB_COSTS_CONFIRMED, [s.value for s in at.success])
 
         at.session_state["saved_at"] = "2026-11-17T09:00:00Z"  # workbook B: the same rows, other bytes
         at.run()
@@ -443,15 +453,17 @@ class OtherWorkbookTests(unittest.TestCase):
         in_use = review.markdown[:[m.value for m in review.markdown].index(
             "**Earlier answers that don't apply now** (because of a later answer; they count again only if you change "
             "that answer back)")]
-        self.assertFalse([m.value for m in in_use if m.value.startswith(COVERAGE_TITLE)])
-        self.assertEqual(3, len([b for b in review.button if b.label == "Change"]))  # none for A's coverage answer
+        self.assertFalse([m.value for m in in_use if m.value.startswith((COVERAGE_TITLE, JOB_COSTS_TITLE))])
+        self.assertEqual(3, len([b for b in review.button if b.label == "Change"]))  # none for A's two file answers
         save(at, "Not sure")
         self.assertNotIn(qf.COVERAGE_CONFIRMED, [s.value for s in at.success])
+        self.assertNotIn(qf.JOB_COSTS_CONFIRMED, [s.value for s in at.success])
 
         at.session_state["saved_at"] = "2026-10-26T19:04:00Z"  # back to workbook A
         at.run()
         self.assertFalse(at.exception, at.exception)
         self.assertIn(qf.COVERAGE_CONFIRMED, [s.value for s in at.success])
+        self.assertIn(qf.JOB_COSTS_CONFIRMED, [s.value for s in at.success])
         self.assertEqual("$3,400.00 · Complete", dict(zip(at.dataframe[0].value["Figure"],
                                                           at.dataframe[0].value["Amount and status"]))[
             "Profit after job costs"])
@@ -473,22 +485,26 @@ class OtherWorkbookTests(unittest.TestCase):
         at = AppTest.from_string(source, default_timeout=60)
         at.run()
         self.assertFalse(at.exception, at.exception)
-        for _ in range(6):
+        for _ in range(7):
             title = up.titles(at)[0]
             if title.startswith("After job costs"):
                 break
             radio = up.answer_radio(at)
             label = {"Do you use sub-customers in QuickBooks for jobs?": "Yes, each sub-customer is a job",
-                     up.NO_FILTER: "Yes, both have no filter", COVERAGE_TITLE: "Yes, I checked"}.get(title)
+                     up.NO_FILTER: "Yes, both have no filter", COVERAGE_TITLE: "Yes, I checked",
+                     JOB_COSTS_TITLE: "Yes, I checked"}.get(title)
             up.save(at, label or next(o for o in radio.options if o.startswith("Job costs")))
         self.assertIn(qf.COVERAGE_CONFIRMED, [s.value for s in at.success])
+        self.assertIn(qf.JOB_COSTS_CONFIRMED, [s.value for s in at.success])
         self.assertEqual("$3,400.00 · Complete", up.company(at)["Profit after job costs"])
 
-        # Only the sales workbook replaced: coverage stays, S3's question comes back.
+        # Only the sales workbook replaced: coverage and the job-cost answer stay (the sales report doesn't change the
+        # cost list), S3's question comes back.
         (folder / "sales.xlsx").write_bytes(fx.xlsx(sales_rows(), saved_at="2026-11-17T09:00:00Z"))
         at.run()
         self.assertEqual(up.NO_FILTER, up.titles(at)[0])
         self.assertIn(qf.COVERAGE_CONFIRMED, [s.value for s in at.success])
+        self.assertIn(qf.JOB_COSTS_CONFIRMED, [s.value for s in at.success])
         self.assertEqual("$3,400.00 · Complete", up.company(at)["Profit after job costs"])
         up.save(at, "Yes, both have no filter")
 
@@ -502,7 +518,8 @@ class OtherWorkbookTests(unittest.TestCase):
         up.save(at, "Yes, both have no filter")
         self.assertEqual(COVERAGE_TITLE, up.titles(at)[0])
         self.assertNotIn(qf.COVERAGE_CONFIRMED, [s.value for s in at.success])
-        self.assertEqual("$3,400.00 · Needs a check (missing amount unknown)",
+        self.assertNotIn(qf.JOB_COSTS_CONFIRMED, [s.value for s in at.success])
+        self.assertEqual("$3,400.00 · Needs a check (missing amount unknown; job costs may be misstated)",
                          up.company(at)["Profit after job costs"])
 
 
@@ -601,7 +618,8 @@ class NoSilentYesTests(unittest.TestCase):
             if not questions:
                 break
             question = questions[0]
-            choice = {qq.JOBS: "yes", qq.NO_FILTER: "yes", qq.ACCOUNT: qf.JOB_COSTS_ACCOUNT}[question.kind]
+            choice = {qq.JOBS: "yes", qq.NO_FILTER: "yes", qq.ACCOUNT: qf.JOB_COSTS_ACCOUNT,
+                      qq.JOB_COSTS: qf.JOB_COSTS_ON_JOBS}[question.kind]
             answers = qq.answer(report, answers, question, choice, cross_check=check)
         self.assertIsNone(answers.coverage)
         self.assertEqual(check.pair, answers.unfiltered_pair)

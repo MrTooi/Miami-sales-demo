@@ -7,7 +7,10 @@ costs, what is held and each section's status must all match exactly; so must ea
 job's sales and job costs (step 4).
 
 Each report also gets one owner coverage answer (gen.COVERAGE_CASES); only a "yes" for this exact file and
-wording lets any customer or company figure be Complete, and the hold reaches every profit.
+wording lets any customer or company figure be Complete, and the hold reaches every profit. It also gets one
+job-cost answer (gen.JOB_COSTS_CASES, J1 of the labor-gap plan v3): only a "yes" for this exact cost list and wording
+lets a customer's or the company's job costs be Complete, and even then a customer with sales and no costs stays
+held (gen.expected_no_costs, worked out without MargenX code).
 
 What this proves, and what it doesn't (the PR #136 review): section and customer/job sums, section and
 customer statuses (the PR #138 automated review), and row presence, for the layouts and transaction types the generator makes. It doesn't prove each row's own
@@ -26,6 +29,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import qbo_pnl_reports as gen  # noqa: E402
+import dataclasses  # noqa: E402
+
 import quickbooks_figures as qf  # noqa: E402
 import quickbooks_fixtures as fx  # noqa: E402
 import quickbooks_pnl as qp  # noqa: E402
@@ -57,7 +62,21 @@ def coverage_answer(case: str, report: qp.ProfitAndLossDetail) -> qf.CoverageAns
             }[case]
 
 
+def job_costs_answer(case: str, report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers) -> qf.JobCostsAnswer | None:
+    """The owner's job-cost answer the generator chose (gen.JOB_COSTS_CASES), for these answers' cost list."""
+    if case == "none":
+        return None
+    digest = qf.figures(report, answers).cost_digest
+    choice = qf.JOB_COSTS_SOME_OVERHEAD if case == "overhead" else qf.JOB_COSTS_ON_JOBS
+    statement = qf.job_costs_statement(report, True, choice)
+    return qf.JobCostsAnswer(choice, "All my job costs are on my jobs." if case == "other words" else statement,
+                             qf.report_fingerprint(report), report.file_digest,
+                             "0" * 64 if case == "another list" else digest)
+
+
 class KnownAnswerTests(unittest.TestCase):
+    job_costs_seen: dict = {}
+    no_costs_seen = 0
     coverage_seen: dict = {}
     jobs_seen = 0
     statuses_seen = {(True, True): 0, (True, False): 0, (False, True): 0, (False, False): 0}
@@ -66,8 +85,11 @@ class KnownAnswerTests(unittest.TestCase):
         """Step 4: with sub-customers as jobs and every cost account answered "job costs"."""
         accounts = {line.account_path: qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT) for line in result.lines
                     if line.section in ("Cost of Goods Sold", "Expenses")}
-        got = qf.figures(result, qf.OwnerAnswers(report=qf.report_fingerprint(result), sub_customers_are_jobs=True,
-                                                 accounts=accounts, coverage=coverage_answer(report.coverage, result)))
+        answers = qf.OwnerAnswers(report=qf.report_fingerprint(result), sub_customers_are_jobs=True,
+                                  accounts=accounts, coverage=coverage_answer(report.coverage, result))
+        answers = dataclasses.replace(answers, job_costs=job_costs_answer(report.job_costs, result, answers))
+        got = qf.figures(result, answers)
+        no_costs = gen.expected_no_costs(report)
         customers, jobs = gen.expected_figures(report)
         self.assertEqual(set(customers), set(got.customers))
         self.assertEqual(set(jobs), set(got.jobs))
@@ -80,15 +102,27 @@ class KnownAnswerTests(unittest.TestCase):
             self.assertEqual(qp.NEEDS_A_CHECK, figures["profit_after_job_costs"].status)  # one report never suffices
         for name, (sales_complete, costs_complete) in gen.expected_customer_status(report).items():
             figures = got.customers[name]
-            self.assertEqual((sales_complete, costs_complete),
+            # J2 and J3 hold a customer's job costs (never its sales): only after the job-cost "yes", and never for a
+            # customer with sales and no costs.
+            costs_final = costs_complete and report.job_costs_confirmed and name not in no_costs
+            self.assertEqual((sales_complete, costs_final),
                              (figures["sales"].status == qp.COMPLETE, figures["job_costs"].status == qp.COMPLETE), name)
-            self.__class__.statuses_seen[(sales_complete, costs_complete)] += 1
+            self.assertEqual(name in no_costs, any(h.kind == qf.NO_JOB_COSTS_HOLD
+                                                   for h in figures["profit_after_job_costs"].holds), name)
+            self.__class__.no_costs_seen += name in no_costs
+            self.__class__.statuses_seen[(sales_complete, costs_final)] += 1
         self.__class__.jobs_seen += len(jobs)
         income = report.expected["Income"]
         cost_sections = [report.expected[s] for s in ("Cost of Goods Sold", "Expenses") if s in report.expected]
         self.assertEqual(income.complete and report.covered, got.company["sales"].status == qp.COMPLETE)
-        self.assertEqual(all(e.complete for e in cost_sections) and report.covered,
+        self.assertEqual(all(e.complete for e in cost_sections) and report.covered and report.job_costs_confirmed,
                          got.company["job_costs"].status == qp.COMPLETE)
+        # J2 reaches profit after overhead only when the answer doesn't say every job cost is in the report (J4).
+        self.assertEqual(not report.all_costs_in_report, any(h.kind == qf.JOB_COSTS_HOLD
+                                                              for h in got.company["after_overhead"].holds))
+        self.assertEqual(not report.job_costs_confirmed, any(h.kind == qf.JOB_COSTS_HOLD
+                                                              for h in got.company["profit_after_job_costs"].holds))
+        self.__class__.job_costs_seen[report.job_costs] = self.__class__.job_costs_seen.get(report.job_costs, 0) + 1
         # The coverage hold never changes an amount and never disappears on the way to a profit (derived figures).
         for figure in (got.company["profit_after_job_costs"], got.company["after_overhead"],
                        *(f["profit_after_job_costs"] for f in (*got.customers.values(), *got.jobs.values()))):
@@ -128,6 +162,8 @@ class KnownAnswerTests(unittest.TestCase):
         self.assertGreater(self.jobs_seen, REPORTS)
         self.assertTrue(all(self.statuses_seen.values()), self.statuses_seen)  # every status mix came up
         self.assertEqual(set(gen.COVERAGE_CASES), set(self.coverage_seen), self.coverage_seen)  # every coverage case
+        self.assertEqual(set(gen.JOB_COSTS_CASES), set(self.job_costs_seen), self.job_costs_seen)  # every job-cost case
+        self.assertGreater(self.no_costs_seen, REPORTS // 10)  # customers with sales and no costs came up
         self.assertGreater(broken, REPORTS // 8)
         self.assertGreater(noisy, REPORTS // 4)
 

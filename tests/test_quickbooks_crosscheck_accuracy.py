@@ -2,7 +2,8 @@
 
 Each made-up pair of reports is read end to end. The number of unmatched lines in each report, every job's
 sales and whether each job's sales and profit can be Complete must match the answers worked out without any
-MargenX code, including the owner's coverage answer (matching sales never stand in for it). It proves those counts and statuses for the pairs the generator makes; the targeted cases are in
+MargenX code, including the owner's coverage answer (matching sales never stand in for it) and job-cost answer
+(J1 of the labor-gap plan v3: a job's profit is Complete only after a "yes" for this exact cost list). It proves those counts and statuses for the pairs the generator makes; the targeted cases are in
 tests/test_quickbooks_crosscheck.py. Set QBO_CROSSCHECK_PAIRS to run more locally.
 """
 import os
@@ -13,7 +14,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import qbo_crosscheck_reports as gen  # noqa: E402
-from test_quickbooks_pnl_accuracy import coverage_answer  # noqa: E402
+from test_quickbooks_pnl_accuracy import coverage_answer, job_costs_answer  # noqa: E402
+import dataclasses  # noqa: E402
 import quickbooks_crosscheck as qc  # noqa: E402
 import quickbooks_figures as qf  # noqa: E402
 import quickbooks_fixtures as fx  # noqa: E402
@@ -38,15 +40,21 @@ class KnownAnswerTests(unittest.TestCase):
                 self.assertTrue(check.usable, check.reasons)
                 self.assertEqual((pair.unmatched_pnl, pair.unmatched_sbcd),
                                  (len(check.pnl_unmatched), len(check.sbcd_unmatched)))
-                result = qf.figures(pnl, qf.OwnerAnswers(report=qf.report_fingerprint(pnl), sub_customers_are_jobs=True,
-                                                         unfiltered_pair=check.pair,
-                                                         coverage=coverage_answer(pair.coverage, pnl)), cross_check=check)
+                answers = qf.OwnerAnswers(report=qf.report_fingerprint(pnl), sub_customers_are_jobs=True,
+                                          unfiltered_pair=check.pair, coverage=coverage_answer(pair.coverage, pnl),
+                                          accounts={("Expenses", "Job Materials"): qf.AccountAnswer(
+                                              qf.JOB_COSTS_ACCOUNT)})
+                answers = dataclasses.replace(answers, job_costs=job_costs_answer(pair.job_costs, pnl, answers))
+                result = qf.figures(pnl, answers, cross_check=check)
                 self.assertEqual(set(pair.jobs), set(result.jobs))
                 for job, (cents, ok) in pair.jobs.items():
                     figures = result.jobs[job]
                     self.assertEqual(cents, int(figures["sales"].amount * 100), job)
                     self.assertEqual(ok, figures["sales"].status == qp.COMPLETE, (job, figures["sales"].holds))
-                    self.assertEqual(ok, figures["profit_after_job_costs"].status == qp.COMPLETE, job)
+                    self.assertEqual(ok and pair.job_costs == "yes",
+                                     figures["profit_after_job_costs"].status == qp.COMPLETE, job)
+                    self.assertEqual([], [h for h in figures["profit_after_job_costs"].holds
+                                          if h.kind == qf.NO_JOB_COSTS_HOLD], job)  # every job has its cost bill
                     self.assertEqual(pair.coverage_held, figures["profit_after_job_costs"].coverage_open, job)
                     self.assertEqual(pair.coverage_held, result.company["job_costs"].coverage_open)  # costs too
                     contradicted += pair.coverage == "yes" and pair.coverage_held

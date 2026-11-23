@@ -130,7 +130,7 @@ class PageTests(unittest.TestCase):
         self.assertIn("Read as QuickBooks' Profit and Loss Detail for Biscayne Landscaping (fictional) (January "
                       "1-October 26, 2026, accrual basis): your sales and costs come from it.", text)
         self.assertEqual("Do you use sub-customers in QuickBooks for jobs?", titles(at)[0])
-        self.assertIn("**Question 1 of 4**", text)  # jobs, two accounts, coverage
+        self.assertIn("**Question 1 of 5**", text)  # jobs, two accounts, coverage, job costs
         self.assertIsNone(answer_radio(at).value)  # nothing pre-selected
         headline = titles(at)[-1]
         self.assertTrue(headline.startswith("After job costs, Biscayne Landscaping (fictional)"), headline)
@@ -159,9 +159,13 @@ class PageTests(unittest.TestCase):
             save(at, next(o for o in radio.options if o.startswith(wanted)))
         self.assertEqual("Does this file include your whole business?", titles(at)[0])
         save(at, "Yes, I checked")
+        self.assertEqual("Is every job cost for these dates in this report, on its job?", titles(at)[0])
+        self.assertIn("How MargenX counted your costs for January 1-October 26, 2026:", everything(at))
+        save(at, "Yes, I checked")
         text = everything(at)
         self.assertIn("No questions left.", text)
         self.assertIn("Coverage confirmed by you for this file.", text)
+        self.assertIn("Job costs confirmed by you for this file.", text)
         headline = titles(at)[-1]
         self.assertTrue(headline.endswith("the business made $2,400.00. This figure is Complete for this report."),
                         headline)

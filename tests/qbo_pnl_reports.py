@@ -26,6 +26,13 @@ the text, not copied from the code:
   words. Each report gets one owner answer (COVERAGE_CASES): "yes", "no", none at all, a "yes" given
   for another file, a "yes" for a different workbook that reads the same, or a "yes" to other words.
   Only the first lifts the coverage hold.
+- Job costs (the labor-gap plan v3 on issue #128, J1-J3): each report also gets one owner job-cost answer
+  (JOB_COSTS_CASES): "yes" (every job cost for the dates is in the report, on its job), "overhead" (all in the
+  report, some booked to overhead), none, a "yes" for another cost list, or a "yes" to other words. Only "yes" lets
+  a customer's job costs (and its profit) or the company's job costs be Complete; "overhead" still leaves the
+  company's profit after overhead free of that hold, the others don't. Even after "yes", a customer with a counted
+  sale and no counted cost (or counted costs of $0 or less), on any of its jobs or in all, or with a counted sale
+  on no job, keeps its job costs held (expected_no_costs).
 """
 from __future__ import annotations
 
@@ -54,6 +61,9 @@ SUB_ACCOUNTS = ["Job Materials", "Plants and Soil", "Fuel", "Labor", "Gas and El
 # The owner's coverage answer for a report: "yes" for this file and these words, "no", no answer, a "yes" for another
 # file, or a "yes" to other words (an older, narrower question). Only "yes" covers the report.
 COVERAGE_CASES = ["yes"] * 5 + ["no", "none", "another file", "another workbook", "other words"]
+# The owner's job-cost answer (J1): "yes", "overhead" (all in the report, some booked to overhead), none, a "yes" for
+# another cost list, or a "yes" to other words. Only "yes" clears the job-cost hold.
+JOB_COSTS_CASES = ["yes"] * 5 + ["overhead", "none", "another list", "other words"]
 
 NAMES = ["Coral Cafe (fictional):Patio", "Coral Cafe (fictional):Kitchen", "Palm Gym (fictional):Lobby",
          "Bay Clinic (fictional)", "Garden Supply (fictional)", "Bayside Fuel (fictional)", "Landlord (fictional)",
@@ -87,10 +97,20 @@ class Report:
     line_rows: list = field(default_factory=list)
     lines: list = field(default_factory=list)  # [section, type, name, cents, "sale" | "cost" | None] per line
     coverage: str = "yes"  # the owner's coverage answer (COVERAGE_CASES)
+    job_costs: str = "yes"  # the owner's job-cost answer (JOB_COSTS_CASES)
 
     @property
     def covered(self) -> bool:
         return self.coverage == "yes"
+
+    @property
+    def job_costs_confirmed(self) -> bool:
+        return self.job_costs == "yes"
+
+    @property
+    def all_costs_in_report(self) -> bool:
+        """The answer says every job cost is in the report (on its job or not), so profit after overhead isn't held."""
+        return self.job_costs in ("yes", "overhead")
 
 
 def _excel_total(cents_list: list[int]) -> str:
@@ -251,7 +271,8 @@ def make_report(seed: int) -> Report:
             line[4] = None
     # Drawn from its own generator, so each seed's report is the same as before coverage was added.
     coverage = random.Random(f"coverage-{seed}").choice(COVERAGE_CASES)
-    return Report(rows, stored, expected, totals, line_rows, lines, coverage)
+    job_costs = random.Random(f"job-costs-{seed}").choice(JOB_COSTS_CASES)  # its own draw too
+    return Report(rows, stored, expected, totals, line_rows, lines, coverage, job_costs)
 
 
 def who(section: str, kind: str, name: str) -> tuple[str | None, str | None]:
@@ -308,3 +329,26 @@ def expected_customer_status(report: Report) -> dict[str, tuple[bool, bool]]:
             complete.append(not held and report.covered)
         status[customer] = tuple(complete)
     return status
+
+
+def expected_no_costs(report: Report) -> set[str]:
+    """The customers the no-costs rule (J3) holds, with sub-customers as jobs, every cost account answered "job costs"
+    and no line answered: a counted sale (any amount) and no counted cost, or counted costs adding up to 0 cents or
+    less, on any one of its jobs or in the customer's whole; or a counted sale on no job."""
+    sales: dict = {}
+    costs: dict = {}
+    for section, kind, name, cents, counts in report.lines:
+        customer, job = who(section, kind, name)
+        if customer is None or counts is None:
+            continue
+        keys = [customer] + ([(customer, job)] if job else [(customer, None)] if counts == "sale" else [])
+        for key in keys:
+            (sales if counts == "sale" else costs).setdefault(key, []).append(cents)
+    held = set()
+    for key in sales:
+        customer = key if isinstance(key, str) else key[0]
+        if isinstance(key, tuple) and key[1] is None:
+            held.add(customer)  # a sale on no job
+        elif key not in costs or sum(costs[key]) <= 0:
+            held.add(customer)
+    return held

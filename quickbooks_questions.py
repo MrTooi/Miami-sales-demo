@@ -12,7 +12,10 @@ upload page for a recognised Profit and Loss Detail: quickbooks_upload).
   usable cross-check exists); each cost account's usual use (S7, one question per account, grouped);
   the coverage confirmation (every cost account found, with its total, then the reviewer's words: asked
   with one report or two, bound to the exact file and wording); then each line that still needs the
-  owner's word (S9; mixed-account entries one by one).
+  owner's word (S9; mixed-account entries one by one); and last, the job-cost confirmation (J1 in
+  quickbooks_figures: how MargenX counted the costs, then the words for each choice; bound to the exact
+  file, the words of the choice and the exact list shown, so a later answer that changes the list asks it
+  again).
 - Every question carries its own progress ("2 of 5"), plain words, the line's original row, date,
   Name and amount where it has one, and exactly the choices the rules allow: no choice is
   pre-selected, and "not sure" is always allowed (the question just stays open).
@@ -37,6 +40,7 @@ NO_FILTER = "no filter"  # "Were both reports exported with no filter?"
 ACCOUNT = "account"  # S7: how a cost account is usually used
 LINE = "line"  # S9: what one line is, or which job it is for
 COVERAGE = "coverage"  # the whole file's coverage, confirmed by the owner (the 2026-11-17 design review, #128)
+JOB_COSTS = "job costs"  # J1: every job cost for the dates is in this report, on its job (labor-gap plan v3, #128)
 
 NOT_SURE = "not sure"  # always a choice; it leaves the question open
 SEPARATOR = "\x1f"  # between a customer and a job in a "job:" choice value
@@ -54,7 +58,7 @@ NOT_SURE_CHOICE = Choice(NOT_SURE, "Not sure yet: leave it on \"Needs a check\""
 @dataclass(frozen=True)
 class Question:
     key: str  # stable: the same question keeps the same key between answers
-    kind: str  # JOBS, NO_FILTER, ACCOUNT or LINE
+    kind: str  # JOBS, NO_FILTER, ACCOUNT, LINE, COVERAGE or JOB_COSTS
     number: int  # 1-based position among the open questions
     total: int
     title: str  # plain words
@@ -69,7 +73,9 @@ class Question:
     pair: str = ""  # for NO_FILTER: the exact pair of reports it was asked about (CrossCheck.pair)
     line_kind: str = ""  # for "which job": what the line is, as the question shows it (a job answer keeps exactly this)
     statement: str = ""  # for COVERAGE: the exact words confirmed (a "yes" counts only for these words)
-    file: str = ""  # for COVERAGE: the uploaded file it was asked about (ProfitAndLossDetail.file_digest)
+    file: str = ""  # for COVERAGE and JOB_COSTS: the uploaded file it was asked about (ProfitAndLossDetail.file_digest)
+    statements: tuple[str, ...] = ()  # for JOB_COSTS: the exact words of each choice shown (choice order)
+    costs: str = ""  # for JOB_COSTS: the cost list shown (Figures.cost_digest); a newer list can't be confirmed by it
 
     @property
     def progress(self) -> str:
@@ -139,6 +145,7 @@ KIND_LABELS = {
 }
 COVERAGE_CHOICES = (Choice(qf.COVERAGE_YES, "Yes, I checked"), Choice(qf.COVERAGE_NO, "No, something is missing"),
                     Choice(NOT_SURE, "Not sure"))
+JOB_COSTS_NOT_SURE = Choice(NOT_SURE, "Not sure, or some may be missing (not entered yet, or not in QuickBooks)")
 USE_WORDS = {qf.JOB_COSTS_ACCOUNT: "you said: job costs", qf.OVERHEAD_ACCOUNT: "you said: overhead",
              qf.MIXED_ACCOUNT: "you said: mixed", qf.NOT_SURE_ACCOUNT: "you said: not sure"}
 ACCOUNT_LABELS = {
@@ -224,10 +231,15 @@ def open_questions(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
         if question:
             pending.append(question)
 
+    # Last: it is about the list every other answer builds (J1). Open until a "yes" or "some in overhead" for this
+    # file, these words and this very list: the figures decide, so the two can never disagree.
+    if result.job_costs not in qf.JOB_COSTS_CHOICES:
+        pending.append(_job_costs_question(report, result))
+
     total = len(pending)
     fingerprint = qf.report_fingerprint(report)
     questions = tuple(Question(number=index + 1, total=total, report=fingerprint,
-                               **{**item, "choices": item["choices"] if item["kind"] == COVERAGE
+                               **{**item, "choices": item["choices"] if item["kind"] in (COVERAGE, JOB_COSTS)
                                   else (*item["choices"], NOT_SURE_CHOICE)})
                       for index, item in enumerate(pending))
     problems = tuple(f"Row {p.row}: {p.text}" for p in report.problems)
@@ -270,6 +282,35 @@ def _coverage_question(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers)
                 small_print="Your answer counts only for this exact file. MargenX doesn't check it against "
                             "QuickBooks: Complete relies on it.",
                 choices=COVERAGE_CHOICES)
+
+
+def _job_costs_question(report: qp.ProfitAndLossDetail, result: qf.Figures) -> dict:
+    """J1: how MargenX counted the costs, what to check them against, then the exact words of each choice. The list
+    is what the owner confirms; the answer counts only for it (Question.costs)."""
+    unit = "job" if result.jobs_on else "customer"
+    period = report.layout.period
+    yes, overhead = (qf.job_costs_statement(report, result.jobs_on, c) for c in qf.JOB_COSTS_CHOICES)
+    return dict(key="job-costs", kind=JOB_COSTS, file=report.file_digest, statements=(yes, overhead),
+                costs=result.cost_digest, statement=yes,
+                title=f"Is every job cost for these dates in this report, on its {unit}?",
+                details=("MargenX can't see your payroll or your bills, so it can't tell if crew pay, materials or a "
+                         f"subcontractor's bill is missing, or sits in overhead instead of on its {unit}. Until you "
+                         f"confirm, job costs and profit after job costs stay on \"Needs a check\".",
+                         f"How MargenX counted your costs for {period}:",
+                         *result.cost_list,
+                         f"Check this against your payroll and your vendor bills dated {period}. Use costs that are "
+                         "posted, not estimates (QuickBooks Projects can show estimated labor). Work you do yourself "
+                         "without pay isn't a cost: only money the business paid or owes counts.",
+                         f"\"Yes, I checked\" means: \"{yes}\"",
+                         f"\"All of them are in this report, but some are booked to overhead\" means: \"{overhead}\"",
+                         "If any may be missing, or you can't tell, choose \"Not sure\"."),
+                small_print="Your answer counts only for this exact file and this exact list: if a later answer changes "
+                            "how a cost is counted or where it goes, MargenX asks again. MargenX doesn't check it "
+                            "against QuickBooks: Complete relies on it.",
+                choices=(Choice(qf.JOB_COSTS_ON_JOBS, "Yes, I checked"),
+                         Choice(qf.JOB_COSTS_SOME_OVERHEAD, "All of them are in this report, but some are booked to "
+                                                            f"overhead, not to their {unit}s"),
+                         JOB_COSTS_NOT_SURE))
 
 
 def _line_question(report, answers, result, resolution, line, mixed) -> dict | None:
@@ -357,6 +398,17 @@ def answer(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | None, ques
             return answers  # only the exact words and the exact file asked about now
         return dataclasses.replace(answers, coverage=qf.CoverageAnswer(choice, question.statement, fingerprint,
                                                                        report.file_digest, answered_at))
+    if question.kind == JOB_COSTS:
+        # Only the exact file, the exact words of the choice and the exact list shown on that screen: a question shown
+        # before a later answer changed the list can't confirm the newer one (the round-3 review's warning).
+        now = qf.figures(report, answers)
+        statement = qf.job_costs_statement(report, now.jobs_on, choice)
+        if (not report.file_digest or question.file != report.file_digest or question.costs != now.cost_digest
+                or statement not in question.statements):
+            return answers
+        return dataclasses.replace(answers, job_costs=qf.JobCostsAnswer(choice, statement, fingerprint,
+                                                                        report.file_digest, now.cost_digest,
+                                                                        answered_at))
     if question.kind == ACCOUNT:
         entries = tuple(question.entries) if choice == qf.OVERHEAD_ACCOUNT else ()  # exactly the entries shown
         accounts = {**answers.accounts, question.account: qf.AccountAnswer(choice, entries, answered_at)}
@@ -430,6 +482,12 @@ def _reopen(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers, question: 
                 or given.file != question.file):
             return answers
         return dataclasses.replace(answers, coverage=None)
+    if question.kind == JOB_COSTS:
+        # Only this file's answer, never one given for another workbook.
+        given = answers.job_costs
+        if not report.file_digest or question.file != report.file_digest or given is None or given.file != question.file:
+            return answers
+        return dataclasses.replace(answers, job_costs=None)
     if question.kind == ACCOUNT:
         return dataclasses.replace(answers, accounts={k: v for k, v in answers.accounts.items() if k != question.account})
     lines = dict(answers.lines)
