@@ -75,6 +75,9 @@ def _id(question: qq.Question) -> str:
         return f"{question.key}@{question.pair}"
     if question.kind == qq.COVERAGE:
         return f"{question.key}@{question.file}"  # about one exact uploaded file (the PR #148 manual review)
+    if question.kind == qq.JOB_COSTS:
+        # About one exact file and one exact cost list: a changed list is a new question (the round-3 review).
+        return f"{question.key}@{question.file}@{question.costs}"
     return question.key
 
 
@@ -91,10 +94,20 @@ def _stored(entry: _Entry, answers: qf.OwnerAnswers) -> bool:
         return answers.unfiltered_pair == question.pair
     if question.kind == qq.COVERAGE:
         return _coverage_answered(entry, answers)
+    if question.kind == qq.JOB_COSTS:
+        return _job_costs_answered(entry, answers)
     if question.kind == qq.ACCOUNT:
         stored = answers.accounts.get(question.account)
         return stored is not None and stored.use == entry.choice
     return _own_line_answer(entry, answers) is not None
+
+
+def _job_costs_answered(entry: _Entry, answers: qf.OwnerAnswers) -> bool:
+    """The job-costs answer is recorded exactly as this entry gave it: same choice, file and cost list."""
+    given = answers.job_costs
+    return (given is not None and given.choice == entry.choice and given.report == entry.question.report
+            and given.file == entry.question.file and given.costs == entry.question.costs
+            and given.statement in entry.question.statements)
 
 
 def _coverage_answered(entry: _Entry, answers: qf.OwnerAnswers) -> bool:
@@ -133,6 +146,10 @@ def _in_use(entry: _Entry, answers: qf.OwnerAnswers, result: qf.Figures, open_ke
         # Counts only for the workbook in use: another workbook's answer is never shown as in use or offered to
         # change (the PR #148 manual review, round 2, blocker 1).
         return _coverage_answered(entry, answers) and _id(question) not in open_keys and question.file == file
+    if question.kind == qq.JOB_COSTS:
+        # Counts only for the workbook and the cost list in use: the figures decide (Figures.job_costs).
+        return (_job_costs_answered(entry, answers) and _id(question) not in open_keys and question.file == file
+                and question.costs == result.cost_digest and result.job_costs == entry.choice)
     if question.kind == qq.ACCOUNT:
         stored = answers.accounts.get(question.account)
         return stored is not None and stored.use == entry.choice and _id(question) not in open_keys
@@ -144,11 +161,13 @@ def _in_use(entry: _Entry, answers: qf.OwnerAnswers, result: qf.Figures, open_ke
     return not question.key.startswith("job:") or entry.choice == qf.OVERHEAD or result.jobs_on
 
 
-def _still_editable(entry: _Entry, cross_check, file: str = "") -> bool:
+def _still_editable(entry: _Entry, cross_check, file: str = "", costs: str = "") -> bool:
     """Whether a saved answer the owner opened to change is still about the files in use. A no-filter answer is
     about one exact pair of reports: once that pair isn't the one in use, there's nothing left to change."""
     if entry.question.kind == qq.COVERAGE:
         return entry.question.file == file  # about one exact workbook
+    if entry.question.kind == qq.JOB_COSTS:
+        return entry.question.file == file and entry.question.costs == costs  # one workbook, one cost list
     if entry.question.kind != qq.NO_FILTER:
         return True
     return cross_check is not None and cross_check.pair == entry.question.pair
@@ -175,13 +194,14 @@ def question_screen(report: qp.ProfitAndLossDetail, cross_check=None, *, key: st
         state.message = ""
 
     if state.changing is not None and not _still_editable(state.history[state.changing], cross_check,
-                                                          report.file_digest):
+                                                          report.file_digest, result.cost_digest):
         # The owner was changing a no-filter answer for a pair of reports that is no longer the one in use (the
         # second report was replaced): that edit is dropped, so the old pair's question is never shown or saved as
         # if it were about these files (the PR #143 automated review of 8763ef2, carried to the switch-on PR).
         state.changing = None
         state.turn += 1
-        state.message = ("The reports changed while you were changing an answer, so that change was dropped. The "
+        state.message = ("The reports, or how MargenX counts your costs, changed while you were changing an answer, so "
+                         "that change was dropped. The "
                          "questions shown now are about the files you uploaded.")
         st.info(_md(state.message))
         state.message = ""

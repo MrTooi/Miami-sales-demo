@@ -87,6 +87,10 @@ def cell(figure: qf.Figure) -> str:
         return f"{money(figure.amount)} · {FINAL}"
     amounts = _held_text(figure)
     unknown = [qf.MISSING_UNKNOWN] if figure.coverage_open else []
+    if any(hold.kind in (qf.JOB_COSTS_HOLD, qf.NO_JOB_COSTS_HOLD) for hold in figure.holds):
+        # The figure keeps its own amount, as with every hold (S8, D-011); what may be missing or misplaced has no
+        # amount, so none is ever shown for it, never $0.
+        unknown.append(qf.MAY_BE_MISSTATED)
     if not amounts:
         return f"{money(figure.amount)} · {NOT_FINAL} ({'; '.join(unknown) or 'see why below'})"
     lines = sum(_held(figure))
@@ -147,7 +151,13 @@ def headline(report: qp.ProfitAndLossDetail, figures: qf.Figures) -> str:
                                                                  "you haven't confirmed yet that this file includes "
                                                                  "your whole business"))
         whys[-1] += f" ({qf.MISSING_UNKNOWN})"
-    if any(hold.row is None and hold.kind != qf.COVERAGE_HOLD for hold in profit.holds) or not whys:
+    if any(hold.kind == qf.JOB_COSTS_HOLD for hold in profit.holds):
+        unit = "job" if figures.jobs_on else "customer"
+        whys.append(f"you said some job costs are booked to overhead, not to their {unit}s"
+                    if figures.job_costs == qf.JOB_COSTS_SOME_OVERHEAD else
+                    f"you haven't confirmed yet that every job cost for these dates is in this report and on its {unit}")
+        whys[-1] += f" ({qf.MAY_BE_MISSTATED})"
+    if any(hold.row is None and hold.kind not in (qf.COVERAGE_HOLD, qf.JOB_COSTS_HOLD) for hold in profit.holds) or not whys:
         whys.append("something else that applies to the whole report is still open" if whys
                     else "something that applies to the whole report is still open")
     why = ", and ".join(whys)
@@ -213,6 +223,16 @@ def results_screen(report: qp.ProfitAndLossDetail, answers: qf.OwnerAnswers | No
     else:
         st.info(_md(qf.COVERAGE_NOT_YET))
     st.caption(_md(qf.RELIANCE))
+    unit = "job" if figures.jobs_on else "customer"
+    if figures.job_costs == qf.JOB_COSTS_ON_JOBS:
+        st.success(qf.JOB_COSTS_CONFIRMED)
+    elif figures.job_costs == qf.JOB_COSTS_SOME_OVERHEAD:
+        st.warning(_md(f"You said some job costs are booked to overhead, not to their {unit}s, so job costs and "
+                       "profit after job costs need a check. Profit after overhead includes them."))
+    else:
+        st.info(_md(f"You haven't confirmed yet that every job cost for these dates is in this report and on its "
+                    f"{unit}, so job costs and profits need a check."))
+    st.caption(_md(qf.JOB_COSTS_RELIANCE))
 
     st.markdown("**Your business**")
     st.dataframe(pd.DataFrame(company_rows(figures)), hide_index=True, width="stretch")

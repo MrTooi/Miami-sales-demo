@@ -272,3 +272,27 @@ Lightweight ADR-style log. Append new entries at the bottom; do not rewrite acce
   - **Complete now relies on the owner's word for coverage.** If the owner wrongly confirms an incomplete export, its figures can show Complete, exact to the cent and still missing money (tested as a limitation, `tests/test_quickbooks_coverage.py`). The owner accepted this risk explicitly.
   - Until owners answer, every QuickBooks figure shows Needs a check, which is one more question for each upload.
 - Evidence / links: issues #128 and #131 (the design review of 2026-11-17, verbatim on #128, and the owner's decisions); PR #147 (where it was found); the build PR adding this entry.
+
+### D-011 — QuickBooks job costs: the owner confirms MargenX's cost list before a job's or customer's profit is Complete
+- Date: 2026-11-17
+- Status: Accepted (in force once the PR adding this entry is merged with the owner's approval). It adds to D-010; it doesn't change it.
+- Decided by: Human owner (MrTooi), relayed from his Claude Code session on 2026-11-17 and recorded on issue #128: after the plan and its trade-off were explained (MargenX relies on the owner's answer for costs it can't see, as with D-010), he answered **"Yes, build it"**.
+- Context:
+  - Found 2026-11-17 on `main` at `9441637`, reproduced at `7d56b35`: once the file checks passed, a QuickBooks job with materials and no labor showed Complete with its profit too high ($400 for Patio), and a job with a sale and no costs showed Complete at 100% ($1,200). The spreadsheet path already holds such jobs. Many small shops run crew pay through payroll as overhead, so this is the common case (blocking under D-005).
+  - A file can't show that a job's costs are all on the job, and a line check can't prove it either: one small labor bill passes "has labor" while the rest of the pay sits in overhead.
+  - The plan went through three rounds of independent review (ChatGPT, shared chat, verbatim on #128): v1 and v2 failed, and **v3 passed with warnings and no blockers**.
+- Decision (plan v3, with the round-3 warnings):
+  1. **J1, one question per file, asked last.** MargenX shows how it counted the costs: each job's (or customer's) sales and job costs, costs for a named job outside the report, costs not sorted yet, and overhead. The owner checks them against payroll and vendor bills, using posted costs rather than estimates, and answers one of:
+     - **"Yes, I checked"**: every cost of work for customers that belongs in this accrual reporting period is entered in QuickBooks, dated in it, and in this report, on its job (or on its customer for work not on a job), including jobs with no sale yet;
+     - **"All of them are in this report, but some are booked to overhead"**;
+     - **"Not sure, or some may be missing"**, which is no answer.
+
+     Nothing is chosen in advance. The answer counts only for that exact uploaded file, the exact words of the choice, and **the exact list shown**: every line's resolution, where it goes (an outside job by name), and the jobs setting. Any later answer that changes the list asks again, and a question shown before the change can't confirm the newer list.
+  2. **J2.** Until "Yes", every job's and customer's job costs and profit after job costs, and the company's job costs, profit after job costs and overhead, show **Needs a check (job costs may be misstated)**. Like every hold (S8) and like the coverage hold (D-010), the J2 hold has no amount of its own and changes none: each figure keeps showing its own amount (for example "$400.00 · Needs a check (job costs may be misstated)"), and MargenX never shows a dollar amount for what may be missing or misplaced, never $0. With "some are booked to overhead", the company's profit after overhead isn't held by this rule, because every job cost is in the report. With no answer, it is held too.
+  3. **J3, even after "Yes".** A job or customer with any counted sales activity (even netting to $0, such as an invoice and its credit memo) and no counted job cost, or counted job costs of $0 or less, holds its job costs and profit. Costs held for another reason, another job's costs and an outside job's costs never count for it. With jobs on, a customer with sales not on a job always holds, because nothing shows which costs go with them. J3 never holds the company: its job costs are a period total.
+  4. **J4.** The company's profit after overhead is built from its own parts, so it keeps exactly the holds it had.
+  5. **What stays the same.** No amount changes. A yes clears only J2. Coverage (D-010), S3 and every other hold stay. The spreadsheet path is unchanged.
+- Consequences / risks:
+  - **Complete for a job or customer now also relies on the owner's word that every job cost is in the report and on its job.** A wrong "yes" (crew pay in overhead, a bill not entered yet) can still give Complete figures, exact to the cent and still overstated (tested as a limitation, `tests/test_quickbooks_job_costs.py`). The results show "Job costs confirmed by you for this file." and the reliance sentence. **The trial guide and terms (PR #147's drafts) must say the same before trial uploads**: that change belongs to the trial branch.
+  - Each upload has one more question, and a job with a sale and no costs (a design-only fee, say) stays Needs a check in v1. A "this job really had no costs" answer would need its own decision.
+- Evidence / links: issue #128 (the plan, reviews rounds 1–3 verbatim, and the owner's approval); the build PR adding this entry.

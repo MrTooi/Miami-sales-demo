@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import quickbooks_crosscheck as qc  # noqa: E402
 import quickbooks_figures as qf  # noqa: E402
+import qbo_job_costs as jc  # noqa: E402
 import quickbooks_fixtures as fx  # noqa: E402
 import quickbooks_pnl as qp  # noqa: E402
 import quickbooks_questions as qq  # noqa: E402
@@ -41,8 +42,9 @@ def reports():
 
 
 def answer_everything(report, check):
-    """Sub-customers are jobs, Job Materials is job costs, Office Supplies is overhead, no filter, coverage confirmed."""
-    picks = {qq.JOBS: "yes", qq.NO_FILTER: "yes", qq.COVERAGE: qf.COVERAGE_YES}
+    """Sub-customers are jobs, Job Materials is job costs, Office Supplies is overhead, no filter, coverage confirmed,
+    and every job cost confirmed on its job (asked last)."""
+    picks = {qq.JOBS: "yes", qq.NO_FILTER: "yes", qq.COVERAGE: qf.COVERAGE_YES, qq.JOB_COSTS: qf.JOB_COSTS_ON_JOBS}
     accounts = {"Job Materials": qf.JOB_COSTS_ACCOUNT, "Office Supplies": qf.OVERHEAD_ACCOUNT}
     answers = None
     for _ in range(10):
@@ -62,10 +64,12 @@ class LayerTests(unittest.TestCase):
         line = qr.headline(report, figures)
         self.assertIn("so far, but this isn't final yet", line)
         self.assertIn("3 lines are still held back ($3,600.00), and you haven't confirmed yet that this file includes "
-                      "your whole business (missing amount unknown)", line)
+                      "your whole business (missing amount unknown), and you haven't confirmed yet that every job "
+                      "cost for these dates is in this report and on its customer (job costs may be misstated)", line)
         self.assertNotIn("Complete for this report", line)
         cells = [r["Amount and status"] for r in qr.company_rows(figures)]
-        self.assertIn("$0.00 · Needs a check ($3,600.00 held across 3 lines; missing amount unknown)", cells)
+        self.assertIn("$0.00 · Needs a check ($3,600.00 held across 3 lines; missing amount unknown; job costs may be "
+                      "misstated)", cells)
         for text in cells:
             self.assertTrue(text.endswith("· Complete") or "· Needs a check (" in text, text)
 
@@ -152,10 +156,10 @@ class LayerTests(unittest.TestCase):
             "Income": [("Design income", [L(2, "Invoice", "1001", X, D("100"), None)])],
             "Expenses": [("Job Materials", [L(3, "Bill", "B-1", X, D("250"), None)])]})))
         self.assertIn("the business made $100.00 so far", qr.headline(report, qf.figures(report)))
-        answers = qf.OwnerAnswers(report=qf.report_fingerprint(report), accounts={
+        answers = jc.confirmed(report, qf.OwnerAnswers(report=qf.report_fingerprint(report), accounts={
             ("Expenses", "Job Materials"): qf.AccountAnswer(qf.JOB_COSTS_ACCOUNT, (), "")},
             coverage=qf.CoverageAnswer(qf.COVERAGE_YES, qf.coverage_statement(report), qf.report_fingerprint(report),
-                                       report.file_digest))
+                                       report.file_digest)))
         self.assertIn("the business lost $150.00. This figure is Complete for this report.",
                       qr.headline(report, qf.figures(report, answers)))
 
@@ -204,7 +208,11 @@ class ScreenTests(unittest.TestCase):
         company = at.dataframe[0].value
         self.assertEqual(["Figure", "Amount and status"], list(company.columns))
         texts = [m.value.replace("\\$", "$") for m in at.markdown]
-        self.assertIn("**What's missing** (4)", texts)  # three lines, and the coverage confirmation
+        # Three lines, the coverage and job-cost confirmations, and each customer's no-costs reason (J3: none of
+        # their costs is sorted yet, so none counts).
+        self.assertIn("**What's missing** (7)", texts)
+        self.assertIn("- Customer X (fictional): no job costs are counted for this customer in this report yet, or "
+                      "they add up to $0 or less (credits included), so its profit may be misstated.", texts)
         self.assertIn("- $1,000.00 held · Row 16 is a cost, but whether it's a job cost or overhead isn't known yet.",
                       texts)
         details = next(e for e in at.expander if e.label.startswith("Details:"))
