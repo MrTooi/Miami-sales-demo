@@ -6,6 +6,8 @@
 !trial_app.py
 !marginx_pilot.py
 !trial_access.py
+!trial_control.py
+!upload_limits.py
 !marginx_ui.py
 !pilot_safety.py
 !job_intake.py
@@ -28,5 +30,7 @@
 !sample_data/marginx/*.csv
 !.streamlit/config.toml
 !deploy/trial/launch.py
+!deploy/trial/stop_now.py
+!deploy/trial/self_check.py
 !deploy/trial/fetch_cloudflared.py
 !deploy/trial/requirements.lock

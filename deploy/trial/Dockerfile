@@ -26,7 +26,7 @@ RUN pip install --require-hashes --only-binary=:all: --no-deps -r /tmp/requireme
 # The app: only the files the trial page uses (tests/test_trial_deploy.py checks this list against
 # the page's imports). Owned by root, so the running copy can't change its own code.
 WORKDIR /app
-COPY trial_app.py marginx_pilot.py trial_access.py marginx_ui.py pilot_safety.py job_intake.py \
+COPY trial_app.py marginx_pilot.py trial_access.py trial_control.py upload_limits.py marginx_ui.py pilot_safety.py job_intake.py \
      job_matching.py job_profit.py marginx_insights.py finance_engine.py quickbooks_layouts.py \
      quickbooks_rules.py quickbooks_upload.py quickbooks_pnl.py quickbooks_sbcd.py quickbooks_crosscheck.py \
      quickbooks_figures.py quickbooks_questions.py quickbooks_screens.py quickbooks_results.py /app/
@@ -35,6 +35,8 @@ COPY assets/margenx-logo.png /app/assets/margenx-logo.png
 COPY sample_data/marginx/*.csv /app/sample_data/marginx/
 COPY .streamlit/config.toml /app/.streamlit/config.toml
 COPY deploy/trial/launch.py /app/deploy/trial/launch.py
+# The operator's tools, run from the host's shell (docs/TRIAL_DEPLOYMENT.md, sections 6 and 7; PR B).
+COPY deploy/trial/stop_now.py deploy/trial/self_check.py /app/deploy/trial/
 
 # Run as an ordinary user with no password and no shell login.
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin margenx

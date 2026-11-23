@@ -17,12 +17,18 @@ Sales by Customer Detail to check the sales) goes to the QuickBooks flow (quickb
 which refuses any QuickBooks look-alike.
 
 In the website trial (trial_access, issue #131), only the invited person gets in and the page
-checks their login itself. Trial uploads stay off (#137) until the owner decides otherwise: the
-trial shows the made-up sample files only, it has no upload box, and the gate in front of the app
-refuses every upload.
+checks their login itself. The made-up samples are shown as everywhere. **Uploads (the uploads PR, plan
+v7):** under its launcher, the trial also offers "Use my own QuickBooks report": the consent button grants
+consent to this tab's own session only (trial_access.TrialState.grant), and only then does this session show
+the two upload boxes. Only QuickBooks Online's Profit and Loss Detail (and, optionally, its Sales by Customer
+Detail) is read; every uploaded file is checked first (upload_limits); reading it happens inside the one
+processing slot, with the launcher's deadline armed; and any error shows a plain message and logs nothing.
+End session and Log out are form posts the gate answers: they end the whole MargenX process, and every page
+reloads (the reload check) into a fresh one.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import sys
@@ -44,6 +50,7 @@ import marginx_ui as ui  # noqa: E402
 import pilot_safety as ps  # noqa: E402
 import quickbooks_upload as qflow  # noqa: E402
 import trial_access as ta  # noqa: E402
+import upload_limits  # noqa: E402
 
 SAMPLES = Path(_REPO_ROOT) / "sample_data" / "marginx"
 SAMPLE_FILES = ("fictional_invoices.csv", "fictional_costs.csv")
@@ -138,12 +145,22 @@ with st.container(key="mx-bar"):
     bar_brand, bar_end = st.columns([3.2, 1.6], vertical_alignment="center")
     with bar_brand:
         ui.top_bar(PILOT, TRIAL)
-    end_clicked = bar_end.button("End session and clear everything", width="stretch")
     if TRIAL:
-        # Log out posts to the gate, which answers it itself (trial_access.TrialGate._log_out): it ends the
-        # login and every MargenX session of this person, then sends the browser to Cloudflare's logout.
+        # End session and Log out post to the gate, which answers them itself, whatever the page is doing
+        # (trial_access.TrialGate): End session ends this whole MargenX process (a fresh one replaces it); Log
+        # out also ends the login, then sends the browser to Cloudflare's logout.
+        end_clicked = False
         with bar_end:
+            ui.end_session_form(ta.END_PATH)
             ui.logout_button(ta.LOGOUT_PATH)
+        # The reload check: when this copy's MargenX is replaced, every open tab reloads into the fresh one.
+        st.html(f"<script>{ta.reload_script(ta.STATE.generation)}</script>", unsafe_allow_javascript=True)
+        if st.query_params.get("ended") == "1":
+            st.session_state["just_ended"] = "recycled"
+            with contextlib.suppress(Exception):
+                del st.query_params["ended"]
+    else:
+        end_clicked = bar_end.button("End session and clear everything", width="stretch")
 if end_clicked:
     released = _release_uploads()
     st.session_state.clear()
@@ -155,7 +172,10 @@ if end_clicked:
 ended = st.session_state.pop("just_ended", None)
 if ended:
     with st.container(key="mx-ended"):
-        if ended == "trial":
+        if ended == "recycled":
+            st.success("Your session was ended and any file you added was cleared from MargenX. You can start "
+                       "again below, or press **Log out** when you're done.")
+        elif ended == "trial":
             # The trial reads no uploaded file (samples only), so there is no file to talk about.
             st.success("Session ended. Your answers and results were cleared from this session. You can start "
                        "again below, or press **Log out** when you're done.")
@@ -172,6 +192,65 @@ if ended:
         # message. A fixed line of script, nothing from any file.
         st.html('<script>document.querySelector(\'[data-testid="stMain"]\')?.scrollTo(0, 0)</script>',
                 unsafe_allow_javascript=True)
+def _consent_card() -> None:
+    """The website trial's consent (uploads plan v7). The button asks the trial state to grant consent to
+    this session; it is granted only while this tab's live connection is the only one in the process."""
+    with st.container(key="mx-consent"):
+        ui.card_title("Use my own QuickBooks report", "Only you, in this one tab. Read in memory, never saved.")
+        st.markdown(ui.md_text(ta.TRIAL_CONSENT_TEXT))
+        if st.button("I agree – let me add my report", key="trial-consent"):
+            granted = ta.STATE.grant(TRIAL_SID, TRIAL_EMAIL)
+            if granted == "granted":
+                st.rerun()
+            elif granted == "tabs":
+                st.warning("Close your other MargenX tabs first, then click again.")
+            else:
+                st.warning("MargenX can't take your report right now. Press **End session** and try again, or use "
+                           "the made-up samples.")
+
+
+def _trial_uploads() -> None:
+    """This session's own QuickBooks reports, after consent (uploads plan v7). Two boxes, one .xlsx each; every
+    file checked first; only the supported QuickBooks reports read; reading and the results inside the one
+    processing slot (the launcher's deadline armed); any error a plain message with nothing logged. Stops the run."""
+    with st.container(key="mx-files"):
+        ui.card_title("Add your QuickBooks reports", "Excel (.xlsx) from QuickBooks Online: one file in each box.")
+        pnl = st.file_uploader("Profit and Loss Detail", type=["xlsx"], key="trial-pnl")
+        sbcd = st.file_uploader("Sales by Customer Detail (optional)", type=["xlsx"], key="trial-sbcd")
+    chosen = [u for u in (pnl, sbcd) if u is not None]
+    if not chosen:
+        ui.step_heading(1, "Add your reports", "QuickBooks Online's Profit and Loss Detail as one Excel file, and "
+                        "optionally its Sales by Customer Detail for the same dates.")
+        with nav.container():
+            ui.steps(1)
+        st.stop()
+    results_area = st.container()
+    try:
+        with ta.STATE.processing():
+            files = [(u.name, u.getvalue()) for u in chosen]
+            refused = [(name, why) for name, data in files if (why := upload_limits.refusal(name, data))]
+            if refused:
+                for name, why in refused:
+                    st.error(f"{ui.md_text(name)}: {why}")
+                st.stop()
+            found = qflow.sort_files(files)
+            if not found.quickbooks or found.other:
+                st.error(ta.QUICKBOOKS_ONLY)
+                st.stop()
+            ui.section("Your files")
+            shown, _ = qflow.show(found, results_area, key="qbo-trial")
+            with nav.container():
+                ui.steps(3 if shown else 2)
+    except ta.Busy:
+        st.info("MargenX is still finishing your last step. Try again in a moment.")
+    except ta.Ending:
+        pass
+    except Exception:  # never shown or logged: an error message could quote a value from the file
+        st.error("MargenX couldn't read this file. Export it again from QuickBooks Online as Excel, or press "
+                 "**End session** and start again.")
+    st.stop()
+
+
 with st.container(key="mx-shell"):
     side, main = st.columns([1, 3.7])
 nav = side.empty()  # the steps, filled in once the page knows which step it's on
@@ -179,11 +258,15 @@ with side:
     ui.what_you_get()
 
 with main:
-    if TRIAL:
-        st.info(
-            f"**Private MargenX trial.** Only you can log in. {ta.SAMPLES_ONLY_NOTE} **End session** clears your "
-            "answers and results; **Log out** ends your login."
-        )
+    CONSENTED = TRIAL and ta.STATE.is_consented(TRIAL_SID)
+    if TRIAL and CONSENTED:
+        st.info("**Your own QuickBooks report.** Only you can log in, and only this tab can add files. **End session** "
+                "clears your file and results; **Log out** also ends your login. Closing or reloading this tab, or a "
+                "dropped connection, clears them too.")
+    elif TRIAL:
+        note = ta.OWN_FILES_NOTE if ta.STATE.control is not None else ta.SAMPLES_ONLY_NOTE
+        st.info(f"**Private MargenX trial.** Only you can log in. {note} **End session** clears your answers and "
+                "results; **Log out** ends your login.")
     elif PILOT:
         st.warning(
             "**Pilot session on this laptop.** A pilot shop's own files may be used only with the shop owner present "
@@ -197,7 +280,12 @@ with main:
         )
     st.session_state["session_number"] = session
 
-    # The trial has no upload box until #128 is finished: samples only, and no switch to turn them off.
+    if CONSENTED:
+        _trial_uploads()  # this session's own files: everything happens there, then the run stops
+    if TRIAL and ta.STATE.control is not None:
+        _consent_card()
+
+    # The trial shows the samples (below) until this tab's consent is granted: then _trial_uploads() takes over.
     use_samples = True if TRIAL else st.toggle("Try it with the made-up sample files", value=not PILOT,
                                                key=f"samples-{session}")
     files: list[tuple[str, bytes]] = []
